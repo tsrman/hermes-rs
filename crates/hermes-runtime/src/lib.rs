@@ -1,3 +1,4 @@
+mod clarify;
 mod compaction;
 pub mod config;
 pub mod cron;

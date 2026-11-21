@@ -14,11 +14,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-PORTED = ["memory", "web_search", "web_extract", "todo_list", "session_search", "browser_cdp"]
+PORTED = ["memory", "web_search", "web_extract", "todo_list", "session_search", "browser_cdp", "clarify"]
 
 
 # Tools the Rust CLI implements; the cases only record these.
-RUST_TOOLS = {"read_file", "write_file", "patch", "search_files", "terminal", "skills_list",
+RUST_TOOLS = {"read_file", "write_file", "patch", "search_files", "terminal", "skills_list", "clarify",
               "skill_view", "web_search", "web_extract", "memory"}
 TOOLSET_CASES = {
     "default": {},

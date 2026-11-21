@@ -45,6 +45,8 @@ pub struct ChatSettings {
     pub compression: CompactionSettings,
     pub approval_timeout_secs: u32,
     pub terminal_local: bool,
+    /// `clarify.timeout`, else `agent.clarify_timeout`, else 90; 0 or less waits without limit.
+    pub clarify_timeout_secs: u32,
     pub mcp_servers: Vec<McpServerConfig>,
     pub web: WebSettings,
     pub memory: MemorySettings,
@@ -80,6 +82,7 @@ impl Default for ChatSettings {
             compression: CompactionSettings::default(),
             approval_timeout_secs: 300,
             terminal_local: true,
+            clarify_timeout_secs: 90,
             mcp_servers: Vec::new(),
             web: WebSettings::default(),
             memory: MemorySettings::default(),
@@ -379,6 +382,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.web = WebSettings::from_config(&config, &secrets);
     settings.memory = MemorySettings::from_config(&config);
     settings.tools = ToolPolicy::from_config(&config);
+    settings.clarify_timeout_secs = clarify_timeout(&config);
     settings.prompt.memory_tool = settings.tools.allows("memory");
     settings.terminal_local = match &config["terminal"]["backend"] {
         serde_yaml::Value::Null => terminal_env.as_deref().map_or_else(
@@ -615,6 +619,27 @@ pub fn load_tool_policy(home: Option<&Path>, platform: &str) -> Result<ToolPolic
     ))
 }
 
+/// Seconds the CLI waits for an answer to a question; 0 means no limit.
+fn clarify_timeout(config: &serde_yaml::Value) -> u32 {
+    let raw = config
+        .get("clarify")
+        .and_then(|clarify| clarify.get("timeout"))
+        .filter(|value| !value.is_null())
+        .or_else(|| {
+            config
+                .get("agent")
+                .and_then(|agent| agent.get("clarify_timeout"))
+        });
+    let seconds = match raw {
+        None => 90,
+        Some(value) => value
+            .as_i64()
+            .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+            .unwrap_or(90),
+    };
+    u32::try_from(seconds.max(0)).unwrap_or(90)
+}
+
 #[cfg(test)]
 mod mcp_tests {
     use super::*;
@@ -638,5 +663,25 @@ mod mcp_tests {
         assert_eq!(server.env["K"], "t0");
         assert_eq!(server.env["N"], "5");
         assert_eq!((server.timeout_secs, server.connect_timeout_secs), (7, 60));
+    }
+}
+
+#[cfg(test)]
+mod clarify_timeout_tests {
+    use super::*;
+
+    #[test]
+    fn the_clarify_timeout_prefers_the_legacy_key_then_the_agent_key() {
+        let timeout = |yaml: &str| clarify_timeout(&serde_yaml::from_str(yaml).unwrap());
+        assert_eq!(timeout("{}"), 90);
+        assert_eq!(timeout("agent: {clarify_timeout: 30}"), 30);
+        assert_eq!(
+            timeout("clarify: {timeout: 5}\nagent: {clarify_timeout: 30}"),
+            5
+        );
+        assert_eq!(timeout("agent: {clarify_timeout: 0}"), 0);
+        assert_eq!(timeout("agent: {clarify_timeout: -4}"), 0);
+        assert_eq!(timeout("agent: {clarify_timeout: 'soon'}"), 90);
+        assert_eq!(timeout("agent: {clarify_timeout: '45'}"), 45);
     }
 }

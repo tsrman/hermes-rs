@@ -6,6 +6,7 @@ use std::path::Path;
 use hermes_core::prompt::{cli_system_prompt, update_cli_prompt_route};
 use serde_json::{json, Value};
 
+use crate::clarify::{self, CLARIFY};
 use crate::compaction::{messages_bytes, CompactedHistory, CompactionSettings};
 use crate::file_tools::{
     patch_schema, search_schema, write_schema, FileWorkspace, PATCH, SEARCH_FILES, WRITE_FILE,
@@ -226,6 +227,8 @@ pub struct TurnOptions<'a> {
     pub max_turns: u32,
     pub approval_timeout_secs: Option<u32>,
     pub terminal_local: bool,
+    /// Seconds to wait for an answer to `clarify`; 0 waits without limit.
+    pub clarify_timeout_secs: u32,
     /// Tools the profile's toolset configuration allows.
     pub tools: &'a ToolPolicy,
 }
@@ -276,6 +279,9 @@ where
     });
     if memory.is_some() {
         tools.push(memory_tool::schema());
+    }
+    if options.tools.allows(CLARIFY) {
+        tools.push(clarify::schema());
     }
     if let Some(web) = options.web {
         if web.offers_search() && options.tools.allows(WEB_SEARCH) {
@@ -382,6 +388,7 @@ where
                 }),
                 SKILL_VIEW if skill_tools => history.skills.view(&call.arguments),
                 SKILLS_LIST if skill_tools => history.skills.list(&call.arguments),
+                CLARIFY => ask_questions(&call.arguments, &options, &mut approve).await,
                 MEMORY if memory.is_some() && options.profile.is_some() => memory_tool::call(
                     memory.unwrap_or(&MemorySettings::default()),
                     &mut memory_turn,
@@ -465,6 +472,51 @@ fn chat_request(model: &str, messages: &[Value], tools: &[Value]) -> Value {
         request["tools"] = json!(tools);
     }
     request
+}
+
+/// Put the questions of a `clarify` call to the person, when someone is there to answer.
+async fn ask_questions<A, D>(arguments: &str, options: &TurnOptions<'_>, approve: &mut A) -> Value
+where
+    A: FnMut(ApprovalRequest) -> D,
+    D: Future<Output = ApprovalDecision>,
+{
+    let args: Value = serde_json::from_str(arguments).unwrap_or(Value::Null);
+    let questions = match clarify::normalize(&args) {
+        Ok(questions) => questions,
+        Err(message) => return json!({"error": message}),
+    };
+    // Without a person at the terminal (one-shot runs, cron) nothing can answer.
+    if options.approval_timeout_secs.is_none() {
+        return json!({"error": clarify::UNAVAILABLE});
+    }
+    let limit = options.clarify_timeout_secs;
+    let request = ApprovalRequest {
+        target: String::new(),
+        content: clarify::request_payload(&questions),
+        action: ApprovalAction::Clarify,
+        timeout_secs: limit,
+    };
+    let reply = match approve(request).await {
+        ApprovalDecision::Answered(text) => {
+            serde_json::from_str::<Value>(&text).unwrap_or_else(|_| {
+                clarify::empty_reply("undelivered", "The answer could not be read.")
+            })
+        }
+        ApprovalDecision::TimedOut => {
+            let minutes = limit.div_ceil(60).max(1);
+            clarify::empty_reply(
+                "timed_out",
+                &format!("[user did not respond within {minutes}m]"),
+            )
+        }
+        ApprovalDecision::Denied => {
+            clarify::empty_reply("cancelled", "The user cancelled the question.")
+        }
+        ApprovalDecision::Approved | ApprovalDecision::Unavailable => {
+            return json!({"error": clarify::UNAVAILABLE});
+        }
+    };
+    clarify::result(&questions, &reply)
 }
 
 fn prefix_bytes(

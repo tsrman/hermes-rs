@@ -62,6 +62,8 @@ pub struct ChatRequest {
     approval_timeout_secs: Option<u32>,
     #[serde(default)]
     terminal_local: bool,
+    #[serde(default = "default_clarify_timeout")]
+    clarify_timeout_secs: u32,
     #[serde(default)]
     mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
@@ -73,6 +75,10 @@ pub struct ChatRequest {
     model_override: Option<String>,
     primary: Route,
     fallbacks: Vec<Route>,
+}
+
+fn default_clarify_timeout() -> u32 {
+    90
 }
 
 #[derive(Deserialize, Serialize)]
@@ -173,6 +179,7 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
         approval_timeout_secs: (!args.oneshot && crate::approval::available())
             .then_some(settings.approval_timeout_secs),
         terminal_local: settings.terminal_local,
+        clarify_timeout_secs: settings.clarify_timeout_secs,
         mcp_servers: settings.mcp_servers,
         web: settings.web,
         memory: settings.memory,
@@ -258,6 +265,7 @@ where
         max_turns: request.max_turns,
         approval_timeout_secs: request.approval_timeout_secs,
         terminal_local: request.terminal_local,
+        clarify_timeout_secs: request.clarify_timeout_secs,
     };
     block_in_place(|| history.capture_prompt(&options, &request.prompt, &primary));
     let fallbacks = request

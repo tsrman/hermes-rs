@@ -3,6 +3,7 @@
   "name": "default",
   "config": {},
   "tools": [
+   "clarify",
    "memory",
    "patch",
    "read_file",
@@ -57,6 +58,7 @@
    }
   },
   "tools": [
+   "clarify",
    "memory",
    "patch",
    "read_file",
@@ -79,6 +81,7 @@
    }
   },
   "tools": [
+   "clarify",
    "memory",
    "patch",
    "read_file",
@@ -144,6 +147,7 @@
    }
   },
   "tools": [
+   "clarify",
    "memory",
    "patch",
    "read_file",
@@ -165,6 +169,7 @@
    }
   },
   "tools": [
+   "clarify",
    "patch",
    "read_file",
    "search_files",
@@ -184,6 +189,7 @@
    }
   },
   "tools": [
+   "clarify",
    "memory",
    "skill_view",
    "skills_list"
@@ -197,6 +203,7 @@
    }
   },
   "tools": [
+   "clarify",
    "patch",
    "read_file",
    "search_files",
@@ -218,6 +225,7 @@
    }
   },
   "tools": [
+   "clarify",
    "memory",
    "patch",
    "read_file",

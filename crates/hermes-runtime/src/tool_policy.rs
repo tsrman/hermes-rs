@@ -125,7 +125,8 @@ mod tests {
     use super::*;
 
     /// Tools this crate implements; the recorded cases list only these.
-    const IMPLEMENTED: [&str; 10] = [
+    const IMPLEMENTED: [&str; 11] = [
+        "clarify",
         "read_file",
         "write_file",
         "patch",

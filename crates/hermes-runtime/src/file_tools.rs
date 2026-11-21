@@ -35,14 +35,18 @@ pub enum ApprovalAction {
     CreateFile,
     ReplaceFile,
     RunCommand,
+    /// Questions for the person: `content` holds them as JSON and the reply is `Answered`.
+    Clarify,
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub enum ApprovalDecision {
     Approved,
     Denied,
     TimedOut,
     Unavailable,
+    /// The reply to `Clarify`: `{"answers": {...}, "outcome": ...}` as JSON.
+    Answered(String),
 }
 
 pub(crate) struct FileWorkspace<'a> {
@@ -408,7 +412,9 @@ pub(crate) fn approval_error(decision: ApprovalDecision) -> Value {
     let (status, error) = match decision {
         ApprovalDecision::Denied => ("approval_denied", "The user declined this action."),
         ApprovalDecision::TimedOut => ("approval_timeout", "Approval timed out."),
-        ApprovalDecision::Unavailable | ApprovalDecision::Approved => (
+        ApprovalDecision::Unavailable
+        | ApprovalDecision::Approved
+        | ApprovalDecision::Answered(_) => (
             "approval_unavailable",
             "This action requires an interactive terminal and explicit approval.",
         ),

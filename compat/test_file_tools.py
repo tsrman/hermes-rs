@@ -75,8 +75,8 @@ class ToolTestCase(unittest.TestCase):
         self.addCleanup(self.stop, process)
         return process, master
 
-    def wait_for_prompt(self, process, master):
-        transcript = bytearray()
+    def wait_for_prompt(self, process, master, marker=b"[y/N]", transcript=None):
+        transcript = bytearray() if transcript is None else transcript
         deadline = time.monotonic() + 20
         while process.poll() is None and time.monotonic() < deadline:
             ready, _, _ = select.select([master], [], [], 0.05)
@@ -85,7 +85,7 @@ class ToolTestCase(unittest.TestCase):
                     transcript.extend(os.read(master, 16384))
                 except OSError:
                     break
-            if b"[y/N]" in transcript:
+            if marker in transcript:
                 return transcript.decode(errors="replace")
         details = ""
         if process.poll() is not None:
@@ -169,6 +169,72 @@ class FileToolTest(ToolTestCase):
                 if mode != "cancel":
                     result, _ = self.last_tool_result()
                     self.assertEqual(result["status"], "approval_" + ("denied" if mode == "deny" else "timeout"))
+
+    def ask(self, questions, config=""):
+        if config:
+            (self.profile / "config.yaml").write_text(self.config + config, encoding="utf-8")
+        process, tty = self.interactive(tool="clarify", arguments={"questions": questions})
+        return process, tty
+
+    def answer_clarify(self, process, tty, markers, replies):
+        screen = bytearray()
+        for marker, reply in zip(markers, replies):
+            self.wait_for_prompt(process, tty, marker=marker, transcript=screen)
+            screen.clear()
+            os.write(tty, reply)
+        return process.communicate(timeout=20)
+
+    def test_clarify_asks_each_question_and_reports_the_answers(self):
+        process, tty = self.ask([
+            {"question": "Which database?", "choices": ["Postgres", "SQLite"]},
+            {"question": "Which checks?", "choices": ["lint", "tests", "types"], "multi_select": True},
+            {"question": "Anything else?"},
+            {"question": "Skip me", "choices": ["x", "y"]},
+        ])
+        _, error = self.answer_clarify(process, tty, [b"own answer (Enter", b"own answer (Enter", b"to skip): ", b"own answer (Enter"],
+                                       [b"1\n", b"2, 3,coverage\n", b"Use the staging cluster\n", b"\n"])
+        self.assertEqual(process.returncode, 0, error)
+        result, requests = self.last_tool_result()
+        self.assertIn("clarify", [tool["function"]["name"] for tool in requests[0]["tools"]])
+        self.assertEqual(result["outcome"], "submitted")
+        answers = [(r["status"], r["user_response"]) for r in result["responses"]]
+        self.assertEqual(answers, [("answered", "Postgres"), ("answered", ["tests", "types", "coverage"]),
+                                   ("answered", "Use the staging cluster"), ("skipped", None)])
+        self.assertEqual(result["responses"][0]["choices_offered"], ["Postgres", "SQLite"])
+
+    def test_clarify_shows_the_recommendation_and_neutralises_escape_sequences(self):
+        process, tty = self.ask([{"question": "Pick \u001b[31mred\u001b[0m", "choices": ["First", "Second"]}])
+        screen = bytearray()
+        prompt = self.wait_for_prompt(process, tty, marker=b"own answer (Enter", transcript=screen)
+        self.assertIn("1) First (Recommended)", prompt)
+        self.assertIn("2) Second", prompt)
+        self.assertNotIn("\x1b[31m", prompt)
+        os.write(tty, b"1 (Recommended)\n")
+        process.communicate(timeout=20)
+        result, _ = self.last_tool_result()
+        # The label is presentation only: a typed answer that carries it is cleaned too.
+        self.assertEqual(result["responses"][0]["user_response"], "1")
+
+    def test_clarify_reports_timeout_and_cancellation(self):
+        process, tty = self.ask([{"question": "Anyone there?"}], config="clarify:\n  timeout: 1\n")
+        self.wait_for_prompt(process, tty, marker=b"(Enter to skip)")
+        process.communicate(timeout=20)
+        result, _ = self.last_tool_result()
+        self.assertEqual(result["outcome"], "timed_out")
+        self.assertEqual(result["notice"], "[user did not respond within 1m]")
+        self.assertEqual(result["responses"][0]["status"], "unanswered")
+
+        process, tty = self.ask([{"question": "Cancel me"}], config="")
+        self.wait_for_prompt(process, tty, marker=b"(Enter to skip)")
+        os.write(tty, b"\x04")  # end of input at the start of a line
+        process.communicate(timeout=20)
+        self.assertEqual(self.last_tool_result()[0]["outcome"], "cancelled")
+
+    def test_clarify_is_unavailable_without_a_person_and_rejects_bad_questions(self):
+        result, _ = self.unattended("clarify", {"questions": [{"question": "Hello?"}]})
+        self.assertEqual(result, {"error": "Clarify tool is not available in this execution context."})
+        result, _ = self.unattended("clarify", {"questions": []})
+        self.assertIn("questions must be a non-empty array", result["error"])
 
     def test_unattended_write_is_hidden_and_refused(self):
         run = subprocess.run(
