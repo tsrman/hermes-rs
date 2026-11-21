@@ -209,7 +209,7 @@ pub fn profile_home(profile: Option<&str>) -> Result<Option<PathBuf>, String> {
     Ok(Some(profile_home))
 }
 
-fn read_config(path: &Path) -> Result<serde_yaml::Value, String> {
+pub(crate) fn read_config(path: &Path) -> Result<serde_yaml::Value, String> {
     let config: serde_yaml::Value = match std::fs::read_to_string(path) {
         Ok(contents) => {
             serde_yaml::from_str(&contents).map_err(|_| "invalid profile config.yaml")?

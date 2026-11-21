@@ -5,6 +5,7 @@ use hermes_runtime::config::{profile_home, set_config_value};
 
 mod approval;
 mod chat;
+mod cron;
 #[cfg(unix)]
 mod owner;
 #[cfg(target_os = "linux")]
@@ -31,6 +32,11 @@ enum Command {
     Profile {
         #[command(subcommand)]
         command: profile::Command,
+    },
+    /// Inspect scheduled jobs and preview schedules.
+    Cron {
+        #[command(subcommand)]
+        command: cron::Command,
     },
     Config {
         #[command(subcommand)]
@@ -75,6 +81,10 @@ async fn run() -> Result<u8, String> {
         #[cfg(target_os = "linux")]
         Command::Profile { command } => {
             profile::run(home.ok_or("profile root is unavailable")?, command)
+        }
+        Command::Cron { command } => {
+            cron::run(home, command)?;
+            Ok(0)
         }
         Command::Config {
             command: ConfigCommand::Set { key, value },
