@@ -1,0 +1,54 @@
+{
+  "auth_header": [],
+  "cli_flag": [
+    "tool --password abcdefghijklmnop1234567890",
+    "tool --token=abcdefghijklmnop1234567890",
+    "docker login -u bob -p abcdefghijklmnop1234567890",
+    "--secret 'abcdefghijklmnop1234567890'"
+  ],
+  "connection_string": [
+    "Server=db;User Id=sa;Password=abcdefghijklmnop1234567890;",
+    "host=localhost user=app password=abcdefghijklmnop1234567890 dbname=x",
+    "DefaultEndpointsProtocol=https;AccountName=a;AccountKey=abcdefghijklmnop1234567890==;EndpointSuffix=core.windows.net",
+    "Password=changeme"
+  ],
+  "env_assignment": [
+    "OPENAI_API_KEY=abcdefghijklmnop1234567890",
+    "export GITHUB_TOKEN='abcdefghijklmnop1234567890'",
+    "DB_PASSWORD=hunter2hunter2",
+    "MY_SECRET = \"abcdefghijklmnop1234567890\"",
+    "openai_key=abcdefghijklmnop1234567890",
+    "AWS_SECRET_ACCESS_KEY=abcdefghijklmnop1234567890",
+    "PW=abcdefghijklmnop1234567890"
+  ],
+  "header_credential": [
+    "X-API-Key: abcdefghijklmnop1234567890",
+    "Cookie: session=abcdefghijklmnop1234567890; theme=dark",
+    "X-Auth-Token: abcdefghijklmnop1234567890",
+    "Set-Cookie: sid=abcdefghijklmnop1234567890; HttpOnly"
+  ],
+  "json_field": [
+    "{\"api_key\": \"abcdefghijklmnop1234567890\"}",
+    "{\"password\": \"hunter2hunter2\", \"user\": \"bob\"}",
+    "{\"token\": \"abcdefghijklmnop1234567890\", \"nested\": {\"client_secret\": \"abcdefghijklmnop1234567890\"}}",
+    "{\"apiKey\": \"test\"}",
+    "\"{\\\"access_token\\\": \\\"abcdefghijklmnop1234567890\\\"}\""
+  ],
+  "jwt": [],
+  "phone": [],
+  "plain": [],
+  "prefix": [
+    "token=ghp_abcdefghijklmnop1234567890"
+  ],
+  "private_key": [],
+  "python_repr": [
+    "{'API_KEY': 'abcdefghijklmnop1234567890', 'name': 'x'}",
+    "{'password': 'hunter2hunter2'}",
+    "E   AssertionError: {'token': 'abcdefghijklmnop1234567890'}"
+  ],
+  "telegram": [],
+  "url": [
+    "https://user:abcdefghijklmnop1234567890@example.com/path"
+  ],
+  "webhook": []
+}

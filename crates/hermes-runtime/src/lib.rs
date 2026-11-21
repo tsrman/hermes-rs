@@ -9,6 +9,7 @@ pub mod memory_tool;
 pub mod profile;
 pub mod prompt;
 pub mod providers;
+pub mod redact;
 mod skills;
 pub mod storage;
 mod terminal;

@@ -1,0 +1,677 @@
+{
+ "prefix": [
+  {
+   "input": "key sk-abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "key sk-abc...7890"
+  },
+  {
+   "input": "sk-abcdefghijklmnop1234567890 at the start",
+   "force": true,
+   "output": "sk-abc...7890 at the start"
+  },
+  {
+   "input": "token=ghp_abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "token=***"
+  },
+  {
+   "input": "github_pat_abcdefghijklmnop1234567890_xyz",
+   "force": true,
+   "output": "github..._xyz"
+  },
+  {
+   "input": "gho_abcdefghijklmnop1234567890 ghu_abcdefghijklmnop1234567890 ghs_abcdefghijklmnop1234567890 ghr_abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "gho_ab...7890 ghu_ab...7890 ghs_ab...7890 ghr_ab...7890"
+  },
+  {
+   "input": "slack xoxb-1234567890-abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "slack xoxb-1...7890"
+  },
+  {
+   "input": "xapp-1-abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "xapp-1...7890"
+  },
+  {
+   "input": "AIzaabcdefghijklmnop1234567890ABCDEFGHIJ",
+   "force": true,
+   "output": "AIzaab...GHIJ"
+  },
+  {
+   "input": "GOCSPX-abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "GOCSPX...7890"
+  },
+  {
+   "input": "ya29.a.abcdefghijklmnop1234567890ABCDEFGHIJ",
+   "force": true,
+   "output": "ya29.a...GHIJ"
+  },
+  {
+   "input": "1//0abcdefghijklmnop1234567890ABCDEF",
+   "force": true,
+   "output": "1//0ab...CDEF"
+  },
+  {
+   "input": "pplx-abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "pplx-a...7890"
+  },
+  {
+   "input": "fal_abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "fal_ab...7890"
+  },
+  {
+   "input": "fc-abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "fc-abc...7890"
+  },
+  {
+   "input": "bb_live_abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "bb_liv...7890"
+  },
+  {
+   "input": "gAAAAabcdefghijklmnop1234567890ABCDEFGH==",
+   "force": true,
+   "output": "gAAAAa...GH=="
+  },
+  {
+   "input": "AKIAABCDEFGHIJKLMNOP",
+   "force": true,
+   "output": "AKIAAB...MNOP"
+  },
+  {
+   "input": "sk_live_abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "sk_liv...7890"
+  },
+  {
+   "input": "sk_test_abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "sk_tes...7890"
+  },
+  {
+   "input": "rk_live_abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "rk_liv...7890"
+  },
+  {
+   "input": "SG.abcdefghijklmnop1234567890.abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "SG.abc...7890"
+  },
+  {
+   "input": "hf_abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "hf_abc...7890"
+  },
+  {
+   "input": "r8_abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "r8_abc...7890"
+  },
+  {
+   "input": "npm_abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "npm_ab...7890"
+  },
+  {
+   "input": "pypi-abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "pypi-a...7890"
+  },
+  {
+   "input": "dop_v1_abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "dop_v1...7890"
+  },
+  {
+   "input": "am_org_abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "am_org...7890"
+  },
+  {
+   "input": "tvly-dev-abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "tvly-d...7890"
+  },
+  {
+   "input": "exa_abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "exa_ab...7890"
+  },
+  {
+   "input": "gsk_abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "gsk_ab...7890"
+  },
+  {
+   "input": "xai-abcdefghijklmnop1234567890abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "xai-ab...7890"
+  },
+  {
+   "input": "glpat-abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "glpat-...7890"
+  },
+  {
+   "input": "glrt-abcdefghijklmnop1234567890.abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "glrt-a...7890"
+  },
+  {
+   "input": "glsa_abcdefghijklmnop1234567890_abcdef12",
+   "force": true,
+   "output": "glsa_a...ef12"
+  },
+  {
+   "input": "pk-lf-abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "pk-lf-...7890"
+  },
+  {
+   "input": "ctx7sk-abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "ctx7sk...7890"
+  },
+  {
+   "input": "backup-sk-abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "backup-sk-abc...7890"
+  },
+  {
+   "input": "scikit-learn is installed",
+   "force": true,
+   "output": "scikit-learn is installed"
+  },
+  {
+   "input": "sk-short",
+   "force": true,
+   "output": "sk-short"
+  },
+  {
+   "input": "task-abcdefghijklmnopqrstu",
+   "force": true,
+   "output": "task-abcdefghijklmnopqrstu"
+  },
+  {
+   "input": "(sk-abcdefghijklmnop1234567890) and [ghp_abcdefghijklmnop1234567890].",
+   "force": true,
+   "output": "(sk-abc...7890) and [ghp_ab...7890]."
+  },
+  {
+   "input": "sk-abcdefghijklmnop1234567890. Next sentence",
+   "force": true,
+   "output": "sk-abc...7890. Next sentence"
+  },
+  {
+   "input": "two sk-abcdefghijklmnop1234567890 and sk-0987654321ponmlkjihgfedcba",
+   "force": true,
+   "output": "two sk-abc...7890 and sk-098...dcba"
+  },
+  {
+   "input": "sk-abc\u001bdefabcdefghijklmnop1234567890",
+   "force": true,
+   "output": "sk-abc...7890"
+  },
+  {
+   "input": "ghp_abcdefgh​ijklmnop1234567890",
+   "force": true,
+   "output": "ghp_ab...7890"
+  },
+  {
+   "input": "prefix_ghp_abcdefghijklmnop1234567890_suffix",
+   "force": true,
+   "output": "prefix_ghp_ab...7890_suffix"
+  },
+  {
+   "input": "sk-prod-deployment-01 is a name",
+   "force": true,
+   "output": "sk-pro...t-01 is a name"
+  },
+  {
+   "input": "ghp_ with nothing",
+   "force": true,
+   "output": "ghp_ with nothing"
+  },
+  {
+   "input": "см. ключ sk-abcdefghijklmnop1234567890 дальше",
+   "force": true,
+   "output": "см. ключ sk-abc...7890 дальше"
+  }
+ ],
+ "private_key": [
+  {
+   "input": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA1234567890abcdef\nxyz987\n-----END RSA PRIVATE KEY-----",
+   "force": true,
+   "output": "[REDACTED PRIVATE KEY]"
+  },
+  {
+   "input": "before\n-----BEGIN PRIVATE KEY-----\nQUJDREVGR0hJSktMTU5PUA==\n-----END PRIVATE KEY-----\nafter",
+   "force": true,
+   "output": "before\n[REDACTED PRIVATE KEY]\nafter"
+  },
+  {
+   "input": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----",
+   "force": true,
+   "output": "[REDACTED PRIVATE KEY]"
+  },
+  {
+   "input": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkq\n-----END PUBLIC KEY-----",
+   "force": true,
+   "output": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkq\n-----END PUBLIC KEY-----"
+  },
+  {
+   "input": "AGE-SECRET-KEY-1QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7LQPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L",
+   "force": true,
+   "output": "[REDACTED PRIVATE KEY]"
+  }
+ ],
+ "jwt": [
+  {
+   "input": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+   "force": true,
+   "output": "eyJhbG...sR8U"
+  },
+  {
+   "input": "token eyJhbGciOiJIUzI1NiJ9 only header",
+   "force": true,
+   "output": "token eyJhbG...NiJ9 only header"
+  }
+ ],
+ "auth_header": [
+  {
+   "input": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456",
+   "force": true,
+   "output": "Authorization: Bearer abcdef...3456"
+  },
+  {
+   "input": "authorization: basic dXNlcjpwYXNzd29yZDEyMzQ1Ng==",
+   "force": true,
+   "output": "authorization: basic dXNlcj...Ng=="
+  },
+  {
+   "input": "curl -H 'Authorization: Bearer abcdefghijklmnop1234567890' https://x.test",
+   "force": true,
+   "output": "curl -H 'Authorization: Bearer abcdef...7890' https://x.test"
+  },
+  {
+   "input": "Authorization: Token abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "Authorization: Token abcdef...7890"
+  },
+  {
+   "input": "Proxy-Authorization: Bearer abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "Proxy-Authorization: Bearer abcdef...7890"
+  },
+  {
+   "input": "authorization=Bearer abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "authorization=Bearer abcdefghijklmnop1234567890"
+  },
+  {
+   "input": "Authorization: Bearer short",
+   "force": true,
+   "output": "Authorization: Bearer ***"
+  }
+ ],
+ "env_assignment": [
+  {
+   "input": "OPENAI_API_KEY=abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "OPENAI_API_KEY=***"
+  },
+  {
+   "input": "export GITHUB_TOKEN='abcdefghijklmnop1234567890'",
+   "force": true,
+   "output": "export GITHUB_TOKEN='***'"
+  },
+  {
+   "input": "DB_PASSWORD=hunter2hunter2",
+   "force": true,
+   "output": "DB_PASSWORD=***"
+  },
+  {
+   "input": "MY_SECRET = \"abcdefghijklmnop1234567890\"",
+   "force": true,
+   "output": "MY_SECRET=\"***\""
+  },
+  {
+   "input": "KEYBOARD=us",
+   "force": true,
+   "output": "KEYBOARD=us"
+  },
+  {
+   "input": "PASSAGE=one",
+   "force": true,
+   "output": "PASSAGE=one"
+  },
+  {
+   "input": "TOKEN_LIMIT=4096",
+   "force": true,
+   "output": "TOKEN_LIMIT=4096"
+  },
+  {
+   "input": "API_KEY=",
+   "force": true,
+   "output": "API_KEY="
+  },
+  {
+   "input": "openai_key=abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "openai_key=abcdef...7890"
+  },
+  {
+   "input": "export PATH=/usr/bin",
+   "force": true,
+   "output": "export PATH=/usr/bin"
+  },
+  {
+   "input": "AWS_SECRET_ACCESS_KEY=abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "AWS_SECRET_ACCESS_KEY=***"
+  },
+  {
+   "input": "MAX_TOKENS=1000",
+   "force": true,
+   "output": "MAX_TOKENS=1000"
+  },
+  {
+   "input": "SECRET=${SECRET_FROM_ENV}",
+   "force": true,
+   "output": "SECRET=${SECRET_FROM_ENV}"
+  },
+  {
+   "input": "PW=abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "PW=abcdef...7890"
+  }
+ ],
+ "json_field": [
+  {
+   "input": "{\"api_key\": \"abcdefghijklmnop1234567890\"}",
+   "force": true,
+   "output": "{\"api_key\": \"abcdef...7890\"}"
+  },
+  {
+   "input": "{\"password\": \"hunter2hunter2\", \"user\": \"bob\"}",
+   "force": true,
+   "output": "{\"password\": \"***\", \"user\": \"bob\"}"
+  },
+  {
+   "input": "{\"token\": \"abcdefghijklmnop1234567890\", \"nested\": {\"client_secret\": \"abcdefghijklmnop1234567890\"}}",
+   "force": true,
+   "output": "{\"token\": \"abcdef...7890\", \"nested\": {\"client_secret\": \"abcdef...7890\"}}"
+  },
+  {
+   "input": "{\"apiKey\": \"test\"}",
+   "force": true,
+   "output": "{\"apiKey\": \"***\"}"
+  },
+  {
+   "input": "{\"safe\": \"value\", \"authorization\": \"Bearer abcdefghijklmnop1234567890\"}",
+   "force": true,
+   "output": "{\"safe\": \"value\", \"authorization\": \"Bearer abcdefghijklmnop1234567890\"}"
+  },
+  {
+   "input": "\"{\\\"access_token\\\": \\\"abcdefghijklmnop1234567890\\\"}\"",
+   "force": true,
+   "output": "\"{\\\"access_token\\\": \\\"abcdef...7890\\\"}\""
+  }
+ ],
+ "cli_flag": [
+  {
+   "input": "tool --password abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "tool --password abcdef...7890"
+  },
+  {
+   "input": "tool --token=abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "tool --token=abcdef...7890"
+  },
+  {
+   "input": "mysql -pabcdefghijklmnop1234567890 -u root",
+   "force": true,
+   "output": "mysql -pabcdefghijklmnop1234567890 -u root"
+  },
+  {
+   "input": "run --api-key $KEY",
+   "force": true,
+   "output": "run --api-key $KEY"
+  },
+  {
+   "input": "docker login -u bob -p abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "docker login -u bob -p abcdef...7890"
+  },
+  {
+   "input": "tool --token 60",
+   "force": true,
+   "output": "tool --token 60"
+  },
+  {
+   "input": "--secret 'abcdefghijklmnop1234567890'",
+   "force": true,
+   "output": "--secret abcdef...7890"
+  },
+  {
+   "input": "tool --password=${PW}",
+   "force": true,
+   "output": "tool --password=${PW}"
+  },
+  {
+   "input": "curl -u user:abcdefghijklmnop1234567890 https://x.test",
+   "force": true,
+   "output": "curl -u user:abcdefghijklmnop1234567890 https://x.test"
+  }
+ ],
+ "url": [
+  {
+   "input": "https://user:abcdefghijklmnop1234567890@example.com/path",
+   "force": true,
+   "output": "https://user:***@example.com/path"
+  },
+  {
+   "input": "https://example.com/cb?code=abcdefghijklmnop1234567890&state=ok",
+   "force": true,
+   "output": "https://example.com/cb?code=abcdefghijklmnop1234567890&state=ok"
+  },
+  {
+   "input": "https://example.com/?access_token=abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "https://example.com/?access_token=abcdefghijklmnop1234567890"
+  },
+  {
+   "input": "https://example.com/plain/path?page=2",
+   "force": true,
+   "output": "https://example.com/plain/path?page=2"
+  },
+  {
+   "input": "postgres://admin:abcdefghijklmnop1234567890@db.internal:5432/app",
+   "force": true,
+   "output": "postgres://admin:***@db.internal:5432/app"
+  },
+  {
+   "input": "redis://:abcdefghijklmnop1234567890@cache:6379/0",
+   "force": true,
+   "output": "redis://:***@cache:6379/0"
+  },
+  {
+   "input": "mongodb+srv://u:abcdefghijklmnop1234567890@cluster.example.net/db?retryWrites=true",
+   "force": true,
+   "output": "mongodb+srv://u:***@cluster.example.net/db?retryWrites=true"
+  },
+  {
+   "input": "https://example.com/hook?signature=abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "https://example.com/hook?signature=abcdefghijklmnop1234567890"
+  },
+  {
+   "input": "ftp://anon@example.com/file",
+   "force": true,
+   "output": "ftp://anon@example.com/file"
+  }
+ ],
+ "connection_string": [
+  {
+   "input": "Server=db;User Id=sa;Password=abcdefghijklmnop1234567890;",
+   "force": true,
+   "output": "Server=db;User Id=sa;Password=***;"
+  },
+  {
+   "input": "host=localhost user=app password=abcdefghijklmnop1234567890 dbname=x",
+   "force": true,
+   "output": "host=localhost user=app password=*** dbname=x"
+  },
+  {
+   "input": "DefaultEndpointsProtocol=https;AccountName=a;AccountKey=abcdefghijklmnop1234567890==;EndpointSuffix=core.windows.net",
+   "force": true,
+   "output": "DefaultEndpointsProtocol=https;AccountName=a;AccountKey=abcdef...90==;EndpointSuffix=core.windows.net"
+  },
+  {
+   "input": "Password=changeme",
+   "force": true,
+   "output": "Password=***"
+  },
+  {
+   "input": "password is a word in prose",
+   "force": true,
+   "output": "password is a word in prose"
+  }
+ ],
+ "header_credential": [
+  {
+   "input": "X-API-Key: abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "X-API-Key: ***"
+  },
+  {
+   "input": "Cookie: session=abcdefghijklmnop1234567890; theme=dark",
+   "force": true,
+   "output": "Cookie: ***"
+  },
+  {
+   "input": "X-Auth-Token: abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "X-Auth-Token: ***"
+  },
+  {
+   "input": "Content-Type: application/json",
+   "force": true,
+   "output": "Content-Type: application/json"
+  },
+  {
+   "input": "Set-Cookie: sid=abcdefghijklmnop1234567890; HttpOnly",
+   "force": true,
+   "output": "Set-Cookie: ***"
+  }
+ ],
+ "telegram": [
+  {
+   "input": "bot123456789:AAabcdefghijklmnop1234ABCDEFGHIJKLMNO",
+   "force": true,
+   "output": "bot123456789:***"
+  },
+  {
+   "input": "123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "force": true,
+   "output": "123456789:***"
+  }
+ ],
+ "python_repr": [
+  {
+   "input": "{'API_KEY': 'abcdefghijklmnop1234567890', 'name': 'x'}",
+   "force": true,
+   "output": "{'API_KEY': '***', 'name': 'x'}"
+  },
+  {
+   "input": "{'password': 'hunter2hunter2'}",
+   "force": true,
+   "output": "{'password': '***'}"
+  },
+  {
+   "input": "E   AssertionError: {'token': 'abcdefghijklmnop1234567890'}",
+   "force": true,
+   "output": "E   AssertionError: {'token': '***'}"
+  }
+ ],
+ "webhook": [
+  {
+   "input": "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
+   "force": true,
+   "output": "https://hooks.slack.com/services/T00000000/B00000000/XXXXXX...XXXX"
+  },
+  {
+   "input": "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnop1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+   "force": true,
+   "output": "https://discord.com/api/webhooks/123456789012345678/abcdef...WXYZ"
+  }
+ ],
+ "phone": [
+  {
+   "input": "call +15551234567 now",
+   "force": true,
+   "output": "call +155****4567 now"
+  },
+  {
+   "input": "+4915112345678",
+   "force": true,
+   "output": "+491****5678"
+  },
+  {
+   "input": "version +1.2.3",
+   "force": true,
+   "output": "version +1.2.3"
+  },
+  {
+   "input": "id 12345678",
+   "force": true,
+   "output": "id 12345678"
+  }
+ ],
+ "plain": [
+  {
+   "input": "",
+   "force": true,
+   "output": ""
+  },
+  {
+   "input": "nothing secret here",
+   "force": true,
+   "output": "nothing secret here"
+  },
+  {
+   "input": "A normal sentence with = and : and // signs.",
+   "force": true,
+   "output": "A normal sentence with = and : and // signs."
+  },
+  {
+   "input": "path /usr/local/bin and https://example.com/docs",
+   "force": true,
+   "output": "path /usr/local/bin and https://example.com/docs"
+  },
+  {
+   "input": "***already masked***",
+   "force": true,
+   "output": "***already masked***"
+  },
+  {
+   "input": "тест кириллицы и 日本語",
+   "force": true,
+   "output": "тест кириллицы и 日本語"
+  },
+  {
+   "input": "line one\nline two\r\nline three",
+   "force": true,
+   "output": "line one\nline two\r\nline three"
+  }
+ ]
+}
