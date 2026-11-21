@@ -176,7 +176,7 @@ fallback_providers:
 
 ## Установка CLI из GitHub Releases
 
-Выберите цель из артефактов опубликованного тега и скачайте архив вместе с файлом SHA-256. В `v0.1.0` доступны GNU и musl для Linux x86_64.
+Выберите цель из артефактов опубликованного тега и скачайте архив вместе с файлом SHA-256. `v0.2.0` включает все цели из таблицы. `v0.1.0` доступен для Linux x86_64 GNU и musl.
 
 | Система | Цель |
 | --- | --- |
@@ -189,7 +189,7 @@ fallback_providers:
 Для Linux и macOS используйте архив `.tar.gz`.
 
 ```bash
-tag=v0.1.0
+tag=v0.2.0
 target=x86_64-unknown-linux-gnu
 archive="hermes-${tag#v}-$target.tar.gz"
 url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
@@ -210,10 +210,10 @@ url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
 ) && "$HOME/.local/hermes-rs/$tag/hermes" --help
 ```
 
-Для Windows используйте `.zip`. В PowerShell укажите тег, содержащий архив для Windows.
+Для Windows используйте `.zip` и распакуйте его в PowerShell.
 
 ```powershell
-$Tag = 'v<версия>'
+$Tag = 'v0.2.0'
 $Archive = "hermes-$($Tag.Substring(1))-x86_64-pc-windows-msvc.zip"
 $Url = "https://github.com/tsrman/hermes-rs/releases/download/$Tag"
 Invoke-WebRequest "$Url/$Archive" -OutFile $Archive
@@ -244,8 +244,8 @@ Workflow [Release CLI](../.github/workflows/release-cli.yml) проверяет 
 output="$(mktemp -d)"
 bash compat/package_cli_release.sh x86_64-unknown-linux-gnu "$output"
 bash compat/package_cli_release.sh x86_64-unknown-linux-musl "$output"
-python3 -m compat.smoke_cli_release "$output/hermes-0.1.0-x86_64-unknown-linux-gnu.tar.gz" debian:trixie-slim
-python3 -m compat.smoke_cli_release "$output/hermes-0.1.0-x86_64-unknown-linux-musl.tar.gz" alpine:3.24.2
+python3 -m compat.smoke_cli_release "$output/hermes-0.2.0-x86_64-unknown-linux-gnu.tar.gz" debian:trixie-slim
+python3 -m compat.smoke_cli_release "$output/hermes-0.2.0-x86_64-unknown-linux-musl.tar.gz" alpine:3.24.2
 ```
 
 Проверка запускает распакованный бинарник в контейнере без Python. Она проверяет отклонение недоверенного сертификата и успешный запрос к локальному HTTPS-имитатору после подключения тестового корня как системного хранилища. Затем проверяет сохранение сессии, `--resume` и поиск по истории.
