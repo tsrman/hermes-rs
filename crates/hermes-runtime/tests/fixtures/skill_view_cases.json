@@ -1,0 +1,825 @@
+{
+ "files": {
+  "alpha/SKILL.md": "---\nname: alpha\ndescription: Root level skill.\nversion: 1.0.0\n---\n\n# alpha\n\nBody of alpha.\n",
+  "devops/beta/SKILL.md": "---\nname: beta\ndescription: Category skill.\ntags: [ops, deploy]\nrelated_skills: other-one, another\n---\n\n# beta\n\nBody of beta.\n",
+  "devops/deep/gamma/SKILL.md": "---\nname: gamma\ndescription: Nested twice.\nmetadata:\n  hermes:\n    tags:\n      - nested\n      - deep\n    related_skills: [beta]\ncompatibility: Needs nothing\n---\n\n# gamma\n\nBody of gamma.\n",
+  "linked/SKILL.md": "---\nname: linked\ndescription: Has linked files.\nmetadata:\n  custom: {a: 1}\n---\n\n# linked\n\nBody of linked.\n",
+  "linked/references/guide.md": "# Guide\n",
+  "linked/references/notes.txt": "ignored by the glob\n",
+  "linked/templates/a.yaml": "a: 1\n",
+  "linked/templates/sub/b.json": "{}\n",
+  "linked/templates/sub/c.bin": "x",
+  "linked/assets/logo.png": "png",
+  "linked/assets/deep/data.csv": "1,2\n",
+  "linked/scripts/run.sh": "#!/bin/sh\n",
+  "linked/scripts/tool.py": "print(1)\n",
+  "linked/scripts/readme.txt": "no\n",
+  "env/SKILL.md": "---\nname: env\ndescription: Needs secrets.\nrequired_environment_variables:\n  - name: HERMES_FIXTURE_ONE\n    prompt: Enter one\n    help: Get it at example.test\n  - HERMES_FIXTURE_SET\n  - name: HERMES_FIXTURE_OPT\n    optional: true\n  - name: not a name\n  - name: HERMES_FIXTURE_ONE\n    prompt: duplicate\nsetup:\n  help: Setup help\n  collect_secrets:\n    - env_var: HERMES_FIXTURE_TWO\n      prompt: Enter two\n      provider_url: https://example.test/keys\nprerequisites:\n  env_vars: [HERMES_FIXTURE_LEGACY]\nrequired_credential_files:\n  - creds/token.json\n---\n\n# env\n\nBody of env.\n",
+  "ready/SKILL.md": "---\nname: ready\ndescription: All set.\nrequired_environment_variables:\n  - HERMES_FIXTURE_SET\n---\n\n# ready\n\nBody of ready.\n",
+  "winonly/SKILL.md": "---\nname: winonly\ndescription: Another OS.\nplatforms: [windows]\n---\n\n# winonly\n\nBody of winonly.\n",
+  "disabled-one/SKILL.md": "---\nname: disabled-one\ndescription: Disabled by config.\n---\n\n# disabled-one\n\nBody of disabled-one.\n",
+  "templated/SKILL.md": "---\nname: templated\ndescription: Uses tokens.\n---\n\nDir ${HERMES_SKILL_DIR} and ${HERMES_SESSION_ID}.\n",
+  "dirname/SKILL.md": "---\nname: display-name\ndescription: Name differs from directory.\n---\n\n# display-name\n\nBody of display-name.\n",
+  "bom/SKILL.md": "﻿---\nname: bom\ndescription: Starts with a BOM.\n---\n\n# bom\n\nBody of bom.\n",
+  "twin/one/SKILL.md": "---\nname: twin\ndescription: First twin.\n---\n\n# twin\n\nBody of twin.\n",
+  "twin/two/SKILL.md": "---\nname: twin\ndescription: Second twin.\n---\n\n# twin\n\nBody of twin.\n",
+  ".env": "HERMES_FIXTURE_SET=value\nHERMES_FIXTURE_EMPTY=\n"
+ },
+ "config": "skills:\n  disabled: [disabled-one]\n",
+ "cases": [
+  {
+   "kind": "list",
+   "arguments": {},
+   "result": {
+    "success": true,
+    "skills": [
+     {
+      "name": "alpha",
+      "description": "Root level skill.",
+      "category": null
+     },
+     {
+      "name": "bom",
+      "description": "Starts with a BOM.",
+      "category": null
+     },
+     {
+      "name": "display-name",
+      "description": "Name differs from directory.",
+      "category": null
+     },
+     {
+      "name": "env",
+      "description": "Needs secrets.",
+      "category": null
+     },
+     {
+      "name": "linked",
+      "description": "Has linked files.",
+      "category": null
+     },
+     {
+      "name": "ready",
+      "description": "All set.",
+      "category": null
+     },
+     {
+      "name": "templated",
+      "description": "Uses tokens.",
+      "category": null
+     },
+     {
+      "name": "beta",
+      "description": "Category skill.",
+      "category": "devops"
+     },
+     {
+      "name": "gamma",
+      "description": "Nested twice.",
+      "category": "devops"
+     },
+     {
+      "name": "twin/one",
+      "description": "First twin.",
+      "category": "twin"
+     },
+     {
+      "name": "twin/two",
+      "description": "Second twin.",
+      "category": "twin"
+     }
+    ],
+    "categories": [
+     "devops",
+     "twin"
+    ],
+    "count": 11,
+    "hint": "Use skill_view(name) to see full content, tags, and linked files"
+   }
+  },
+  {
+   "kind": "list",
+   "arguments": {
+    "category": "devops"
+   },
+   "result": {
+    "success": true,
+    "skills": [
+     {
+      "name": "beta",
+      "description": "Category skill.",
+      "category": "devops"
+     },
+     {
+      "name": "gamma",
+      "description": "Nested twice.",
+      "category": "devops"
+     }
+    ],
+    "categories": [
+     "devops"
+    ],
+    "count": 2,
+    "hint": "Use skill_view(name) to see full content, tags, and linked files"
+   }
+  },
+  {
+   "kind": "list",
+   "arguments": {
+    "category": "nothing"
+   },
+   "result": {
+    "success": true,
+    "skills": [],
+    "categories": [],
+    "count": 0,
+    "hint": "Use skill_view(name) to see full content, tags, and linked files"
+   }
+  },
+  {
+   "kind": "list",
+   "arguments": {
+    "category": ""
+   },
+   "result": {
+    "success": true,
+    "skills": [
+     {
+      "name": "alpha",
+      "description": "Root level skill.",
+      "category": null
+     },
+     {
+      "name": "bom",
+      "description": "Starts with a BOM.",
+      "category": null
+     },
+     {
+      "name": "display-name",
+      "description": "Name differs from directory.",
+      "category": null
+     },
+     {
+      "name": "env",
+      "description": "Needs secrets.",
+      "category": null
+     },
+     {
+      "name": "linked",
+      "description": "Has linked files.",
+      "category": null
+     },
+     {
+      "name": "ready",
+      "description": "All set.",
+      "category": null
+     },
+     {
+      "name": "templated",
+      "description": "Uses tokens.",
+      "category": null
+     },
+     {
+      "name": "beta",
+      "description": "Category skill.",
+      "category": "devops"
+     },
+     {
+      "name": "gamma",
+      "description": "Nested twice.",
+      "category": "devops"
+     },
+     {
+      "name": "twin/one",
+      "description": "First twin.",
+      "category": "twin"
+     },
+     {
+      "name": "twin/two",
+      "description": "Second twin.",
+      "category": "twin"
+     }
+    ],
+    "categories": [
+     "devops",
+     "twin"
+    ],
+    "count": 11,
+    "hint": "Use skill_view(name) to see full content, tags, and linked files"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "alpha"
+   },
+   "result": {
+    "success": true,
+    "name": "alpha",
+    "description": "Root level skill.",
+    "tags": [],
+    "related_skills": [],
+    "content": "---\nname: alpha\ndescription: Root level skill.\nversion: 1.0.0\n---\n\n# alpha\n\nBody of alpha.\n",
+    "path": "alpha/SKILL.md",
+    "skill_dir": "<skills>/alpha",
+    "linked_files": null,
+    "usage_hint": null,
+    "required_environment_variables": [],
+    "required_commands": [],
+    "missing_required_environment_variables": [],
+    "missing_credential_files": [],
+    "missing_required_commands": [],
+    "setup_needed": false,
+    "setup_skipped": false,
+    "readiness_status": "available"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "beta"
+   },
+   "result": {
+    "success": true,
+    "name": "beta",
+    "description": "Category skill.",
+    "tags": [
+     "deploy",
+     "ops"
+    ],
+    "related_skills": [
+     "another",
+     "other-one"
+    ],
+    "content": "---\nname: beta\ndescription: Category skill.\ntags: [ops, deploy]\nrelated_skills: other-one, another\n---\n\n# beta\n\nBody of beta.\n",
+    "path": "devops/beta/SKILL.md",
+    "skill_dir": "<skills>/devops/beta",
+    "linked_files": null,
+    "usage_hint": null,
+    "required_environment_variables": [],
+    "required_commands": [],
+    "missing_required_environment_variables": [],
+    "missing_credential_files": [],
+    "missing_required_commands": [],
+    "setup_needed": false,
+    "setup_skipped": false,
+    "readiness_status": "available"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "devops/beta"
+   },
+   "result": {
+    "success": true,
+    "name": "beta",
+    "description": "Category skill.",
+    "tags": [
+     "deploy",
+     "ops"
+    ],
+    "related_skills": [
+     "another",
+     "other-one"
+    ],
+    "content": "---\nname: beta\ndescription: Category skill.\ntags: [ops, deploy]\nrelated_skills: other-one, another\n---\n\n# beta\n\nBody of beta.\n",
+    "path": "devops/beta/SKILL.md",
+    "skill_dir": "<skills>/devops/beta",
+    "linked_files": null,
+    "usage_hint": null,
+    "required_environment_variables": [],
+    "required_commands": [],
+    "missing_required_environment_variables": [],
+    "missing_credential_files": [],
+    "missing_required_commands": [],
+    "setup_needed": false,
+    "setup_skipped": false,
+    "readiness_status": "available"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "gamma"
+   },
+   "result": {
+    "success": true,
+    "name": "gamma",
+    "description": "Nested twice.",
+    "tags": [
+     "deep",
+     "nested"
+    ],
+    "related_skills": [
+     "beta"
+    ],
+    "content": "---\nname: gamma\ndescription: Nested twice.\nmetadata:\n  hermes:\n    tags:\n      - nested\n      - deep\n    related_skills: [beta]\ncompatibility: Needs nothing\n---\n\n# gamma\n\nBody of gamma.\n",
+    "path": "devops/deep/gamma/SKILL.md",
+    "skill_dir": "<skills>/devops/deep/gamma",
+    "linked_files": null,
+    "usage_hint": null,
+    "required_environment_variables": [],
+    "required_commands": [],
+    "missing_required_environment_variables": [],
+    "missing_credential_files": [],
+    "missing_required_commands": [],
+    "setup_needed": false,
+    "setup_skipped": false,
+    "readiness_status": "available",
+    "compatibility": "Needs nothing",
+    "metadata": {
+     "hermes": {
+      "tags": [
+       "deep",
+       "nested"
+      ],
+      "related_skills": [
+       "beta"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "linked"
+   },
+   "result": {
+    "success": true,
+    "name": "linked",
+    "description": "Has linked files.",
+    "tags": [],
+    "related_skills": [],
+    "content": "---\nname: linked\ndescription: Has linked files.\nmetadata:\n  custom: {a: 1}\n---\n\n# linked\n\nBody of linked.\n",
+    "path": "linked/SKILL.md",
+    "skill_dir": "<skills>/linked",
+    "linked_files": {
+     "references": [
+      "references/guide.md"
+     ],
+     "templates": [
+      "templates/a.yaml",
+      "templates/sub/b.json"
+     ],
+     "assets": [
+      "assets/deep/data.csv",
+      "assets/logo.png"
+     ],
+     "scripts": [
+      "scripts/run.sh",
+      "scripts/tool.py"
+     ]
+    },
+    "usage_hint": "To view linked files, call skill_view(name, file_path) where file_path is e.g. 'references/api.md' or 'assets/config.yaml'",
+    "required_environment_variables": [],
+    "required_commands": [],
+    "missing_required_environment_variables": [],
+    "missing_credential_files": [],
+    "missing_required_commands": [],
+    "setup_needed": false,
+    "setup_skipped": false,
+    "readiness_status": "available",
+    "metadata": {
+     "custom": {
+      "a": 1
+     }
+    }
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "env"
+   },
+   "result": {
+    "success": true,
+    "name": "env",
+    "description": "Needs secrets.",
+    "tags": [],
+    "related_skills": [],
+    "content": "---\nname: env\ndescription: Needs secrets.\nrequired_environment_variables:\n  - name: HERMES_FIXTURE_ONE\n    prompt: Enter one\n    help: Get it at example.test\n  - HERMES_FIXTURE_SET\n  - name: HERMES_FIXTURE_OPT\n    optional: true\n  - name: not a name\n  - name: HERMES_FIXTURE_ONE\n    prompt: duplicate\nsetup:\n  help: Setup help\n  collect_secrets:\n    - env_var: HERMES_FIXTURE_TWO\n      prompt: Enter two\n      provider_url: https://example.test/keys\nprerequisites:\n  env_vars: [HERMES_FIXTURE_LEGACY]\nrequired_credential_files:\n  - creds/token.json\n---\n\n# env\n\nBody of env.\n",
+    "path": "env/SKILL.md",
+    "skill_dir": "<skills>/env",
+    "linked_files": null,
+    "usage_hint": null,
+    "required_environment_variables": [
+     {
+      "name": "HERMES_FIXTURE_ONE",
+      "prompt": "Enter one",
+      "help": "Get it at example.test"
+     },
+     {
+      "name": "HERMES_FIXTURE_SET",
+      "prompt": "Enter value for HERMES_FIXTURE_SET",
+      "help": "Setup help"
+     },
+     {
+      "name": "HERMES_FIXTURE_OPT",
+      "prompt": "Enter value for HERMES_FIXTURE_OPT",
+      "help": "Setup help",
+      "optional": true
+     },
+     {
+      "name": "HERMES_FIXTURE_TWO",
+      "prompt": "Enter two",
+      "help": "https://example.test/keys"
+     },
+     {
+      "name": "HERMES_FIXTURE_LEGACY",
+      "prompt": "Enter value for HERMES_FIXTURE_LEGACY",
+      "help": "Setup help"
+     }
+    ],
+    "required_commands": [],
+    "missing_required_environment_variables": [
+     "HERMES_FIXTURE_LEGACY",
+     "HERMES_FIXTURE_ONE",
+     "HERMES_FIXTURE_TWO"
+    ],
+    "missing_credential_files": [
+     "creds/token.json"
+    ],
+    "missing_required_commands": [],
+    "setup_needed": true,
+    "setup_skipped": false,
+    "readiness_status": "setup_needed",
+    "setup_help": "Get it at example.test",
+    "setup_note": "Setup needed before using this skill: missing env $HERMES_FIXTURE_ONE, env $HERMES_FIXTURE_TWO, env $HERMES_FIXTURE_LEGACY, file creds/token.json. Get it at example.test"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "ready"
+   },
+   "result": {
+    "success": true,
+    "name": "ready",
+    "description": "All set.",
+    "tags": [],
+    "related_skills": [],
+    "content": "---\nname: ready\ndescription: All set.\nrequired_environment_variables:\n  - HERMES_FIXTURE_SET\n---\n\n# ready\n\nBody of ready.\n",
+    "path": "ready/SKILL.md",
+    "skill_dir": "<skills>/ready",
+    "linked_files": null,
+    "usage_hint": null,
+    "required_environment_variables": [
+     {
+      "name": "HERMES_FIXTURE_SET",
+      "prompt": "Enter value for HERMES_FIXTURE_SET"
+     }
+    ],
+    "required_commands": [],
+    "missing_required_environment_variables": [],
+    "missing_credential_files": [],
+    "missing_required_commands": [],
+    "setup_needed": false,
+    "setup_skipped": false,
+    "readiness_status": "available"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "winonly"
+   },
+   "result": {
+    "success": false,
+    "error": "Skill 'winonly' is not supported on this platform.",
+    "readiness_status": "unsupported"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "disabled-one"
+   },
+   "result": {
+    "success": false,
+    "error": "Skill 'disabled-one' is disabled. Enable it with `hermes skills` or inspect the files directly on disk."
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "templated"
+   },
+   "result": {
+    "success": true,
+    "name": "templated",
+    "description": "Uses tokens.",
+    "tags": [],
+    "related_skills": [],
+    "content": "---\nname: templated\ndescription: Uses tokens.\n---\n\nDir <skills>/templated and ${HERMES_SESSION_ID}.\n",
+    "path": "templated/SKILL.md",
+    "skill_dir": "<skills>/templated",
+    "linked_files": null,
+    "usage_hint": null,
+    "required_environment_variables": [],
+    "required_commands": [],
+    "missing_required_environment_variables": [],
+    "missing_credential_files": [],
+    "missing_required_commands": [],
+    "setup_needed": false,
+    "setup_skipped": false,
+    "readiness_status": "available"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "display-name"
+   },
+   "result": {
+    "success": true,
+    "name": "display-name",
+    "description": "Name differs from directory.",
+    "tags": [],
+    "related_skills": [],
+    "content": "---\nname: display-name\ndescription: Name differs from directory.\n---\n\n# display-name\n\nBody of display-name.\n",
+    "path": "dirname/SKILL.md",
+    "skill_dir": "<skills>/dirname",
+    "linked_files": null,
+    "usage_hint": null,
+    "required_environment_variables": [],
+    "required_commands": [],
+    "missing_required_environment_variables": [],
+    "missing_credential_files": [],
+    "missing_required_commands": [],
+    "setup_needed": false,
+    "setup_skipped": false,
+    "readiness_status": "available"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "dirname"
+   },
+   "result": {
+    "success": true,
+    "name": "display-name",
+    "description": "Name differs from directory.",
+    "tags": [],
+    "related_skills": [],
+    "content": "---\nname: display-name\ndescription: Name differs from directory.\n---\n\n# display-name\n\nBody of display-name.\n",
+    "path": "dirname/SKILL.md",
+    "skill_dir": "<skills>/dirname",
+    "linked_files": null,
+    "usage_hint": null,
+    "required_environment_variables": [],
+    "required_commands": [],
+    "missing_required_environment_variables": [],
+    "missing_credential_files": [],
+    "missing_required_commands": [],
+    "setup_needed": false,
+    "setup_skipped": false,
+    "readiness_status": "available"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "bom"
+   },
+   "result": {
+    "success": true,
+    "name": "bom",
+    "description": "Starts with a BOM.",
+    "tags": [],
+    "related_skills": [],
+    "content": "---\nname: bom\ndescription: Starts with a BOM.\n---\n\n# bom\n\nBody of bom.\n",
+    "path": "bom/SKILL.md",
+    "skill_dir": "<skills>/bom",
+    "linked_files": null,
+    "usage_hint": null,
+    "required_environment_variables": [],
+    "required_commands": [],
+    "missing_required_environment_variables": [],
+    "missing_credential_files": [],
+    "missing_required_commands": [],
+    "setup_needed": false,
+    "setup_skipped": false,
+    "readiness_status": "available"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "twin"
+   },
+   "result": {
+    "success": false,
+    "error": "Ambiguous skill name 'twin': use one of twin/one, twin/two. 2 different skills share this name in the same skills directory tier; refusing to guess.",
+    "matches": [
+     "<skills>/twin/one/SKILL.md",
+     "<skills>/twin/two/SKILL.md"
+    ],
+    "load_names": [
+     "twin/one",
+     "twin/two"
+    ],
+    "hint": "Pass the exact relative path instead of the bare name, or rename one of the colliding skills so each name is unique."
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "missing"
+   },
+   "result": {
+    "success": false,
+    "error": "Skill 'missing' not found.",
+    "available_skills": [
+     "alpha",
+     "beta",
+     "bom",
+     "display-name",
+     "env",
+     "gamma",
+     "linked",
+     "ready",
+     "templated",
+     "twin/one",
+     "twin/two"
+    ],
+    "hint": "Use skills_list to see all available skills"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "/etc/passwd"
+   },
+   "result": {
+    "success": false,
+    "error": "Skill name must be a relative path within the skills directory.",
+    "hint": "Use a skill name or relative path within the skills directory."
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "../escape"
+   },
+   "result": {
+    "success": false,
+    "error": "Skill name cannot contain '..' path traversal components.",
+    "hint": "Use a skill name or relative path within the skills directory."
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "a/../b"
+   },
+   "result": {
+    "success": false,
+    "error": "Skill name cannot contain '..' path traversal components.",
+    "hint": "Use a skill name or relative path within the skills directory."
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "linked",
+    "file_path": "references/guide.md"
+   },
+   "result": {
+    "success": true,
+    "name": "linked",
+    "file": "references/guide.md",
+    "content": "# Guide\n",
+    "file_type": ".md"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "linked",
+    "file_path": "templates/sub/b.json"
+   },
+   "result": {
+    "success": true,
+    "name": "linked",
+    "file": "templates/sub/b.json",
+    "content": "{}\n",
+    "file_type": ".json"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "linked",
+    "file_path": "references/absent.md"
+   },
+   "result": {
+    "success": false,
+    "error": "File 'references/absent.md' not found in skill 'linked'.",
+    "available_files": {
+     "references": [
+      "references/guide.md",
+      "references/notes.txt"
+     ],
+     "templates": [
+      "templates/a.yaml",
+      "templates/sub/b.json",
+      "templates/sub/c.bin"
+     ],
+     "assets": [
+      "assets/deep/data.csv",
+      "assets/logo.png"
+     ],
+     "scripts": [
+      "scripts/readme.txt",
+      "scripts/run.sh",
+      "scripts/tool.py"
+     ]
+    },
+    "hint": "Use one of the available file paths listed above"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "linked",
+    "file_path": "references"
+   },
+   "result": {
+    "success": false,
+    "error": "File 'references' not found in skill 'linked'.",
+    "available_files": {
+     "references": [
+      "references/guide.md",
+      "references/notes.txt"
+     ],
+     "templates": [
+      "templates/a.yaml",
+      "templates/sub/b.json",
+      "templates/sub/c.bin"
+     ],
+     "assets": [
+      "assets/deep/data.csv",
+      "assets/logo.png"
+     ],
+     "scripts": [
+      "scripts/readme.txt",
+      "scripts/run.sh",
+      "scripts/tool.py"
+     ]
+    },
+    "hint": "Use one of the available file paths listed above"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "linked",
+    "file_path": "../alpha/SKILL.md"
+   },
+   "result": {
+    "success": false,
+    "error": "Path traversal ('..') is not allowed.",
+    "hint": "Use a relative path within the skill directory"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "linked",
+    "file_path": "SKILL.md"
+   },
+   "result": {
+    "success": true,
+    "name": "linked",
+    "file": "SKILL.md",
+    "content": "---\nname: linked\ndescription: Has linked files.\nmetadata:\n  custom: {a: 1}\n---\n\n# linked\n\nBody of linked.\n",
+    "file_type": ".md"
+   }
+  },
+  {
+   "kind": "view",
+   "arguments": {
+    "name": "winonly",
+    "file_path": "SKILL.md"
+   },
+   "result": {
+    "success": false,
+    "error": "Skill 'winonly' is not supported on this platform.",
+    "readiness_status": "unsupported"
+   }
+  },
+  {
+   "kind": "empty",
+   "arguments": {},
+   "result": {
+    "success": true,
+    "skills": [],
+    "categories": [],
+    "message": "No skills found in skills/ directory."
+   }
+  }
+ ]
+}

@@ -16,7 +16,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-PORTED = ["memory", "web_search", "web_extract", "todo_list", "session_search", "browser_cdp", "process_manage", "skill_manage", "clarify"]
+PORTED = ["memory", "web_search", "web_extract", "todo_list", "session_search", "browser_cdp", "process_manage", "skill_manage", "skill_view", "skills_list", "clarify"]
 
 
 # Tools the Rust CLI implements; the cases only record these.

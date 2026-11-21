@@ -185,10 +185,14 @@ pub(crate) struct SkillCatalog {
     desc_limit: usize,
     /// The profile's skill settings, for `skill_manage`.
     settings: SkillSettings,
+    /// The profile's own skills directory, which `skill_view` paths are shown relative to.
+    roots: Vec<PathBuf>,
 }
 
 #[derive(Clone)]
 struct Skill {
+    /// The skill's own directory.
+    dir: PathBuf,
     tier: Tier,
     root: usize,
     relative: String,
@@ -236,6 +240,11 @@ impl SkillCatalog {
         }
         let mut catalog = Self::resolve(skills, settings);
         catalog.settings = settings.clone();
+        catalog.roots = roots
+            .iter()
+            .filter(|(tier, _)| *tier == Tier::Profile)
+            .map(|(_, path)| path.clone())
+            .collect();
         catalog
     }
 
@@ -299,6 +308,7 @@ impl SkillCatalog {
             visible,
             desc_limit: settings.index_desc_limit.clamp(60, 1024),
             settings: settings.clone(),
+            roots: Vec::new(),
         }
     }
 
@@ -342,66 +352,712 @@ impl SkillCatalog {
     }
 
     pub(crate) fn schemas() -> [Value; 2] {
+        let function = |text: &str| -> Value {
+            json!({"type": "function", "function": serde_json::from_str::<Value>(text).unwrap_or_default()})
+        };
         [
-            json!({"type": "function", "function": {
-                "name": SKILL_VIEW,
-                "description": "Read the SKILL.md for a skill by its name or an exact relative name from the skills index.",
-                "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"], "additionalProperties": false}
-            }}),
-            json!({"type": "function", "function": {
-                "name": SKILLS_LIST,
-                "description": "List available skills, optionally filtered by category.",
-                "parameters": {"type": "object", "properties": {"category": {"type": "string"}}, "additionalProperties": false}
-            }}),
+            function(include_str!("schemas/skill_view.json")),
+            function(include_str!("schemas/skills_list.json")),
         ]
     }
 
-    pub(crate) fn view(&self, arguments: &str) -> Value {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Arguments {
-            name: String,
-        }
-        let Ok(arguments) = serde_json::from_str::<Arguments>(arguments) else {
+    /// `skill_view`: SKILL.md with its linked files, or one linked file.
+    pub(crate) fn view(&self, arguments: &str, home: Option<&Path>) -> Value {
+        let args: Value = serde_json::from_str(arguments).unwrap_or(Value::Null);
+        let Some(name) = args.get("name").and_then(Value::as_str) else {
             return failure("skill_view expects a skill name");
         };
-        let name = arguments.name.trim();
-        match self.aliases.get(name) {
-            Some(Some(index)) if self.visible.contains(index) => {
-                let skill = &self.skills[*index];
-                json!({"success": true, "name": skill.name, "description": skill.description, "content": normalize_text(&skill.content),
-                       "path": format!("{}/SKILL.md", skill.relative)})
-            }
-            Some(None) => failure("Ambiguous skill name. Use an exact name from skills_list."),
-            _ => failure("Skill is unavailable. Use a name from skills_list."),
+        let file_path = args
+            .get("file_path")
+            .and_then(Value::as_str)
+            .filter(|path| !path.is_empty());
+        let name = name.trim();
+        if let Some(error) = lookup_path_error(name) {
+            return fail_with(error, [("hint", json!(LOOKUP_HINT))]);
         }
+        let index = match self.aliases.get(name) {
+            Some(Some(index)) => *index,
+            Some(None) => return self.ambiguous(name),
+            None => {
+                let available: Vec<&str> =
+                    self.rows.iter().take(20).map(|(n, _)| n.as_str()).collect();
+                return fail_with(
+                    format!("Skill '{name}' not found."),
+                    [
+                        ("available_skills", json!(available)),
+                        ("hint", json!("Use skills_list to see all available skills")),
+                    ],
+                );
+            }
+        };
+        let skill = &self.skills[index];
+        let content =
+            String::from_utf8_lossy(&std::fs::read(skill.dir.join(SKILL_FILE)).unwrap_or_default())
+                .trim_start_matches('\u{feff}')
+                .to_owned();
+        let metadata = frontmatter(&content).unwrap_or(Yaml::Null);
+        if !platform_matches(&metadata) {
+            return fail_with(
+                format!("Skill '{name}' is not supported on this platform."),
+                [("readiness_status", json!("unsupported"))],
+            );
+        }
+        if !self.visible.contains(&index) {
+            let resolved = metadata["name"].as_str().unwrap_or(&skill.leaf);
+            return failure(&format!(
+                "Skill '{resolved}' is disabled. Enable it with `hermes skills` or inspect the files directly on disk."
+            ));
+        }
+        if let Some(file_path) = file_path {
+            return serve_skill_file(&skill.dir, file_path, name);
+        }
+        let hermes = &metadata["metadata"]["hermes"];
+        let tags = parse_tags(if py_truthy(&hermes["tags"]) {
+            &hermes["tags"]
+        } else {
+            &metadata["tags"]
+        });
+        let related = parse_tags(if py_truthy(&hermes["related_skills"]) {
+            &hermes["related_skills"]
+        } else {
+            &metadata["related_skills"]
+        });
+        let linked = linked_files(&skill.dir);
+        let rel_path = self.relative_path(skill);
+        let (readiness, extras) = readiness(&metadata, home);
+        let mut result = serde_json::Map::new();
+        let put = |map: &mut serde_json::Map<String, Value>, key: &str, value: Value| {
+            map.insert(key.into(), value);
+        };
+        put(&mut result, "success", json!(true));
+        put(
+            &mut result,
+            "name",
+            yaml_json(metadata.get("name")).unwrap_or_else(|| json!(skill.leaf)),
+        );
+        put(
+            &mut result,
+            "description",
+            yaml_json(metadata.get("description")).unwrap_or_else(|| json!("")),
+        );
+        put(&mut result, "tags", json!(tags));
+        put(&mut result, "related_skills", json!(related));
+        put(
+            &mut result,
+            "content",
+            json!(render_template(&content, &skill.dir)),
+        );
+        put(&mut result, "path", json!(rel_path));
+        put(
+            &mut result,
+            "skill_dir",
+            json!(skill.dir.display().to_string()),
+        );
+        let has_links = !linked.is_empty();
+        put(
+            &mut result,
+            "linked_files",
+            if has_links {
+                json!(linked)
+            } else {
+                Value::Null
+            },
+        );
+        put(
+            &mut result,
+            "usage_hint",
+            if has_links {
+                json!("To view linked files, call skill_view(name, file_path) where file_path is e.g. 'references/api.md' or 'assets/config.yaml'")
+            } else {
+                Value::Null
+            },
+        );
+        for (key, value) in readiness.into_iter().chain(extras) {
+            put(&mut result, key, value);
+        }
+        if let Some(compat) = metadata.get("compatibility").filter(|v| py_truthy(v)) {
+            put(
+                &mut result,
+                "compatibility",
+                yaml_json(Some(compat)).unwrap_or(Value::Null),
+            );
+        }
+        if let Some(meta @ Yaml::Mapping(_)) = metadata.get("metadata") {
+            put(
+                &mut result,
+                "metadata",
+                yaml_json(Some(meta)).unwrap_or(Value::Null),
+            );
+        }
+        Value::Object(result)
+    }
+
+    fn ambiguous(&self, name: &str) -> Value {
+        let matches: Vec<String> = self
+            .skills
+            .iter()
+            .filter(|skill| [&skill.name, &skill.leaf, &skill.relative].contains(&&name.to_owned()))
+            .map(|skill| skill.dir.join(SKILL_FILE).display().to_string())
+            .collect();
+        let load_names: BTreeSet<&str> = self
+            .skills
+            .iter()
+            .filter(|skill| [&skill.name, &skill.leaf, &skill.relative].contains(&&name.to_owned()))
+            .map(|skill| skill.relative.as_str())
+            .filter(|relative| *relative != name)
+            .collect();
+        let uses = if load_names.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "use one of {}. ",
+                load_names.iter().copied().collect::<Vec<_>>().join(", ")
+            )
+        };
+        fail_with(
+            format!(
+                "Ambiguous skill name '{name}': {uses}{} different skills share this name in the same skills directory tier; refusing to guess.",
+                matches.len()
+            ),
+            [
+                ("matches", json!(matches)),
+                ("load_names", json!(load_names)),
+                ("hint", json!("Pass the exact relative path instead of the bare name, or rename one of the colliding skills so each name is unique.")),
+            ],
+        )
+    }
+
+    /// The path shown for SKILL.md: relative to the profile's skills dir, else to the parent of
+    /// the skill's category directory.
+    fn relative_path(&self, skill: &Skill) -> String {
+        let skill_md = skill.dir.join(SKILL_FILE);
+        if let Some(root) = self.roots.first() {
+            if let Ok(relative) = skill_md.strip_prefix(root) {
+                return relative.display().to_string();
+            }
+        }
+        skill_md
+            .parent()
+            .and_then(Path::parent)
+            .and_then(|base| skill_md.strip_prefix(base).ok())
+            .map_or_else(
+                || SKILL_FILE.to_owned(),
+                |relative| relative.display().to_string(),
+            )
     }
 
     pub(crate) fn list(&self, arguments: &str) -> Value {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Arguments {
-            category: Option<String>,
-        }
-        let Ok(arguments) = serde_json::from_str::<Arguments>(arguments) else {
-            return failure("skills_list expects an optional category");
-        };
-        let category = arguments
-            .category
-            .as_deref()
+        let args: Value = serde_json::from_str(arguments).unwrap_or(Value::Null);
+        let category = args
+            .get("category")
+            .and_then(Value::as_str)
             .filter(|category| !category.is_empty());
-        let mut categories = BTreeSet::new();
-        let mut rows = Vec::new();
-        for (name, index) in &self.rows {
-            let skill = &self.skills[*index];
-            if category.is_none_or(|category| category == skill.category) {
-                categories.insert(&skill.category);
-                rows.push(json!({"name": name, "description": skill.description, "category": skill.category}));
+        let mut skills: Vec<(Option<String>, String, String)> = self
+            .rows
+            .iter()
+            .map(|(name, index)| {
+                let skill = &self.skills[*index];
+                let description: String = if skill.description.chars().count() <= 1024 {
+                    skill.description.clone()
+                } else {
+                    format!(
+                        "{}...",
+                        skill.description.chars().take(1021).collect::<String>()
+                    )
+                };
+                (
+                    reference_category(&skill.relative),
+                    name.clone(),
+                    description,
+                )
+            })
+            .collect();
+        if skills.is_empty() {
+            return json!({"success": true, "skills": [], "categories": [],
+                          "message": "No skills found in skills/ directory."});
+        }
+        if let Some(category) = category {
+            skills.retain(|(c, _, _)| c.as_deref() == Some(category));
+        }
+        skills.sort_by(|a, b| {
+            (a.0.as_deref().unwrap_or(""), &a.1).cmp(&(b.0.as_deref().unwrap_or(""), &b.1))
+        });
+        let categories: BTreeSet<&String> =
+            skills.iter().filter_map(|(c, _, _)| c.as_ref()).collect();
+        let rows: Vec<Value> = skills
+            .iter()
+            .map(|(category, name, description)| json!({"name": name, "description": description, "category": category}))
+            .collect();
+        json!({"success": true, "skills": rows, "categories": categories, "count": rows.len(),
+               "hint": "Use skill_view(name) to see full content, tags, and linked files"})
+    }
+}
+
+const LOOKUP_HINT: &str = "Use a skill name or relative path within the skills directory.";
+
+fn fail_with<const N: usize>(error: impl Into<String>, extra: [(&str, Value); N]) -> Value {
+    let mut map = serde_json::Map::new();
+    map.insert("success".into(), json!(false));
+    map.insert("error".into(), json!(error.into()));
+    for (key, value) in extra {
+        map.insert(key.into(), value);
+    }
+    Value::Object(map)
+}
+
+/// A name that could escape the directory it is joined onto.
+fn lookup_path_error(name: &str) -> Option<&'static str> {
+    if name.starts_with('/') || name.starts_with('\\') || name.as_bytes().get(1) == Some(&b':') {
+        return Some("Skill name must be a relative path within the skills directory.");
+    }
+    name.split(['/', '\\'])
+        .any(|part| part == "..")
+        .then_some("Skill name cannot contain '..' path traversal components.")
+}
+
+/// The category the reference shows: the first directory of a skill nested at least two deep.
+fn reference_category(relative: &str) -> Option<String> {
+    let (first, rest) = relative.split_once('/')?;
+    (!rest.is_empty()).then(|| first.to_owned())
+}
+
+fn py_truthy(value: &Yaml) -> bool {
+    match value {
+        Yaml::Null => false,
+        Yaml::Bool(flag) => *flag,
+        Yaml::Number(number) => number.as_f64().is_some_and(|n| n != 0.0),
+        Yaml::String(text) => !text.is_empty(),
+        Yaml::Sequence(items) => !items.is_empty(),
+        Yaml::Mapping(map) => !map.is_empty(),
+        Yaml::Tagged(_) => true,
+    }
+}
+
+fn yaml_json(value: Option<&Yaml>) -> Option<Value> {
+    serde_json::to_value(value?).ok()
+}
+
+/// Tags from frontmatter: a list, `[a, b]` or `a, b`.
+fn parse_tags(value: &Yaml) -> Vec<String> {
+    if !py_truthy(value) {
+        return Vec::new();
+    }
+    if let Yaml::Sequence(items) = value {
+        return items
+            .iter()
+            .filter(|item| py_truthy(item))
+            .map(|item| match item {
+                Yaml::String(text) => text.trim().to_owned(),
+                other => serde_yaml::to_string(other)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned(),
+            })
+            .collect();
+    }
+    let text = match value {
+        Yaml::String(text) => text.trim().to_owned(),
+        other => serde_yaml::to_string(other)
+            .unwrap_or_default()
+            .trim()
+            .to_owned(),
+    };
+    let text = text
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(&text);
+    text.split(',')
+        .map(|tag| tag.trim().trim_matches(['"', '\'']).to_owned())
+        .filter(|tag| !tag.is_empty())
+        .collect()
+}
+
+/// `skill_matches_platform`: the `platforms:` list (absent = every OS) names this one.
+fn platform_matches(metadata: &Yaml) -> bool {
+    let platforms = &metadata["platforms"];
+    if !py_truthy(platforms) {
+        return true;
+    }
+    let host = match std::env::consts::OS {
+        "macos" => "darwin",
+        other => other,
+    };
+    let items: Vec<&Yaml> = match platforms {
+        Yaml::Sequence(items) => items.iter().collect(),
+        other => vec![other],
+    };
+    items.iter().any(|platform| {
+        let text = match platform {
+            Yaml::String(text) => text.clone(),
+            other => serde_yaml::to_string(other).unwrap_or_default(),
+        };
+        let mapped = match text.trim().to_lowercase().as_str() {
+            "macos" => "darwin".to_owned(),
+            "windows" => "win32".to_owned(),
+            other => other.to_owned(),
+        };
+        host.starts_with(&mapped) || (host == "linux" && mapped == "linux")
+    })
+}
+
+/// `${HERMES_SKILL_DIR}` becomes the skill's directory; the session token stays, as it does for
+/// a session the reference cannot name.
+fn render_template(content: &str, dir: &Path) -> String {
+    content.replace("${HERMES_SKILL_DIR}", &dir.display().to_string())
+}
+
+fn glob_ext(path: &Path, extensions: &[&str]) -> bool {
+    extensions.is_empty()
+        || path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| extensions.contains(&e))
+}
+
+fn walk(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    entries.sort();
+    for path in entries {
+        out.push(path.clone());
+        if recursive && path.is_dir() {
+            walk(&path, true, out);
+        }
+    }
+}
+
+/// references/templates/assets/scripts of a skill directory; empty groups are left out.
+fn linked_files(dir: &Path) -> BTreeMap<&'static str, Vec<String>> {
+    type Spec = (&'static str, &'static [&'static str], bool, bool);
+    const SPECS: [Spec; 4] = [
+        ("references", &["md"], false, false),
+        (
+            "templates",
+            &["md", "py", "yaml", "yml", "json", "tex", "sh"],
+            true,
+            false,
+        ),
+        ("assets", &[], true, true),
+        (
+            "scripts",
+            &["py", "sh", "bash", "js", "ts", "rb"],
+            false,
+            false,
+        ),
+    ];
+    let mut out = BTreeMap::new();
+    for (sub, extensions, recursive, files_only) in SPECS {
+        let base = dir.join(sub);
+        if !base.exists() {
+            continue;
+        }
+        let mut paths = Vec::new();
+        walk(&base, recursive, &mut paths);
+        let found: Vec<String> = paths
+            .iter()
+            .filter(|path| glob_ext(path, extensions) && (!files_only || path.is_file()))
+            .filter_map(|path| path.strip_prefix(dir).ok())
+            .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+            .collect();
+        if !found.is_empty() {
+            out.insert(sub, found);
+        }
+    }
+    out
+}
+
+/// Non-SKILL.md files grouped by support dir, plus `other` for known source extensions elsewhere.
+fn available_files(dir: &Path) -> serde_json::Map<String, Value> {
+    const EXTS: [&str; 7] = ["md", "py", "yaml", "yml", "json", "tex", "sh"];
+    let mut paths = Vec::new();
+    walk(dir, true, &mut paths);
+    let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for path in paths.iter().filter(|path| path.is_file()) {
+        if path.file_name().is_some_and(|n| n == SKILL_FILE) {
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(dir) else {
+            continue;
+        };
+        let rel = relative.to_string_lossy().replace('\\', "/");
+        let top = rel.split_once('/').map(|(top, _)| top.to_owned());
+        let support = top.filter(|top| SUPPORT_DIRS.contains(&top.as_str()));
+        let known = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| EXTS.contains(&e));
+        if support.is_some() || known {
+            groups
+                .entry(support.unwrap_or_else(|| "other".to_owned()))
+                .or_default()
+                .push(rel);
+        }
+    }
+    let mut out = serde_json::Map::new();
+    for key in ["references", "templates", "assets", "scripts", "other"] {
+        if let Some(files) = groups.remove(key) {
+            out.insert(key.into(), json!(files));
+        }
+    }
+    out
+}
+
+fn serve_skill_file(dir: &Path, file_path: &str, label: &str) -> Value {
+    let hint = [(
+        "hint",
+        json!("Use a relative path within the skill directory"),
+    )];
+    if file_path.split(['/', '\\']).any(|part| part == "..") {
+        return fail_with("Path traversal ('..') is not allowed.", hint);
+    }
+    let target = dir.join(file_path);
+    let inside = match (target.canonicalize(), dir.canonicalize()) {
+        (Ok(target), Ok(root)) => target.starts_with(root),
+        _ => true,
+    };
+    if !inside {
+        return fail_with(
+            format!(
+                "Path escapes allowed directory: '{}' is not in the subpath of '{}'",
+                target.display(),
+                dir.display()
+            ),
+            hint,
+        );
+    }
+    if !target.is_file() {
+        return fail_with(
+            format!("File '{file_path}' not found in skill '{label}'."),
+            [
+                ("available_files", Value::Object(available_files(dir))),
+                (
+                    "hint",
+                    json!("Use one of the available file paths listed above"),
+                ),
+            ],
+        );
+    }
+    let content = String::from_utf8_lossy(&fs::read(&target).unwrap_or_default())
+        .trim_start_matches('\u{feff}')
+        .to_owned();
+    let suffix = target
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+    json!({"success": true, "name": label, "file": file_path, "content": content, "file_type": suffix})
+}
+
+/// Required environment variables a skill declares, merged and deduplicated (first entry wins).
+fn required_env_vars(metadata: &Yaml) -> Vec<serde_json::Map<String, Value>> {
+    let text = |value: &Yaml| -> Option<String> {
+        value
+            .as_str()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_owned)
+    };
+    let setup = &metadata["setup"];
+    let setup_help = text(&setup["help"]);
+    let mut entries: Vec<Yaml> = Vec::new();
+    let declared = &metadata["required_environment_variables"];
+    match declared {
+        Yaml::Mapping(_) => entries.push(declared.clone()),
+        Yaml::Sequence(items) => entries.extend(
+            items
+                .iter()
+                .filter(|i| i.is_string() || i.is_mapping())
+                .cloned(),
+        ),
+        _ => {}
+    }
+    let collect = &setup["collect_secrets"];
+    let secrets: Vec<&Yaml> = match collect {
+        Yaml::Mapping(_) => vec![collect],
+        Yaml::Sequence(items) => items.iter().collect(),
+        _ => Vec::new(),
+    };
+    for item in secrets.into_iter().filter(|i| i.is_mapping()) {
+        let url = item["provider_url"]
+            .as_str()
+            .or(item["url"].as_str())
+            .map(str::trim)
+            .filter(|u| !u.is_empty());
+        let mut map = serde_yaml::Mapping::new();
+        map.insert("name".into(), item["env_var"].clone());
+        map.insert("prompt".into(), item["prompt"].clone());
+        if let Some(url) = url {
+            map.insert("url".into(), Yaml::String(url.to_owned()));
+        }
+        entries.push(Yaml::Mapping(map));
+    }
+    let legacy = &metadata["prerequisites"]["env_vars"];
+    match legacy {
+        Yaml::String(name) if !name.trim().is_empty() => {
+            entries
+                .push(serde_yaml::from_str(&format!("{{name: {name:?}}}")).unwrap_or(Yaml::Null));
+        }
+        Yaml::Sequence(items) => {
+            for item in items {
+                if let Yaml::String(name) = item {
+                    if !name.trim().is_empty() {
+                        entries.push(
+                            serde_yaml::from_str(&format!("{{name: {name:?}}}"))
+                                .unwrap_or(Yaml::Null),
+                        );
+                    }
+                }
             }
         }
-        json!({"success": true, "skills": rows, "categories": categories, "count": rows.len(),
-               "hint": "Use skill_view(name) to read SKILL.md."})
+        _ => {}
     }
+    let name_pattern = Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*$").expect("valid regex");
+    let mut required: Vec<serde_json::Map<String, Value>> = Vec::new();
+    for entry in entries {
+        let entry = match &entry {
+            Yaml::String(name) => {
+                let mut map = serde_yaml::Mapping::new();
+                map.insert("name".into(), Yaml::String(name.clone()));
+                Yaml::Mapping(map)
+            }
+            other => other.clone(),
+        };
+        let pick = |key: &str| match &entry[key] {
+            Yaml::Null | Yaml::Bool(false) => String::new(),
+            Yaml::String(text) => text.clone(),
+            other => serde_yaml::to_string(other)
+                .unwrap_or_default()
+                .trim()
+                .to_owned(),
+        };
+        let name = {
+            let first = pick("name");
+            if first.is_empty() {
+                pick("env_var")
+            } else {
+                first
+            }
+        }
+        .trim()
+        .to_owned();
+        if name.is_empty()
+            || !name_pattern.is_match(&name)
+            || required
+                .iter()
+                .any(|existing| existing["name"] == name.as_str())
+        {
+            continue;
+        }
+        let prompt = {
+            let prompt = pick("prompt");
+            if prompt.is_empty() {
+                format!("Enter value for {name}")
+            } else {
+                prompt
+            }
+        };
+        let mut normalized = serde_json::Map::new();
+        normalized.insert("name".into(), json!(name));
+        normalized.insert("prompt".into(), json!(prompt.trim()));
+        let help = ["help", "provider_url", "url"]
+            .iter()
+            .find_map(|key| text(&entry[*key]))
+            .or_else(|| setup_help.clone());
+        if let Some(help) = help {
+            normalized.insert("help".into(), json!(help));
+        }
+        if let Some(required_for) = text(&entry["required_for"]) {
+            normalized.insert("required_for".into(), json!(required_for));
+        }
+        if py_truthy(&entry["optional"]) {
+            normalized.insert("optional".into(), json!(true));
+        }
+        required.push(normalized);
+    }
+    required
+}
+
+type Fields = Vec<(&'static str, Value)>;
+
+/// The readiness fields of a loaded skill, and the extras that follow them. No secret can be
+/// captured here, so every missing variable stays missing.
+fn readiness(metadata: &Yaml, home: Option<&Path>) -> (Fields, Fields) {
+    let required = required_env_vars(metadata);
+    let snapshot: std::collections::HashMap<String, String> = home
+        .and_then(|home| dotenvy::from_path_iter(home.join(".env")).ok())
+        .map(|iter| iter.flatten().collect())
+        .unwrap_or_default();
+    let persisted = |name: &str| match snapshot.get(name) {
+        Some(value) => !value.is_empty(),
+        None => std::env::var(name).is_ok_and(|value| !value.is_empty()),
+    };
+    let remaining: Vec<String> = required
+        .iter()
+        .filter(|entry| entry.get("optional").is_none())
+        .filter_map(|entry| entry["name"].as_str())
+        .filter(|name| !persisted(name))
+        .map(str::to_owned)
+        .collect();
+    let mut setup_needed = !remaining.is_empty();
+    let mut missing_files: Vec<Value> = Vec::new();
+    if let Some(files) = metadata["required_credential_files"].as_sequence() {
+        for file in files.iter().filter_map(Yaml::as_str) {
+            let present = home.is_some_and(|home| home.join(file).exists());
+            if !present {
+                missing_files.push(json!(file));
+            }
+        }
+        setup_needed = setup_needed || !missing_files.is_empty();
+    }
+    let status = if setup_needed {
+        "setup_needed"
+    } else {
+        "available"
+    };
+    let fields = vec![
+        ("required_environment_variables", json!(required)),
+        ("required_commands", json!([])),
+        ("missing_required_environment_variables", json!(remaining)),
+        ("missing_credential_files", json!(missing_files)),
+        ("missing_required_commands", json!([])),
+        ("setup_needed", json!(setup_needed)),
+        ("setup_skipped", json!(false)),
+        ("readiness_status", json!(status)),
+    ];
+    let mut extras: Vec<(&'static str, Value)> = Vec::new();
+    let help = required
+        .iter()
+        .find_map(|entry| entry.get("help").and_then(Value::as_str));
+    if let Some(help) = help {
+        extras.push(("setup_help", json!(help)));
+    }
+    if setup_needed {
+        let missing: Vec<String> = remaining
+            .iter()
+            .map(|name| format!("env ${name}"))
+            .chain(
+                missing_files
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|f| format!("file {f}")),
+            )
+            .collect();
+        let mut note = format!(
+            "Setup needed before using this skill: missing {}.",
+            if missing.is_empty() {
+                "required prerequisites".to_owned()
+            } else {
+                missing.join(", ")
+            }
+        );
+        if let Some(help) = help {
+            note = format!("{note} {help}");
+        }
+        extras.push(("setup_note", json!(note)));
+    }
+    (fields, extras)
 }
 
 fn failure(error: &str) -> Value {
@@ -609,6 +1265,7 @@ impl Skill {
             .rsplit_once('/')
             .map_or_else(|| leaf.clone(), |(category, _)| category.to_owned());
         Some(Self {
+            dir: directory.to_path_buf(),
             tier,
             root: root_index,
             relative,
@@ -729,5 +1386,73 @@ pub(crate) fn clip_description(description: &str, limit: usize) -> String {
         )
     } else {
         format!("{clipped}...")
+    }
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+
+    fn normalize(value: &Value, root: &str) -> Value {
+        match value {
+            Value::String(text) => json!(text.replace(root, "<skills>")),
+            Value::Array(items) => {
+                let mut items: Vec<Value> = items.iter().map(|i| normalize(i, root)).collect();
+                if !items.is_empty() && items.iter().all(Value::is_string) {
+                    items.sort_by_key(|item| item.as_str().unwrap_or("").to_owned());
+                }
+                Value::Array(items)
+            }
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .map(|(k, v)| (k.clone(), normalize(v, root)))
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+
+    #[test]
+    fn listings_and_views_match_the_reference() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/skill_view_cases.json")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let skills_dir = home.path().join("skills");
+        for (relative, text) in fixture["files"].as_object().unwrap() {
+            let target = if relative == ".env" {
+                home.path().join(relative)
+            } else {
+                skills_dir.join(relative)
+            };
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            fs::write(target, text.as_str().unwrap()).unwrap();
+        }
+        let config: Yaml = serde_yaml::from_str(fixture["config"].as_str().unwrap()).unwrap();
+        let settings = SkillSettings::from_config(&config["skills"]);
+        let catalog = SkillCatalog::load(Some(home.path()), home.path(), &settings, true, true);
+        let root = skills_dir.canonicalize().unwrap().display().to_string();
+        for case in fixture["cases"].as_array().unwrap() {
+            let arguments = case["arguments"].to_string();
+            let ours = match case["kind"].as_str().unwrap() {
+                "list" => catalog.list(&arguments),
+                "view" => catalog.view(&arguments, Some(home.path())),
+                _ => {
+                    let empty = SkillCatalog::load(
+                        Some(tempfile::tempdir().unwrap().path()),
+                        home.path(),
+                        &settings,
+                        true,
+                        true,
+                    );
+                    empty.list(&arguments)
+                }
+            };
+            assert_eq!(
+                normalize(&ours, &root),
+                case["result"],
+                "{} {arguments}",
+                case["kind"]
+            );
+        }
     }
 }

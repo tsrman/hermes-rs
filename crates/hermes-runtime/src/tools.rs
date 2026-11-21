@@ -184,7 +184,7 @@ fn skill_manage_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxF
 }
 
 fn skill_view_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
-    Box::pin(async move { cx.skills.view(args) })
+    Box::pin(async move { cx.skills.view(args, cx.options.profile) })
 }
 
 fn skills_list_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
@@ -537,6 +537,22 @@ mod tests {
             .collect();
         assert_eq!(ours, reference);
         assert_eq!(ours.len(), 12);
+        // These tools carry the reference's schema verbatim; the rest are still hand-written.
+        let verbatim = [
+            "clarify",
+            "memory",
+            "skill_manage",
+            "skill_view",
+            "skills_list",
+            "web_extract",
+            "web_search",
+        ];
+        for ours in offered_schemas(&env) {
+            let name = ours["function"]["name"].as_str().unwrap();
+            if verbatim.contains(&name) {
+                assert!(recorded.iter().any(|tool| tool == &ours), "{name} differs");
+            }
+        }
     }
 
     #[test]
