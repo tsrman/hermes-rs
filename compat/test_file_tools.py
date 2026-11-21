@@ -8,7 +8,6 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from threading import Thread
 from urllib.request import urlopen
 
 if sys.platform in ("linux", "darwin"):
@@ -87,11 +86,6 @@ class ToolTestCase(unittest.TestCase):
                 except OSError:
                     break
             if b"[y/N]" in transcript:
-                # macOS waits for the controlling terminal output to drain
-                # before the session leader exits. Keep reading echoed input.
-                reader = Thread(target=self.drain_terminal, args=(process, master), daemon=True)
-                reader.start()
-                self.addCleanup(reader.join, 1)
                 return transcript.decode(errors="replace")
         details = ""
         if process.poll() is not None:
@@ -100,15 +94,19 @@ class ToolTestCase(unittest.TestCase):
         self.fail(f"approval prompt missing; terminal output was {transcript!r}{details}")
 
     @staticmethod
-    def drain_terminal(process, master):
-        while process.poll() is None:
+    def finish_terminal(process, master):
+        # macOS waits for the controlling terminal output to drain before
+        # the session leader exits. Keep reading echoed input until then.
+        deadline = time.monotonic() + 8
+        while process.poll() is None and time.monotonic() < deadline:
             ready, _, _ = select.select([master], [], [], 0.05)
             if ready:
                 try:
                     if not os.read(master, 16384):
-                        return
+                        break
                 except OSError:
-                    return
+                    break
+        return process.communicate(timeout=max(0.1, deadline - time.monotonic()))
 
     def last_tool_result(self):
         with urlopen(self.url + "/requests", timeout=4) as response:
@@ -303,7 +301,7 @@ class TerminalToolTest(ToolTestCase):
         self.assertIn("subdir", prompt)
         self.assertIn("no-key", prompt)
         os.write(tty, b"yes\n")
-        _, error = process.communicate(timeout=8)
+        _, error = self.finish_terminal(process, tty)
         self.assertEqual(process.returncode, 0, error)
         result, requests = self.last_tool_result()
         tools = [tool["function"]["name"] for tool in requests[0]["tools"]]
@@ -316,7 +314,7 @@ class TerminalToolTest(ToolTestCase):
         process, tty = self.interactive(tool="terminal", arguments={"command": "exit 7"})
         self.wait_for_prompt(process, tty)
         os.write(tty, b"yes\n")
-        _, error = process.communicate(timeout=8)
+        _, error = self.finish_terminal(process, tty)
         self.assertEqual(process.returncode, 0, error)
         self.assertIn('Tool failed: "terminal"', error)
         result, _ = self.last_tool_result()
@@ -335,7 +333,7 @@ class TerminalToolTest(ToolTestCase):
                     os.write(tty, b"n\n")
                 if mode == "cancel":
                     process.send_signal(signal.SIGINT)
-                _, error = process.communicate(timeout=8)
+                _, error = self.finish_terminal(process, tty)
                 self.assertEqual(process.returncode, 130 if mode == "cancel" else 0, error)
                 self.assertFalse((self.root / "marker.txt").exists())
                 if mode != "cancel":
@@ -374,7 +372,7 @@ class TerminalToolTest(ToolTestCase):
         original = directory.rename(self.root / "original")
         directory.mkdir()
         os.write(tty, b"y\n")
-        _, error = process.communicate(timeout=8)
+        _, error = self.finish_terminal(process, tty)
         self.assertEqual(process.returncode, 0, error)
         result, _ = self.last_tool_result()
         self.assertIn("directory changed", result["error"])
@@ -407,7 +405,7 @@ class TerminalToolTest(ToolTestCase):
                 cancelled = mode in ("cancel", "owner_cancel")
                 if cancelled:
                     process.send_signal(signal.SIGINT)
-                _, error = process.communicate(timeout=8)
+                _, error = self.finish_terminal(process, tty)
                 self.assertEqual(process.returncode, 130 if cancelled else 0, error)
                 if mode == "timeout":
                     result, _ = self.last_tool_result()
