@@ -1,15 +1,21 @@
-"""Verify a packaged CLI and its system TLS roots in a clean Linux container."""
+"""Verify a packaged CLI in a Linux container or on a native runner."""
 
 import argparse
-import hashlib
 import json
+import os
+import shutil
 import subprocess
 import tarfile
 import tempfile
+import threading
 import time
+import zipfile
 from contextlib import contextmanager
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+from compat.model_server import Handler
+from compat.package_cli_release import checksum
 from compat.test_tls import create_test_certificates
 
 BASE_URL = "https://127.0.0.1:8011/v1"
@@ -21,11 +27,15 @@ def mount(source, target):
 
 
 def unpack(archive, destination):
-    with archive.open("rb") as source:
-        digest = hashlib.file_digest(source, "sha256").hexdigest()
-    checksum = archive.with_name(archive.name + ".sha256").read_text(encoding="ascii")
-    if checksum != f"{digest}  {archive.name}\n":
+    expected = archive.with_name(archive.name + ".sha256").read_text(encoding="ascii")
+    if expected != checksum(archive):
         raise ValueError(f"checksum mismatch for {archive.name}")
+    if archive.suffix == ".zip":
+        with zipfile.ZipFile(archive) as contents:
+            if contents.namelist() != ["hermes.exe"]:
+                raise ValueError(f"unexpected archive contents in {archive.name}")
+            contents.extract("hermes.exe", destination)
+        return destination / "hermes.exe"
     with tarfile.open(archive, "r:gz") as contents:
         members = contents.getmembers()
         if len(members) != 1 or members[0].name != "hermes" or not members[0].isfile():
@@ -58,7 +68,7 @@ def model_fixture(certs):
                        stdout=subprocess.DEVNULL, check=True, timeout=20)
 
 
-def smoke(archive, image, work):
+def smoke_linux(archive, image, work):
     binary = unpack(archive, work)
     create_test_certificates(work)
     with model_fixture(work) as fixture:
@@ -97,13 +107,78 @@ def smoke(archive, image, work):
     print(f"{archive.name}: checksum, startup, system TLS, session resume and FTS passed on {image}")
 
 
+@contextmanager
+def native_model():
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        server.scenario = "tool"
+        server.requests = []
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            yield server, f"http://127.0.0.1:{server.server_port}/v1"
+        finally:
+            server.shutdown()
+            thread.join()
+
+
+def smoke_native(archive, work):
+    first = work / "installed CLI"
+    first.mkdir()
+    binary = unpack(archive, first)
+    second = work / "second installation"
+    second.mkdir()
+    replacement = second / binary.name
+    shutil.copy2(binary, replacement)
+    home = work / "user profile"
+    profile = home / ".hermes" / "profiles" / "fixture"
+    profile.mkdir(parents=True)
+    (profile / "config.yaml").write_text("model: fixture\n", encoding="utf-8")
+    project = work / "project folder"
+    project.mkdir()
+    (project / "fixture.txt").write_text("native read_file payload", encoding="utf-8")
+
+    env = {key: os.environ[key] for key in ("SystemRoot", "WINDIR", "TEMP", "TMP") if key in os.environ}
+    env.update(HOME=str(home), HERMES_API_KEY="fixture", PATH=str(work / "empty-path"))
+    if os.name == "nt":
+        env.update(USERPROFILE=str(home), HOME=str(work / "unused shell home"))
+
+    def cli(executable, *args):
+        result = subprocess.run([str(executable), *args], cwd=project, env=env,
+                                capture_output=True, encoding="utf-8", timeout=30)
+        if result.returncode:
+            raise RuntimeError(f"{executable.name} exited with {result.returncode}: {result.stderr}")
+        return result
+
+    cli(binary, "--help")
+    with native_model() as (server, base_url):
+        chat = ("-p", "fixture", "chat", "--oneshot", "--model", "fixture", "--base-url", base_url)
+        saved = cli(binary, *chat, "--save-session", "-q", "native smoke first")
+        assert saved.stdout.strip() == "Ответ модели" and '"read_file"' in saved.stderr
+        session = next(line.removeprefix("Session: ") for line in saved.stderr.splitlines()
+                       if line.startswith("Session: "))
+        assert (profile / "state.db").is_file()
+        assert not (home / ".hermes" / "state.db").exists()
+        tool_result = json.loads(server.requests[1]["messages"][-1]["content"])
+        assert "native read_file payload" in tool_result["content"]
+        resumed = cli(replacement, *chat, "--resume", session, "-q", "native smoke resumed")
+        assert resumed.stdout.strip() == "Ответ модели"
+        hits = json.loads(cli(binary, "-p", "fixture", "sessions", "search", '"native smoke resumed"').stdout)
+        assert len(hits) == 1 and hits[0]["session_id"] == session
+    print(f"{archive.name}: checksum, startup, named profile, read_file, session resume and FTS passed")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=Path)
-    parser.add_argument("image")
+    parser.add_argument("image", nargs="?", help="Linux container image; omit for a native smoke test")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="hermes-cli-smoke-") as directory:
-        smoke(args.archive.resolve(strict=True), args.image, Path(directory))
+        archive = args.archive.resolve(strict=True)
+        work = Path(directory)
+        if args.image:
+            smoke_linux(archive, args.image, work)
+        else:
+            smoke_native(archive, work)
 
 
 if __name__ == "__main__":

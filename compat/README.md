@@ -176,7 +176,17 @@ fallback_providers:
 
 ## Установка CLI из GitHub Releases
 
-Выберите архив `x86_64-unknown-linux-gnu` для Linux с glibc или `x86_64-unknown-linux-musl` для Alpine Linux. Укажите тег опубликованного релиза и скачайте архив вместе с файлом контрольной суммы.
+Выберите цель из артефактов опубликованного тега и скачайте архив вместе с файлом SHA-256.
+
+| Система | Цель |
+| --- | --- |
+| Linux x86_64 | `x86_64-unknown-linux-gnu` для glibc, `x86_64-unknown-linux-musl` для Alpine |
+| Linux arm64 | `aarch64-unknown-linux-gnu` для glibc, `aarch64-unknown-linux-musl` для Alpine |
+| macOS Apple Silicon | `aarch64-apple-darwin` |
+| macOS Intel | `x86_64-apple-darwin` |
+| Windows x64 | `x86_64-pc-windows-msvc` |
+
+Для Linux и macOS используйте архив `.tar.gz`.
 
 ```bash
 tag=v0.1.0
@@ -189,11 +199,33 @@ url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
   cd "$download_dir"
   curl -fsSLO "$url/$archive"
   curl -fsSLO "$url/$archive.sha256"
-  sha256sum --check "$archive.sha256"
+  if command -v sha256sum >/dev/null; then
+    sha256sum --check "$archive.sha256"
+  else
+    shasum -a 256 -c "$archive.sha256"
+  fi
   tar -xzf "$archive" hermes
-  install -Dm755 hermes "$HOME/.local/hermes-rs/$tag/hermes"
+  mkdir -p "$HOME/.local/hermes-rs/$tag"
+  install -m 755 hermes "$HOME/.local/hermes-rs/$tag/hermes"
 ) && "$HOME/.local/hermes-rs/$tag/hermes" --help
 ```
+
+Для Windows используйте `.zip`. В PowerShell укажите тег, содержащий архив для Windows.
+
+```powershell
+$Tag = 'v<версия>'
+$Archive = "hermes-$($Tag.Substring(1))-x86_64-pc-windows-msvc.zip"
+$Url = "https://github.com/tsrman/hermes-rs/releases/download/$Tag"
+Invoke-WebRequest "$Url/$Archive" -OutFile $Archive
+Invoke-WebRequest "$Url/$Archive.sha256" -OutFile "$Archive.sha256"
+$Expected = (Get-Content "$Archive.sha256").Split(' ')[0]
+if ((Get-FileHash $Archive -Algorithm SHA256).Hash -ne $Expected) { throw 'SHA-256 mismatch' }
+$InstallDir = Join-Path $env:LOCALAPPDATA "hermes-rs\$Tag"
+Expand-Archive -LiteralPath $Archive -DestinationPath $InstallDir
+& (Join-Path $InstallDir 'hermes.exe') --help
+```
+
+Устанавливайте каждую версию в свой каталог. Для обновления или возврата запускайте бинарник нужной версии по его пути. Профиль выбирается отдельно через `HERMES_HOME` или `-p`. По умолчанию в Windows используется `%USERPROFILE%\.hermes`.
 
 Используйте отдельный профиль для [миграции](#предварительная-проверка-и-миграция-профиля) и [контрольного возврата на Python](#контрольный-возврат-на-python).
 
@@ -204,7 +236,7 @@ cargo build --release --locked -p hermes-cli --target x86_64-unknown-linux-gnu
 CC_x86_64_unknown_linux_musl=musl-gcc cargo build --release --locked -p hermes-cli --target x86_64-unknown-linux-musl
 ```
 
-Workflow [Release CLI](../.github/workflows/release-cli.yml) выполняет проверки workspace, собирает обе цели, упаковывает архивы с SHA-256 и запускает проверки в контейнерах. Вручную его можно запустить для проверки артефактов в Actions. Публикация запускается отправкой тега `v<версия hermes-cli>`. После неё workflow скачивает архивы и суммы из GitHub Releases и сверяет их с проверенными файлами. [События GitHub Actions](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)
+Workflow [Release CLI](../.github/workflows/release-cli.yml) проверяет workspace и собирает архивы с SHA-256 на нативных раннерах. Linux проверяется в контейнерах, macOS и Windows проверяются распаковкой и запуском на раннере. Вручную workflow можно запустить для проверки артефактов в Actions. Публикация запускается отправкой тега `v<версия hermes-cli>`. После неё workflow скачивает архивы и суммы из GitHub Releases и сверяет их с проверенными файлами. [События GitHub Actions](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)
 
 Упаковку и проверку архивов можно воспроизвести локально.
 

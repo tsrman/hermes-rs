@@ -45,14 +45,29 @@ jobs:
           python3 -m unittest discover -s compat -p 'test_*.py'
 
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
             image: debian:trixie-slim
           - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
             image: alpine:3.24.2
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            image: debian:trixie-slim
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            image: alpine:3.24.2
+          - target: aarch64-apple-darwin
+            runner: macos-15
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2025
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -64,20 +79,36 @@ jobs:
           rustup toolchain install "$RUST_VERSION" --profile minimal --target "$TARGET"
           rustup default "$RUST_VERSION"
       - name: Install the musl C toolchain
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+        if: endsWith(matrix.target, '-musl')
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends musl-tools
       - name: Build and package
+        if: runner.os != 'Windows'
         env:
           TARGET: ${{ matrix.target }}
-        run: bash compat/package_cli_release.sh "$TARGET" "$RUNNER_TEMP/dist"
-      - name: Smoke-test the archive
+        run: python3 -m compat.package_cli_release "$TARGET" "$RUNNER_TEMP/dist"
+      - name: Build and verify the Windows archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          python -m compat.package_cli_release $env:TARGET "$env:RUNNER_TEMP/dist"
+          $archive = Get-ChildItem "$env:RUNNER_TEMP/dist/*.zip"
+          python -m compat.smoke_cli_release $archive.FullName
+      - name: Smoke-test the Linux archive in a clean container
+        if: runner.os == 'Linux'
         env:
           SMOKE_IMAGE: ${{ matrix.image }}
         run: |
           archives=("$RUNNER_TEMP"/dist/*.tar.gz)
           python3 -m compat.smoke_cli_release "${archives[0]}" "$SMOKE_IMAGE"
+      - name: Smoke-test the macOS archive
+        if: runner.os == 'macOS'
+        run: |
+          archives=("$RUNNER_TEMP"/dist/*.tar.gz)
+          python3 -m compat.smoke_cli_release "${archives[0]}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cli-${{ matrix.target }}
@@ -108,8 +139,12 @@ jobs:
           tag="$GITHUB_REF_NAME"
           test "$(gh api "repos/$GH_REPO/commits/$tag" --jq '.sha')" = "$BUILD_COMMIT"
           assets=()
-          for target in x86_64-unknown-linux-gnu x86_64-unknown-linux-musl; do
-            archive="hermes-${tag#v}-$target.tar.gz"
+          for target in x86_64-unknown-linux-gnu x86_64-unknown-linux-musl \
+            aarch64-unknown-linux-gnu aarch64-unknown-linux-musl \
+            aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc; do
+            extension=tar.gz
+            if [[ "$target" == *-msvc ]]; then extension=zip; fi
+            archive="hermes-${tag#v}-$target.$extension"
             sha256sum --check --strict "$archive.sha256"
             assets+=("$archive" "$archive.sha256")
           done
@@ -124,7 +159,8 @@ jobs:
             guide="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$tag/compat/README.md"
             cat > "$RUNNER_TEMP/release-notes.md" <<EOF
           <!-- hermes-cli-release -->
-          Hermes CLI for Linux x86_64. Choose the GNU package for glibc or the musl package for Alpine.
+          Hermes CLI for Linux x86_64 and arm64, macOS Intel and Apple Silicon, and Windows x64.
+          On Linux, choose the GNU package for glibc or the musl package for Alpine.
 
           See the [installation]($guide#установка-cli-из-github-releases),
           [profile migration]($guide#предварительная-проверка-и-миграция-профиля),
@@ -135,7 +171,7 @@ jobs:
           fi
 
           published="$RUNNER_TEMP/published"
-          gh release download "$tag" --pattern "hermes-${tag#v}-x86_64-unknown-linux-*" --dir "$published"
+          gh release download "$tag" --pattern "hermes-${tag#v}-*" --dir "$published"
           for asset in "${assets[@]}"; do
             cmp "$asset" "$published/$asset"
           done

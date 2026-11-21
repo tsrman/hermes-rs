@@ -96,9 +96,11 @@ pub fn profile_home(profile: Option<&str>) -> Result<Option<PathBuf>, String> {
     let configured_home = std::env::var_os("HERMES_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
-    let home = configured_home
-        .clone()
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".hermes")));
+    #[cfg(windows)]
+    let default_home = std::env::home_dir;
+    #[cfg(not(windows))]
+    let default_home = || std::env::var_os("HOME").map(PathBuf::from);
+    let home = configured_home.or_else(|| default_home().map(|home| home.join(".hermes")));
     let Some(home) = home else {
         return if profile.is_some() {
             Err("profile root is unavailable".into())
