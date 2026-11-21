@@ -11,6 +11,7 @@ use std::pin::Pin;
 
 use serde_json::{json, Value};
 
+use crate::browser_cdp::{self, BrowserSettings, BROWSER_CDP};
 use crate::clarify::{self, CLARIFY};
 use crate::file_tools::{
     patch_schema, search_schema, write_schema, FileWorkspace, PATCH, SEARCH_FILES, WRITE_FILE,
@@ -40,6 +41,7 @@ pub(crate) struct ToolEnv {
     pub terminal: bool,
     pub has_profile: bool,
     pub web: Option<WebSettings>,
+    pub browser: Option<BrowserSettings>,
     pub memory: Option<MemorySettings>,
     pub policy: ToolPolicy,
     /// Whether the system prompt carries the skills index.
@@ -53,6 +55,7 @@ impl ToolEnv {
             terminal: options.can_run_terminal(),
             has_profile: options.profile.is_some(),
             web: options.web.cloned(),
+            browser: options.browser.cloned(),
             memory: options.memory.cloned(),
             policy: options.tools.clone(),
             skills_indexed: false,
@@ -201,6 +204,18 @@ fn web_search_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFut
     })
 }
 
+fn browser_cdp_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
+    Box::pin(async move {
+        match cx.options.browser.filter(|browser| browser.offers_cdp()) {
+            Some(browser) => {
+                let task = cx.options.session_id.unwrap_or("default");
+                browser_cdp::call(browser, task, args).await
+            }
+            None => json!({"error": format!("Unknown tool: {BROWSER_CDP}")}),
+        }
+    })
+}
+
 fn web_extract_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
     Box::pin(async move {
         match cx.options.web.filter(|web| web.offers_extract()) {
@@ -258,6 +273,16 @@ async fn ask_questions(
 }
 
 static TOOLS: &[ToolDef] = &[
+    ToolDef {
+        name: BROWSER_CDP,
+        offered: |env| {
+            env.browser
+                .as_ref()
+                .is_some_and(BrowserSettings::offers_cdp)
+                .then(browser_cdp::schema)
+        },
+        call: browser_cdp_call,
+    },
     ToolDef {
         name: CLARIFY,
         offered: |_| Some(clarify::schema()),
@@ -409,6 +434,7 @@ mod tests {
             has_profile: true,
             skills_indexed: true,
             memory: Some(MemorySettings::default()),
+            browser: None,
             web: Some(WebSettings {
                 search: crate::web_tools::Backend::Tavily,
                 extract: crate::web_tools::Backend::Tavily,
@@ -487,5 +513,31 @@ mod tests {
         );
         assert!(find("terminal", &env.policy).is_none());
         assert!(find("read_file", &env.policy).is_some());
+    }
+
+    #[test]
+    fn the_browser_tool_needs_a_configured_endpoint_and_an_enabled_toolset() {
+        let names = |env: &ToolEnv| -> Vec<String> {
+            offered_schemas(env)
+                .iter()
+                .map(|s| s["function"]["name"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let mut env = ToolEnv {
+            policy: ToolPolicy::from_config(&serde_yaml::Value::Null),
+            ..ToolEnv::default()
+        };
+        assert!(!names(&env).contains(&BROWSER_CDP.to_owned()));
+        env.browser = Some(BrowserSettings::default());
+        assert!(!names(&env).contains(&BROWSER_CDP.to_owned()));
+        env.browser = Some(BrowserSettings {
+            cdp_url: Some("ws://127.0.0.1:9222".into()),
+            allow_private_urls: false,
+        });
+        assert!(names(&env).contains(&BROWSER_CDP.to_owned()));
+        let config: serde_yaml::Value =
+            serde_yaml::from_str("platform_toolsets: {cli: [file]}").unwrap();
+        env.policy = ToolPolicy::from_config(&config);
+        assert!(!names(&env).contains(&BROWSER_CDP.to_owned()));
     }
 }

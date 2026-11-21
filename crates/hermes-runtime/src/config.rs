@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::browser_cdp::BrowserSettings;
 use crate::mcp::McpServerConfig;
 use crate::memory_tool::MemorySettings;
 use crate::prompt::PromptSettings;
@@ -49,6 +50,7 @@ pub struct ChatSettings {
     pub clarify_timeout_secs: u32,
     pub mcp_servers: Vec<McpServerConfig>,
     pub web: WebSettings,
+    pub browser: BrowserSettings,
     pub memory: MemorySettings,
     pub tools: ToolPolicy,
     openai_api_key: Option<String>,
@@ -85,6 +87,7 @@ impl Default for ChatSettings {
             clarify_timeout_secs: 90,
             mcp_servers: Vec::new(),
             web: WebSettings::default(),
+            browser: BrowserSettings::default(),
             memory: MemorySettings::default(),
             tools: ToolPolicy::allow_all(),
             openai_api_key: None,
@@ -380,6 +383,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.anthropic_base_url = secrets.get("ANTHROPIC_BASE_URL").cloned();
     settings.mcp_servers = mcp_servers(&config, &secrets);
     settings.web = WebSettings::from_config(&config, &secrets);
+    settings.browser = BrowserSettings::from_config(&config, &secrets);
     settings.memory = MemorySettings::from_config(&config);
     settings.tools = ToolPolicy::from_config(&config);
     settings.clarify_timeout_secs = clarify_timeout(&config);

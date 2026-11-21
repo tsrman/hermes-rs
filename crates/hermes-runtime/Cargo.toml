@@ -12,7 +12,7 @@ reqwest = { version = "0.12.28", default-features = false, features = ["json", "
 ring = "0.17"
 rusqlite = { version = "0.32.1", features = ["backup", "bundled"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = { version = "1", features = ["preserve_order", "unbounded_depth"] }
 serde_yaml = "0.9"
 tempfile = "3"
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
@@ -20,6 +20,8 @@ chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 chrono-tz = "0.10.4"
 iana-time-zone = "0.1.65"
 fancy-regex = "0.20.2"
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 rustix = { version = "1.1", features = ["fs", "process"] }

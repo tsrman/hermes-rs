@@ -42,6 +42,10 @@ pub const PORTED: [&str; 17] = [
     "plain",
 ];
 
+/// How deep a walk over a nested value goes before the rest is replaced by [`WALK_DEPTH_MARKER`].
+pub const WALK_MAX_DEPTH: usize = 320;
+pub const WALK_DEPTH_MARKER: &str = "[redacted: nesting limit]";
+
 /// Redact credential shapes in `text` (the reference's `force=True` path, so no setting can
 /// switch it off). Passes that are not ported yet leave the text as it is.
 pub fn redact_sensitive_text(text: &str) -> String {

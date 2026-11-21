@@ -1,0 +1,2509 @@
+{
+ "url_literals": [
+  {
+   "text": "fetch('http://10.0.0.1/a?b=//c') + '//evil.test/x'",
+   "plain": [
+    "http://10.0.0.1/a?b=//c"
+   ],
+   "relative": [
+    "http://10.0.0.1/a?b=//c",
+    "//evil.test/x"
+   ]
+  },
+  {
+   "text": "a//b // note",
+   "plain": [],
+   "relative": []
+  },
+  {
+   "text": "go http://x)@10.0.0.2/ and more",
+   "plain": [
+    "http://x",
+    "http://10.0.0.2/"
+   ],
+   "relative": [
+    "http://x",
+    "http://10.0.0.2/"
+   ]
+  },
+  {
+   "text": "see https://example.test/path?next=//other.test/x.",
+   "plain": [
+    "https://example.test/path?next=//other.test/x"
+   ],
+   "relative": [
+    "https://example.test/path?next=//other.test/x"
+   ]
+  },
+  {
+   "text": "http://[::1]:8080/ and http://[fd00:ec2::254]/latest",
+   "plain": [
+    "http://[::1]:8080/",
+    "http://[fd00:ec2::254]/latest"
+   ],
+   "relative": [
+    "http://[::1]:8080/",
+    "http://[fd00:ec2::254]/latest"
+   ]
+  },
+  {
+   "text": "\\\\host\\share and //[::1]/x and ///triple.test",
+   "plain": [],
+   "relative": [
+    "\\\\host\\share",
+    "//[::1]/x",
+    "///triple.test"
+   ]
+  },
+  {
+   "text": "https://user:pw@192.168.0.1/x, http://a.test/b;",
+   "plain": [
+    "https://user:pw@192.168.0.1/x",
+    "http://a.test/b"
+   ],
+   "relative": [
+    "https://user:pw@192.168.0.1/x",
+    "http://a.test/b"
+   ]
+  },
+  {
+   "text": "x = `http://172.16.0.1/${id}` + \"https://8.8.8.8/\"",
+   "plain": [
+    "http://172.16.0.1/${id}",
+    "https://8.8.8.8/"
+   ],
+   "relative": [
+    "http://172.16.0.1/${id}",
+    "https://8.8.8.8/"
+   ]
+  },
+  {
+   "text": "no urls here",
+   "plain": [],
+   "relative": []
+  },
+  {
+   "text": "HTTP://UPPER.test/Path",
+   "plain": [
+    "HTTP://UPPER.test/Path"
+   ],
+   "relative": [
+    "HTTP://UPPER.test/Path"
+   ]
+  },
+  {
+   "text": "http://x@y@10.0.0.3/",
+   "plain": [
+    "http://x@y@10.0.0.3/"
+   ],
+   "relative": [
+    "http://x@y@10.0.0.3/"
+   ]
+  },
+  {
+   "text": "(http://10.0.0.4)",
+   "plain": [
+    "http://10.0.0.4"
+   ],
+   "relative": [
+    "http://10.0.0.4"
+   ]
+  }
+ ],
+ "metadata": [
+  {
+   "literal": "http://169.254.169.254/latest/meta-data",
+   "blocked": true
+  },
+  {
+   "literal": "http://[::ffff:169.254.169.254]/",
+   "blocked": true
+  },
+  {
+   "literal": "http://0xa9fea9fe/",
+   "blocked": true
+  },
+  {
+   "literal": "http://metadata.google.internal/computeMetadata",
+   "blocked": true
+  },
+  {
+   "literal": "http://10.0.0.1/",
+   "blocked": false
+  },
+  {
+   "literal": "https://93.184.216.34/",
+   "blocked": false
+  },
+  {
+   "literal": "http://169.254.169.%32%35%34/",
+   "blocked": true
+  },
+  {
+   "literal": "//169.254.169.254/x",
+   "blocked": true
+  },
+  {
+   "literal": "\\\\169.254.169.254\\x",
+   "blocked": true
+  },
+  {
+   "literal": "//0xa9fea9fe/x",
+   "blocked": true
+  },
+  {
+   "literal": "//2852039166/x",
+   "blocked": true
+  },
+  {
+   "literal": "//0251.0376.0251.0376/",
+   "blocked": true
+  },
+  {
+   "literal": "//169.16689662/",
+   "blocked": true
+  },
+  {
+   "literal": "//metadata.goog/",
+   "blocked": true
+  },
+  {
+   "literal": "//METADATA.GOOGLE.INTERNAL./x",
+   "blocked": true
+  },
+  {
+   "literal": "//10.0.0.1/x",
+   "blocked": false
+  },
+  {
+   "literal": "//93.184.216.34/x",
+   "blocked": false
+  },
+  {
+   "literal": "//[fd00:ec2::254]/x",
+   "blocked": true
+  },
+  {
+   "literal": "//169.254.169.254。/x",
+   "blocked": true
+  },
+  {
+   "literal": "//%31%36%39.254.169.254/x",
+   "blocked": true
+  },
+  {
+   "literal": "//?x",
+   "blocked": true
+  },
+  {
+   "literal": "//[::1/x",
+   "blocked": false
+  },
+  {
+   "literal": "//user@169.254.169.254/x",
+   "blocked": true
+  },
+  {
+   "literal": "//169.254.169.254:80/x",
+   "blocked": true
+  },
+  {
+   "literal": "/etc/passwd",
+   "blocked": false
+  }
+ ],
+ "redact": [
+  {
+   "method": "Runtime.evaluate",
+   "value": {
+    "result": {
+     "type": "string",
+     "value": "token password=hunter2hunter2xyz"
+    }
+   },
+   "result": {
+    "result": {
+     "type": "string",
+     "value": "token password=hunter2hunter2xyz"
+    }
+   }
+  },
+  {
+   "method": "Page.captureScreenshot",
+   "value": {
+    "data": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo"
+   },
+   "result": {
+    "data": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo"
+   }
+  },
+  {
+   "method": "Page.captureScreenshot",
+   "value": {
+    "data": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+    "other": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo"
+   },
+   "result": {
+    "data": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+    "other": "gAAAAQ...YWVo"
+   }
+  },
+  {
+   "method": "Page.printToPDF",
+   "value": {
+    "data": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+    "stream": "password=hunter2hunter2xyz"
+   },
+   "result": {
+    "data": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+    "stream": "password=***"
+   }
+  },
+  {
+   "method": "Network.getResponseBody",
+   "value": {
+    "body": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+    "base64Encoded": true
+   },
+   "result": {
+    "body": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+    "base64Encoded": true
+   }
+  },
+  {
+   "method": "Network.getResponseBody",
+   "value": {
+    "body": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+    "base64Encoded": false
+   },
+   "result": {
+    "body": "gAAAAQ...YWVo",
+    "base64Encoded": false
+   }
+  },
+  {
+   "method": "Network.getResponseBody",
+   "value": {
+    "body": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+    "base64Encoded": "true"
+   },
+   "result": {
+    "body": "gAAAAQ...YWVo",
+    "base64Encoded": "true"
+   }
+  },
+  {
+   "method": "Network.getResponseBody",
+   "value": {
+    "body": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo"
+   },
+   "result": {
+    "body": "gAAAAQ...YWVo"
+   }
+  },
+  {
+   "method": "IO.read",
+   "value": {
+    "data": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+    "base64Encoded": true,
+    "eof": false
+   },
+   "result": {
+    "data": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+    "base64Encoded": true,
+    "eof": false
+   }
+  },
+  {
+   "method": "Network.getRequestPostData",
+   "value": {
+    "postData": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+    "base64Encoded": true
+   },
+   "result": {
+    "postData": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+    "base64Encoded": true
+   }
+  },
+  {
+   "method": "CacheStorage.requestCachedResponse",
+   "value": {
+    "response": {
+     "body": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+     "x": "password=hunter2hunter2xyz"
+    }
+   },
+   "result": {
+    "response": {
+     "body": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+     "x": "password=***"
+    }
+   }
+  },
+  {
+   "method": "CacheStorage.requestCachedResponse",
+   "value": {
+    "body": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo"
+   },
+   "result": {
+    "body": "gAAAAQ...YWVo"
+   }
+  },
+  {
+   "method": "Runtime.evaluate",
+   "value": {
+    "result": {
+     "value": {
+      "data": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+      "base64Encoded": true
+     }
+    }
+   },
+   "result": {
+    "result": {
+     "value": {
+      "data": "gAAAAQ...YWVo",
+      "base64Encoded": true
+     }
+    }
+   }
+  },
+  {
+   "method": "Page.captureScreenshot",
+   "value": {
+    "nested": {
+     "data": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo"
+    }
+   },
+   "result": {
+    "nested": {
+     "data": "gAAAAQ...YWVo"
+    }
+   }
+  },
+  {
+   "method": "Page.captureScreenshot",
+   "value": {
+    "data": [
+     "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo"
+    ]
+   },
+   "result": {
+    "data": [
+     "gAAAAQ...YWVo"
+    ]
+   }
+  },
+  {
+   "method": "Page.captureScreenshot",
+   "value": {
+    "data": 5
+   },
+   "result": {
+    "data": 5
+   }
+  },
+  {
+   "method": "Runtime.evaluate",
+   "value": {
+    "password=hunter2hunter2xyz": 1,
+    "list": [
+     "password=hunter2hunter2xyz",
+     {
+      "a": "password=hunter2hunter2xyz"
+     }
+    ],
+    "n": null,
+    "f": 1.5,
+    "t": true
+   },
+   "result": {
+    "password=***": 1,
+    "list": [
+     "password=***",
+     {
+      "a": "password=***"
+     }
+    ],
+    "n": null,
+    "f": 1.5,
+    "t": true
+   }
+  },
+  {
+   "method": "Runtime.evaluate",
+   "value": {
+    "k": {
+     "k": {
+      "k": {
+       "k": {
+        "k": {
+         "k": {"k":{"k":{"k":{"k":"leaf password=hunter2hunter2xyz"}}}}
+        }
+       }
+      }
+     }
+    }
+   },
+   "result": {
+    "k": {
+     "k": {
+      "k": {
+       "k": {
+        "k": {
+         "k": {"k":{"k":{"k":{"k":"leaf password=hunter2hunter2xyz"}}}}
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "method": "Runtime.evaluate",
+   "value": {
+    "k": {
+     "k": {
+      "k": {
+       "k": {
+        "k": {
+         "k": {"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":"leaf password=hunter2hunter2xyz"}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+        }
+       }
+      }
+     }
+    }
+   },
+   "result": {
+    "k": {
+     "k": {
+      "k": {
+       "k": {
+        "k": {
+         "k": {"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":"leaf password=hunter2hunter2xyz"}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "method": "Runtime.evaluate",
+   "value": {
+    "k": {
+     "k": {
+      "k": {
+       "k": {
+        "k": {
+         "k": {"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":"leaf password=hunter2hunter2xyz"}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+        }
+       }
+      }
+     }
+    }
+   },
+   "result": {
+    "k": {
+     "k": {
+      "k": {
+       "k": {
+        "k": {
+         "k": {"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":"leaf password=hunter2hunter2xyz"}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "method": "Runtime.evaluate",
+   "value": {
+    "k": {
+     "k": {
+      "k": {
+       "k": {
+        "k": {
+         "k": {"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":"leaf password=hunter2hunter2xyz"}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+        }
+       }
+      }
+     }
+    }
+   },
+   "result": {
+    "k": {
+     "k": {
+      "k": {
+       "k": {
+        "k": {
+         "k": {"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":"[redacted: nesting limit]"}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "method": "Runtime.evaluate",
+   "value": {
+    "a": [
+     [
+      [
+       [
+        "password=hunter2hunter2xyz"
+       ]
+      ]
+     ]
+    ]
+   },
+   "result": {
+    "a": [
+     [
+      [
+       [
+        "password=***"
+       ]
+      ]
+     ]
+    ]
+   }
+  }
+ ],
+ "calls": [
+  {
+   "name": "list_tabs",
+   "arguments": {
+    "method": "Target.getTargets"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    },
+    {
+     "targetId": "T2",
+     "type": "page",
+     "url": "http://10.0.0.5/admin",
+     "title": "Admin"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Target.getTargets",
+    "result": {
+     "targetInfos": [
+      {
+       "targetId": "T1",
+       "type": "page",
+       "url": "https://93.184.216.34/home",
+       "title": "Home"
+      },
+      {
+       "targetId": "T2",
+       "type": "page",
+       "url": "http://10.0.0.5/admin",
+       "title": "Admin"
+      }
+     ]
+    }
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    }
+   ]
+  },
+  {
+   "name": "browser_version",
+   "arguments": {
+    "method": "Browser.getVersion",
+    "params": {}
+   },
+   "targets": [
+    {
+     "targetId": "T2",
+     "type": "page",
+     "url": "http://10.0.0.5/admin",
+     "title": "Admin"
+    }
+   ],
+   "script": {
+    "Browser.getVersion": {
+     "result": {
+      "product": "Chrome/1 password=hunter2hunter2xyz"
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Browser.getVersion",
+    "result": {
+     "product": "Chrome/1 password=hunter2hunter2xyz"
+    }
+   },
+   "frames": [
+    {
+     "method": "Browser.getVersion",
+     "params": {}
+    }
+   ]
+  },
+  {
+   "name": "evaluate_on_public_page",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "1+1",
+     "returnByValue": true
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Runtime.evaluate": {
+     "result": {
+      "result": {
+       "type": "number",
+       "value": 2
+      }
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Runtime.evaluate",
+    "result": {
+     "result": {
+      "type": "number",
+      "value": 2
+     }
+    },
+    "target_id": "T1"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    },
+    {
+     "method": "Target.attachToTarget",
+     "params": {
+      "targetId": "T1",
+      "flatten": true
+     }
+    },
+    {
+     "method": "Runtime.evaluate",
+     "params": {
+      "expression": "1+1",
+      "returnByValue": true
+     },
+     "sessionId": "S1"
+    }
+   ]
+  },
+  {
+   "name": "evaluate_on_private_page",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "document.title"
+    },
+    "target_id": "T2"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    },
+    {
+     "targetId": "T2",
+     "type": "page",
+     "url": "http://10.0.0.5/admin",
+     "title": "Admin"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "Blocked: page URL targets a private or internal address (http://10.0.0.5/admin). Raw CDP method 'Runtime.evaluate' could expose private page content or state.",
+    "method": "Runtime.evaluate",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    }
+   ]
+  },
+  {
+   "name": "evaluate_without_target_while_any_page_private",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "1"
+    }
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    },
+    {
+     "targetId": "T2",
+     "type": "page",
+     "url": "http://10.0.0.5/admin",
+     "title": "Admin"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "Blocked: page URL targets a private or internal address (http://10.0.0.5/admin). Raw CDP method 'Runtime.evaluate' could expose private page content or state.",
+    "method": "Runtime.evaluate",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    }
+   ]
+  },
+  {
+   "name": "evaluate_on_public_target_with_private_sibling",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "1"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    },
+    {
+     "targetId": "T2",
+     "type": "page",
+     "url": "http://10.0.0.5/admin",
+     "title": "Admin"
+    }
+   ],
+   "script": {
+    "Runtime.evaluate": {
+     "result": {
+      "result": {
+       "value": 1
+      }
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Runtime.evaluate",
+    "result": {
+     "result": {
+      "value": 1
+     }
+    },
+    "target_id": "T1"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    },
+    {
+     "method": "Target.attachToTarget",
+     "params": {
+      "targetId": "T1",
+      "flatten": true
+     }
+    },
+    {
+     "method": "Runtime.evaluate",
+     "params": {
+      "expression": "1"
+     },
+     "sessionId": "S1"
+    }
+   ]
+  },
+  {
+   "name": "evaluate_on_worker_with_private_page",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "1"
+    },
+    "target_id": "W1"
+   },
+   "targets": [
+    {
+     "targetId": "W1",
+     "type": "service_worker",
+     "url": "https://93.184.216.34/sw.js",
+     "title": ""
+    },
+    {
+     "targetId": "T2",
+     "type": "page",
+     "url": "http://10.0.0.5/admin",
+     "title": "Admin"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "Blocked: page URL targets a private or internal address (http://10.0.0.5/admin). Raw CDP method 'Runtime.evaluate' could expose private page content or state.",
+    "method": "Runtime.evaluate",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    }
+   ]
+  },
+  {
+   "name": "evaluate_on_worker_with_public_page",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "1"
+    },
+    "target_id": "W1"
+   },
+   "targets": [
+    {
+     "targetId": "W1",
+     "type": "service_worker",
+     "url": "https://93.184.216.34/sw.js",
+     "title": ""
+    },
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Runtime.evaluate": {
+     "result": {
+      "result": {
+       "value": 1
+      }
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Runtime.evaluate",
+    "result": {
+     "result": {
+      "value": 1
+     }
+    },
+    "target_id": "W1"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    },
+    {
+     "method": "Target.attachToTarget",
+     "params": {
+      "targetId": "W1",
+      "flatten": true
+     }
+    },
+    {
+     "method": "Runtime.evaluate",
+     "params": {
+      "expression": "1"
+     },
+     "sessionId": "S1"
+    }
+   ]
+  },
+  {
+   "name": "originless_page_does_not_lock",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "1"
+    }
+   },
+   "targets": [
+    {
+     "targetId": "B1",
+     "type": "page",
+     "url": "about:blank",
+     "title": ""
+    },
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Runtime.evaluate": {
+     "result": {
+      "result": {
+       "value": 1
+      }
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Runtime.evaluate",
+    "result": {
+     "result": {
+      "value": 1
+     }
+    }
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    },
+    {
+     "method": "Runtime.evaluate",
+     "params": {
+      "expression": "1"
+     }
+    }
+   ]
+  },
+  {
+   "name": "unreadable_targets",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "1"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Target.getTargets": {
+     "error": {
+      "code": -32000,
+      "message": "nope"
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "error": "Blocked: could not read the browser's targets to verify that raw CDP method 'Runtime.evaluate' cannot reach a private or internal page.",
+    "method": "Runtime.evaluate",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    }
+   ]
+  },
+  {
+   "name": "navigate_to_loopback",
+   "arguments": {
+    "method": "Page.navigate",
+    "params": {
+     "url": "http://127.0.0.1:8000/"
+    }
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "Blocked: CDP Page.navigate target is a private or internal address (http://127.0.0.1:8000/).",
+    "method": "Page.navigate",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": []
+  },
+  {
+   "name": "navigate_to_metadata",
+   "arguments": {
+    "method": "Page.navigate",
+    "params": {
+     "url": "http://169.254.169.254/latest"
+    }
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "Blocked: CDP Page.navigate target is a private or internal address (http://169.254.169.254/latest).",
+    "method": "Page.navigate",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": []
+  },
+  {
+   "name": "navigate_to_metadata_private_allowed",
+   "arguments": {
+    "method": "Page.navigate",
+    "params": {
+     "url": "http://169.254.169.254/latest"
+    }
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {
+    "allow_private_urls": true
+   },
+   "result": {
+    "error": "Blocked: CDP Page.navigate targets a cloud metadata endpoint (http://169.254.169.254/latest).",
+    "method": "Page.navigate",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": []
+  },
+  {
+   "name": "navigate_to_public",
+   "arguments": {
+    "method": "Page.navigate",
+    "params": {
+     "url": "https://93.184.216.34/"
+    }
+   },
+   "targets": [
+    {
+     "targetId": "T2",
+     "type": "page",
+     "url": "http://10.0.0.5/admin",
+     "title": "Admin"
+    }
+   ],
+   "script": {
+    "Page.navigate": {
+     "result": {
+      "frameId": "F1"
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Page.navigate",
+    "result": {
+     "frameId": "F1"
+    }
+   },
+   "frames": [
+    {
+     "method": "Page.navigate",
+     "params": {
+      "url": "https://93.184.216.34/"
+     }
+    }
+   ]
+  },
+  {
+   "name": "navigate_to_file",
+   "arguments": {
+    "method": "Page.navigate",
+    "params": {
+     "url": "file:///etc/passwd"
+    }
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "Blocked: CDP Page.navigate target is a private or internal address (file:///etc/passwd).",
+    "method": "Page.navigate",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": []
+  },
+  {
+   "name": "create_blank_tab",
+   "arguments": {
+    "method": "Target.createTarget",
+    "params": {
+     "url": "about:blank"
+    }
+   },
+   "targets": [
+    {
+     "targetId": "T2",
+     "type": "page",
+     "url": "http://10.0.0.5/admin",
+     "title": "Admin"
+    }
+   ],
+   "script": {
+    "Target.createTarget": {
+     "result": {
+      "targetId": "N1"
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Target.createTarget",
+    "result": {
+     "targetId": "N1"
+    }
+   },
+   "frames": [
+    {
+     "method": "Target.createTarget",
+     "params": {
+      "url": "about:blank"
+     }
+    }
+   ]
+  },
+  {
+   "name": "create_private_tab",
+   "arguments": {
+    "method": "Target.createTarget",
+    "params": {
+     "url": "http://10.1.1.1/"
+    }
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "Blocked: CDP Target.createTarget url is a private or internal address (http://10.1.1.1/).",
+    "method": "Target.createTarget",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": []
+  },
+  {
+   "name": "evaluate_fetches_private",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "fetch('http://192.168.1.1/x')"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "Blocked: CDP Runtime.evaluate expression targets a private or internal address (http://192.168.1.1/x).",
+    "method": "Runtime.evaluate",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": []
+  },
+  {
+   "name": "evaluate_scheme_relative_metadata",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "fetch('//169.254.169.254/x')"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "Blocked: CDP Runtime.evaluate targets a cloud metadata endpoint (//169.254.169.254/x).",
+    "method": "Runtime.evaluate",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": []
+  },
+  {
+   "name": "evaluate_metadata_private_allowed",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "fetch('http://169.254.169.254/x')"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {
+    "allow_private_urls": true
+   },
+   "result": {
+    "error": "Blocked: CDP Runtime.evaluate targets a cloud metadata endpoint (http://169.254.169.254/x).",
+    "method": "Runtime.evaluate",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": []
+  },
+  {
+   "name": "evaluate_private_private_allowed",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "fetch('http://10.0.0.9/x')"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Runtime.evaluate": {
+     "result": {
+      "result": {
+       "value": 1
+      }
+     }
+    }
+   },
+   "config": {
+    "allow_private_urls": true
+   },
+   "result": {
+    "success": true,
+    "method": "Runtime.evaluate",
+    "result": {
+     "result": {
+      "value": 1
+     }
+    },
+    "target_id": "T1"
+   },
+   "frames": [
+    {
+     "method": "Target.attachToTarget",
+     "params": {
+      "targetId": "T1",
+      "flatten": true
+     }
+    },
+    {
+     "method": "Runtime.evaluate",
+     "params": {
+      "expression": "fetch('http://10.0.0.9/x')"
+     },
+     "sessionId": "S1"
+    }
+   ]
+  },
+  {
+   "name": "load_network_resource_private",
+   "arguments": {
+    "method": "Network.loadNetworkResource",
+    "params": {
+     "url": "http://10.1.1.1/x",
+     "frameId": "F"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "Blocked: CDP Network.loadNetworkResource params target a private or internal address (http://10.1.1.1/x).",
+    "method": "Network.loadNetworkResource",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": []
+  },
+  {
+   "name": "call_function_body_metadata",
+   "arguments": {
+    "method": "Runtime.callFunctionOn",
+    "params": {
+     "functionDeclaration": "() => fetch('http://169.254.169.254/')"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "Blocked: CDP Runtime.callFunctionOn targets a cloud metadata endpoint (http://169.254.169.254/).",
+    "method": "Runtime.callFunctionOn",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": []
+  },
+  {
+   "name": "blocked_url_patterns_not_fetched",
+   "arguments": {
+    "method": "Network.setBlockedURLs",
+    "params": {
+     "urls": [
+      "http://10.1.1.1/*"
+     ]
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Network.setBlockedURLs": {
+     "result": {}
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Network.setBlockedURLs",
+    "result": {},
+    "target_id": "T1"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    },
+    {
+     "method": "Target.attachToTarget",
+     "params": {
+      "targetId": "T1",
+      "flatten": true
+     }
+    },
+    {
+     "method": "Network.setBlockedURLs",
+     "params": {
+      "urls": [
+       "http://10.1.1.1/*"
+      ]
+     },
+     "sessionId": "S1"
+    }
+   ]
+  },
+  {
+   "name": "input_text_not_fetched",
+   "arguments": {
+    "method": "Input.insertText",
+    "params": {
+     "text": "http://169.254.169.254/"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Input.insertText": {
+     "result": {}
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Input.insertText",
+    "result": {},
+    "target_id": "T1"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    },
+    {
+     "method": "Target.attachToTarget",
+     "params": {
+      "targetId": "T1",
+      "flatten": true
+     }
+    },
+    {
+     "method": "Input.insertText",
+     "params": {
+      "text": "http://169.254.169.254/"
+     },
+     "sessionId": "S1"
+    }
+   ]
+  },
+  {
+   "name": "cookies_scope_not_fetched",
+   "arguments": {
+    "method": "Network.setCookie",
+    "params": {
+     "name": "a",
+     "value": "b",
+     "url": "http://10.1.1.1/"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Network.setCookie": {
+     "result": {
+      "success": true
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Network.setCookie",
+    "result": {
+     "success": true
+    },
+    "target_id": "T1"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    },
+    {
+     "method": "Target.attachToTarget",
+     "params": {
+      "targetId": "T1",
+      "flatten": true
+     }
+    },
+    {
+     "method": "Network.setCookie",
+     "params": {
+      "name": "a",
+      "value": "b",
+      "url": "http://10.1.1.1/"
+     },
+     "sessionId": "S1"
+    }
+   ]
+  },
+  {
+   "name": "screenshot_stays_opaque",
+   "arguments": {
+    "method": "Page.captureScreenshot",
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Page.captureScreenshot": {
+     "result": {
+      "data": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo"
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Page.captureScreenshot",
+    "result": {
+     "data": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo"
+    },
+    "target_id": "T1"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    },
+    {
+     "method": "Target.attachToTarget",
+     "params": {
+      "targetId": "T1",
+      "flatten": true
+     }
+    },
+    {
+     "method": "Page.captureScreenshot",
+     "params": {},
+     "sessionId": "S1"
+    }
+   ]
+  },
+  {
+   "name": "response_body_flagged",
+   "arguments": {
+    "method": "Network.getResponseBody",
+    "params": {
+     "requestId": "R"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Network.getResponseBody": {
+     "result": {
+      "body": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+      "base64Encoded": true
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Network.getResponseBody",
+    "result": {
+     "body": "gAAAAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+     "base64Encoded": true
+    },
+    "target_id": "T1"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    },
+    {
+     "method": "Target.attachToTarget",
+     "params": {
+      "targetId": "T1",
+      "flatten": true
+     }
+    },
+    {
+     "method": "Network.getResponseBody",
+     "params": {
+      "requestId": "R"
+     },
+     "sessionId": "S1"
+    }
+   ]
+  },
+  {
+   "name": "response_body_text",
+   "arguments": {
+    "method": "Network.getResponseBody",
+    "params": {
+     "requestId": "R"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Network.getResponseBody": {
+     "result": {
+      "body": "x password=hunter2hunter2xyz",
+      "base64Encoded": false
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Network.getResponseBody",
+    "result": {
+     "body": "x password=hunter2hunter2xyz",
+     "base64Encoded": false
+    },
+    "target_id": "T1"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    },
+    {
+     "method": "Target.attachToTarget",
+     "params": {
+      "targetId": "T1",
+      "flatten": true
+     }
+    },
+    {
+     "method": "Network.getResponseBody",
+     "params": {
+      "requestId": "R"
+     },
+     "sessionId": "S1"
+    }
+   ]
+  },
+  {
+   "name": "events_and_stray_replies_are_ignored",
+   "arguments": {
+    "method": "Browser.getVersion"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Browser.getVersion": {
+     "result": {
+      "product": "Chrome"
+     },
+     "noise": true
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Browser.getVersion",
+    "result": {
+     "product": "Chrome"
+    }
+   },
+   "frames": [
+    {
+     "method": "Browser.getVersion",
+     "params": {}
+    }
+   ]
+  },
+  {
+   "name": "cdp_error",
+   "arguments": {
+    "method": "Foo.bar",
+    "params": {
+     "a": 1
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Foo.bar": {
+     "error": {
+      "code": -32601,
+      "message": "'Foo.bar' wasn't found"
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "error": "CDP error: {'code': -32601, 'message': \"'Foo.bar' wasn't found\"}",
+    "method": "Foo.bar"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    },
+    {
+     "method": "Target.attachToTarget",
+     "params": {
+      "targetId": "T1",
+      "flatten": true
+     }
+    },
+    {
+     "method": "Foo.bar",
+     "params": {
+      "a": 1
+     },
+     "sessionId": "S1"
+    }
+   ]
+  },
+  {
+   "name": "cdp_error_without_target",
+   "arguments": {
+    "method": "Browser.getVersion"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Browser.getVersion": {
+     "error": {
+      "code": -1,
+      "message": "boom",
+      "data": null
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "error": "CDP error: {'code': -1, 'message': 'boom', 'data': None}",
+    "method": "Browser.getVersion"
+   },
+   "frames": [
+    {
+     "method": "Browser.getVersion",
+     "params": {}
+    }
+   ]
+  },
+  {
+   "name": "attach_fails",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "1"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Target.attachToTarget": {
+     "error": {
+      "code": -32602,
+      "message": "No target"
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "error": "Target.attachToTarget failed: {'code': -32602, 'message': 'No target'}",
+    "method": "Runtime.evaluate"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    },
+    {
+     "method": "Target.attachToTarget",
+     "params": {
+      "targetId": "T1",
+      "flatten": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "attach_without_session",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "1"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Target.attachToTarget": {
+     "result": {}
+    }
+   },
+   "config": {},
+   "result": {
+    "error": "Target.attachToTarget did not return a sessionId",
+    "method": "Runtime.evaluate"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    },
+    {
+     "method": "Target.attachToTarget",
+     "params": {
+      "targetId": "T1",
+      "flatten": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "missing_result_is_empty",
+   "arguments": {
+    "method": "Page.reload"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Page.reload": {
+     "raw": {}
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Page.reload",
+    "result": {}
+   },
+   "frames": [
+    {
+     "method": "Page.reload",
+     "params": {}
+    }
+   ]
+  },
+  {
+   "name": "timeout",
+   "arguments": {
+    "method": "Browser.getVersion",
+    "timeout": 1
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Browser.getVersion": {
+     "hang": true
+    }
+   },
+   "config": {},
+   "result": {
+    "error": "CDP call timed out after 1.0s: ",
+    "method": "Browser.getVersion"
+   },
+   "frames": [
+    {
+     "method": "Browser.getVersion",
+     "params": {}
+    }
+   ]
+  },
+  {
+   "name": "timeout_is_clamped_up",
+   "arguments": {
+    "method": "Browser.getVersion",
+    "timeout": 0.2
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Browser.getVersion": {
+     "hang": true
+    }
+   },
+   "config": {},
+   "result": {
+    "error": "CDP call timed out after 1.0s: ",
+    "method": "Browser.getVersion"
+   },
+   "frames": [
+    {
+     "method": "Browser.getVersion",
+     "params": {}
+    }
+   ]
+  },
+  {
+   "name": "method_required",
+   "arguments": {
+    "params": {}
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "'method' is required (e.g. 'Target.getTargets')",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": []
+  },
+  {
+   "name": "method_empty",
+   "arguments": {
+    "method": ""
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "'method' is required (e.g. 'Target.getTargets')",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": []
+  },
+  {
+   "name": "method_not_a_string",
+   "arguments": {
+    "method": 5
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "'method' is required (e.g. 'Target.getTargets')",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": []
+  },
+  {
+   "name": "params_list",
+   "arguments": {
+    "method": "Browser.getVersion",
+    "params": [
+     1
+    ]
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "'params' must be an object/dict, got list"
+   },
+   "frames": []
+  },
+  {
+   "name": "params_empty_list",
+   "arguments": {
+    "method": "Browser.getVersion",
+    "params": []
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Browser.getVersion": {
+     "result": {
+      "product": "Chrome"
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Browser.getVersion",
+    "result": {
+     "product": "Chrome"
+    }
+   },
+   "frames": [
+    {
+     "method": "Browser.getVersion",
+     "params": {}
+    }
+   ]
+  },
+  {
+   "name": "params_string",
+   "arguments": {
+    "method": "Browser.getVersion",
+    "params": "x"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "'params' must be an object/dict, got str"
+   },
+   "frames": []
+  },
+  {
+   "name": "params_number",
+   "arguments": {
+    "method": "Browser.getVersion",
+    "params": 3
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "'params' must be an object/dict, got int"
+   },
+   "frames": []
+  },
+  {
+   "name": "frame_id_without_supervisor",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "1"
+    },
+    "frame_id": "F9"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "No CDP supervisor is attached for task='default'. Call browser_exec or /browser connect first so the supervisor can attach; Page.getFrameTree lists the frame ids you can pass here."
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    }
+   ]
+  },
+  {
+   "name": "frame_id_private_page",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "1"
+    },
+    "frame_id": "T2"
+   },
+   "targets": [
+    {
+     "targetId": "T2",
+     "type": "page",
+     "url": "http://10.0.0.5/admin",
+     "title": "Admin"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "Blocked: page URL targets a private or internal address (http://10.0.0.5/admin). Raw CDP method 'Runtime.evaluate' could expose private page content or state.",
+    "method": "Runtime.evaluate",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    }
+   ]
+  },
+  {
+   "name": "frame_id_private_navigate",
+   "arguments": {
+    "method": "Page.navigate",
+    "params": {
+     "url": "http://10.0.0.1/"
+    },
+    "frame_id": "F9"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {},
+   "config": {},
+   "result": {
+    "error": "Blocked: CDP Page.navigate target is a private or internal address (http://10.0.0.1/).",
+    "method": "Page.navigate",
+    "cdp_docs": "https://chromedevtools.github.io/devtools-protocol/"
+   },
+   "frames": []
+  },
+  {
+   "name": "deep_result",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "1"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Runtime.evaluate": {
+     "result": {
+      "result": {
+       "value": {
+        "k": {
+         "k": {"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":"leaf password=hunter2hunter2xyz"}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+        }
+       }
+      }
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Runtime.evaluate",
+    "result": {
+     "result": {
+      "value": {
+       "k": {
+        "k": {
+         "k": {"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":{"k":"[redacted: nesting limit]"}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+        }
+       }
+      }
+     }
+    },
+    "target_id": "T1"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    },
+    {
+     "method": "Target.attachToTarget",
+     "params": {
+      "targetId": "T1",
+      "flatten": true
+     }
+    },
+    {
+     "method": "Runtime.evaluate",
+     "params": {
+      "expression": "1"
+     },
+     "sessionId": "S1"
+    }
+   ]
+  },
+  {
+   "name": "secret_in_key",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "1"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Runtime.evaluate": {
+     "result": {
+      "result": {
+       "value": {
+        "password=hunter2hunter2xyz": 1
+       }
+      }
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Runtime.evaluate",
+    "result": {
+     "result": {
+      "value": {
+       "password=***": 1
+      }
+     }
+    },
+    "target_id": "T1"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    },
+    {
+     "method": "Target.attachToTarget",
+     "params": {
+      "targetId": "T1",
+      "flatten": true
+     }
+    },
+    {
+     "method": "Runtime.evaluate",
+     "params": {
+      "expression": "1"
+     },
+     "sessionId": "S1"
+    }
+   ]
+  },
+  {
+   "name": "non_ascii_stays_unescaped",
+   "arguments": {
+    "method": "Runtime.evaluate",
+    "params": {
+     "expression": "1"
+    },
+    "target_id": "T1"
+   },
+   "targets": [
+    {
+     "targetId": "T1",
+     "type": "page",
+     "url": "https://93.184.216.34/home",
+     "title": "Home"
+    }
+   ],
+   "script": {
+    "Runtime.evaluate": {
+     "result": {
+      "result": {
+       "value": "привет 世界"
+      }
+     }
+    }
+   },
+   "config": {},
+   "result": {
+    "success": true,
+    "method": "Runtime.evaluate",
+    "result": {
+     "result": {
+      "value": "привет 世界"
+     }
+    },
+    "target_id": "T1"
+   },
+   "frames": [
+    {
+     "method": "Target.getTargets",
+     "params": {}
+    },
+    {
+     "method": "Target.attachToTarget",
+     "params": {
+      "targetId": "T1",
+      "flatten": true
+     }
+    },
+    {
+     "method": "Runtime.evaluate",
+     "params": {
+      "expression": "1"
+     },
+     "sessionId": "S1"
+    }
+   ]
+  }
+ ]
+}

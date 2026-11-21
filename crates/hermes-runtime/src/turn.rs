@@ -6,6 +6,7 @@ use std::path::Path;
 use hermes_core::prompt::{cli_system_prompt, update_cli_prompt_route};
 use serde_json::{json, Value};
 
+use crate::browser_cdp::BrowserSettings;
 use crate::compaction::{messages_bytes, CompactedHistory, CompactionSettings};
 use crate::file_tools::FileWorkspace;
 use crate::mcp::McpClients;
@@ -219,6 +220,8 @@ pub struct TurnOptions<'a> {
     pub mcp: Option<&'a tokio::sync::Mutex<McpClients>>,
     /// Web backends; the web tools are offered only when one is configured.
     pub web: Option<&'a WebSettings>,
+    /// The browser's DevTools endpoint; `browser_cdp` is offered when one is configured.
+    pub browser: Option<&'a BrowserSettings>,
     /// Memory store limits; the tool is offered when a profile directory and a writable store exist.
     pub memory: Option<&'a MemorySettings>,
     pub root: &'a Path,

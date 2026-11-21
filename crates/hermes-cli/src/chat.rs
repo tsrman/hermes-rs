@@ -20,6 +20,7 @@ use hermes_runtime::turn::{
     TurnError, TurnEvent, TurnOptions, TurnOutcome,
 };
 use hermes_runtime::web_tools::WebSettings;
+use hermes_runtime::BrowserSettings;
 use serde::{Deserialize, Serialize};
 use tokio::task::block_in_place;
 use tokio::time::{interval_at, Instant};
@@ -68,6 +69,8 @@ pub struct ChatRequest {
     mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     web: WebSettings,
+    #[serde(default)]
+    browser: BrowserSettings,
     #[serde(default)]
     memory: MemorySettings,
     #[serde(default)]
@@ -182,6 +185,7 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
         clarify_timeout_secs: settings.clarify_timeout_secs,
         mcp_servers: settings.mcp_servers,
         web: settings.web,
+        browser: settings.browser,
         memory: settings.memory,
         tools: settings.tools,
         model_override: args.model,
@@ -258,6 +262,7 @@ where
     let options = TurnOptions {
         mcp: Some(&mcp),
         web: Some(&request.web),
+        browser: Some(&request.browser),
         memory: Some(&request.memory),
         tools: &request.tools,
         root,
