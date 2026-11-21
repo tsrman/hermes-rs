@@ -3,48 +3,18 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
-  process-diagnostic:
+  terminal-regression:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Build the current macOS CLI
-        run: cargo build --locked -p hermes-cli
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: mac-shell-debug
-          path: target/debug/hermes
-      - name: Diagnose waiting after a successful command approval
+      - name: Retest the unchanged binary with terminal output drained
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python3 -u - <<'PY'
-          import os, select, subprocess, time
-          from compat.test_file_tools import TerminalToolTest
-
-          fixture = TerminalToolTest()
-          fixture.setUp()
-          process, tty = fixture.interactive(tool="terminal", arguments={"command": "echo hello > marker; echo done", "timeout": 2})
-          print(fixture.wait_for_prompt(process, tty))
-          os.write(tty, b"y\n")
-          time.sleep(3)
-          print("CLI PID", process.pid, "exit", process.poll(), "marker", (fixture.root / "marker").exists())
-          subprocess.run(["ps", "-o", "pid,ppid,pgid,stat,command", "-ax"], text=True, check=False)
-          subprocess.run(["lsof", "-p", str(process.pid)], text=True, check=False)
-          if process.poll() is None:
-              subprocess.run(["sample", str(process.pid), "1", "5", "-f", "/tmp/hermes-sample.txt"], text=True, check=False)
-              if os.path.exists("/tmp/hermes-sample.txt"):
-                  with open("/tmp/hermes-sample.txt") as sample:
-                      print(sample.read()[:25000])
-          ready, _, _ = select.select([process.stdout, process.stderr], [], [], 0)
-          for channel in ready:
-              print("STDIO", channel.fileno(), repr(os.read(channel.fileno(), 8192)))
-          if process.poll() is None:
-              process.kill()
-          process.wait(timeout=3)
-          print("Exit", process.returncode)
-          try:
-              print(fixture.last_tool_result()[0])
-          except (KeyError, ValueError):
-              print("No tool result")
-          PY
+          gh run download 44889009616 --name mac-shell-debug --dir "$RUNNER_TEMP/baseline"
+          chmod +x "$RUNNER_TEMP/baseline/hermes"
+          HERMES_TEST_BINARY="$RUNNER_TEMP/baseline/hermes" python3 -m unittest -v compat.test_file_tools.TerminalToolTest

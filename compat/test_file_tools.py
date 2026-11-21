@@ -8,6 +8,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from threading import Thread
 from urllib.request import urlopen
 
 if sys.platform in ("linux", "darwin"):
@@ -86,12 +87,28 @@ class ToolTestCase(unittest.TestCase):
                 except OSError:
                     break
             if b"[y/N]" in transcript:
+                # macOS waits for the controlling terminal output to drain
+                # before the session leader exits. Keep reading echoed input.
+                reader = Thread(target=self.drain_terminal, args=(process, master), daemon=True)
+                reader.start()
+                self.addCleanup(reader.join, 1)
                 return transcript.decode(errors="replace")
         details = ""
         if process.poll() is not None:
             _, stderr = process.communicate(timeout=1)
             details = f"; exit status {process.returncode}; stderr was {stderr!r}"
         self.fail(f"approval prompt missing; terminal output was {transcript!r}{details}")
+
+    @staticmethod
+    def drain_terminal(process, master):
+        while process.poll() is None:
+            ready, _, _ = select.select([master], [], [], 0.05)
+            if ready:
+                try:
+                    if not os.read(master, 16384):
+                        return
+                except OSError:
+                    return
 
     def last_tool_result(self):
         with urlopen(self.url + "/requests", timeout=4) as response:
