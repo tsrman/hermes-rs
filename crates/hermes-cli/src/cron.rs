@@ -14,6 +14,16 @@ pub enum Command {
         #[arg(long)]
         all: bool,
     },
+    /// Pause a job by ID or name.
+    Pause {
+        job: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Resume a paused job by ID or name.
+    Resume { job: String },
+    /// Remove a job and its saved output.
+    Remove { job: String },
     /// Print the next run times of a schedule as JSON.
     Preview {
         schedule: String,
@@ -37,6 +47,21 @@ pub fn run(home: Option<&Path>, command: Command) -> Result<(), String> {
                 .filter(|job| all || (job.enabled && job.state != "completed"))
                 .collect();
             serde_json::to_value(shown).map_err(|error| error.to_string())?
+        }
+        Command::Pause { job, reason } => {
+            let home = home.ok_or("profile root is unavailable")?;
+            let job = store::pause_job(home, now_in(zone), &job, reason.as_deref())?;
+            serde_json::to_value(job).map_err(|error| error.to_string())?
+        }
+        Command::Resume { job } => {
+            let home = home.ok_or("profile root is unavailable")?;
+            let job = store::resume_job(home, now_in(zone), &job)?;
+            serde_json::to_value(job).map_err(|error| error.to_string())?
+        }
+        Command::Remove { job } => {
+            let home = home.ok_or("profile root is unavailable")?;
+            let id = store::remove_job(home, now_in(zone), &job)?;
+            json!({"removed": id})
         }
         Command::Preview {
             schedule,

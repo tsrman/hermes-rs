@@ -16,6 +16,7 @@ const ONESHOT_GRACE_SECONDS: i64 = 120;
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct Schedule {
     pub kind: String,
+    #[serde(default)]
     pub display: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_at: Option<String>,
@@ -208,7 +209,8 @@ fn isoformat(wall: NaiveDateTime, offset_seconds: i32) -> String {
     format!("{}{fraction}{offset}", wall.format("%Y-%m-%dT%H:%M:%S"))
 }
 
-fn iso_instant(instant: DateTime<Tz>) -> String {
+/// Python `isoformat()` of an instant in its own zone.
+pub fn iso_instant(instant: DateTime<Tz>) -> String {
     isoformat(
         instant.naive_local(),
         instant.offset().fix().local_minus_utc(),
@@ -286,6 +288,12 @@ fn instant_in(pinned: Option<Tz>, fallback: Tz, wall: NaiveDateTime, offset: Opt
     let offset = offset
         .unwrap_or_else(|| wall_offset(pinned.unwrap_or_else(|| system_zone(fallback)), wall, 0));
     wall_timestamp(wall, offset)
+}
+
+/// UTC timestamp of a stored ISO value; offset-less text is host-local time as in the reference.
+pub fn parse_iso_instant(text: &str, profile: Tz) -> Option<i64> {
+    let (wall, offset) = parse_iso(text)?;
+    Some(instant_in(None, profile, wall, offset))
 }
 
 /// Parse a schedule string. `now` carries the profile time zone.
