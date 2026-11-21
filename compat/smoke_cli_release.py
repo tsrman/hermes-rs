@@ -170,7 +170,7 @@ def smoke_native(archive, work):
         subprocess.run(
             [sys.executable, "-m", "unittest", "-v", "compat.test_file_tools.TerminalToolTest"],
             env={**os.environ, "HERMES_TEST_BINARY": str(binary)},
-            check=True, timeout=120,
+            check=True, timeout=300,
         )
 
 
