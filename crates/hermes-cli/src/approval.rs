@@ -122,6 +122,7 @@ mod terminal {
             ApprovalAction::CreateFile => ("Create file", "New file content"),
             ApprovalAction::ReplaceFile => ("Replace file", "New file content"),
             ApprovalAction::RunCommand => ("Run command in", "Command"),
+            ApprovalAction::ManageSkills => ("Change skills in", "Changes"),
             ApprovalAction::Clarify => return Err(io::Error::from(io::ErrorKind::InvalidInput)),
         };
         let prompt = format!(

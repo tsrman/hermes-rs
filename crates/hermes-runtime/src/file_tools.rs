@@ -35,6 +35,8 @@ pub enum ApprovalAction {
     CreateFile,
     ReplaceFile,
     RunCommand,
+    /// Changes to skills: `content` describes every operation.
+    ManageSkills,
     /// Questions for the person: `content` holds them as JSON and the reply is `Answered`.
     Clarify,
 }

@@ -14,6 +14,8 @@ pub mod prompt;
 pub mod providers;
 pub mod redact;
 mod session_search;
+mod skill_lint;
+mod skill_manage;
 mod skills;
 pub mod storage;
 mod terminal;

@@ -562,7 +562,7 @@ fn normalize_exclude(raw: Option<&Value>) -> Vec<String> {
 
 // ---- profiles ----
 
-fn profile_root(home: &Path) -> PathBuf {
+pub(crate) fn profile_root(home: &Path) -> PathBuf {
     match home.parent() {
         Some(parent) if parent.file_name().is_some_and(|name| name == "profiles") => {
             parent.parent().unwrap_or(home).to_path_buf()
@@ -572,7 +572,7 @@ fn profile_root(home: &Path) -> PathBuf {
 }
 
 /// The name under `profiles/`, else `default`: the home the process runs in is the root profile.
-fn active_profile_name(home: &Path) -> String {
+pub(crate) fn active_profile_name(home: &Path) -> String {
     home.parent()
         .filter(|parent| parent.file_name().is_some_and(|n| n == "profiles"))
         .and_then(|_| home.file_name()?.to_str())

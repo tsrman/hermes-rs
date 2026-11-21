@@ -19,6 +19,7 @@ use crate::file_tools::{
 use crate::memory_tool::{self, MemorySettings, MemoryTurn, MEMORY};
 use crate::process::{self, PROCESS_MANAGE};
 use crate::session_search::{self, Recall, SESSION_SEARCH};
+use crate::skill_manage::{self, Skills, SKILL_MANAGE};
 use crate::skills::{SkillCatalog, SKILLS_LIST, SKILL_VIEW};
 use crate::terminal::{self, TERMINAL};
 use crate::todo_tool::{self, TodoStore, TODO_LIST};
@@ -47,6 +48,9 @@ pub(crate) struct ToolEnv {
     pub policy: ToolPolicy,
     /// Whether the system prompt carries the skills index.
     pub skills_indexed: bool,
+    /// The skill index's description width (`skills.index_desc_limit`), which the
+    /// `skill_manage` description quotes; 0 means the default of 60.
+    pub skill_desc_limit: usize,
 }
 
 impl ToolEnv {
@@ -60,6 +64,7 @@ impl ToolEnv {
             memory: options.memory.cloned(),
             policy: options.tools.clone(),
             skills_indexed: false,
+            skill_desc_limit: 0,
         }
     }
 }
@@ -161,6 +166,20 @@ fn process_manage_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> Bo
     Box::pin(async move {
         let caller = cx.options.session_id.unwrap_or("default");
         process::call(caller, args).await
+    })
+}
+
+fn skill_manage_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
+    Box::pin(async move {
+        let Some(home) = cx.options.profile else {
+            return json!({"error": format!("Unknown tool: {SKILL_MANAGE}")});
+        };
+        let skills = Skills {
+            home,
+            settings: cx.skills.settings(),
+        };
+        let timeout = cx.options.approval_timeout_secs;
+        skill_manage::call(&skills, args, timeout, &mut cx.approve).await
     })
 }
 
@@ -339,6 +358,18 @@ static TOOLS: &[ToolDef] = &[
         call: session_search_call,
     },
     ToolDef {
+        name: SKILL_MANAGE,
+        offered: |env| {
+            (env.has_profile && env.write_files).then(|| {
+                skill_manage::schema(match env.skill_desc_limit {
+                    0 => 60,
+                    limit => limit,
+                })
+            })
+        },
+        call: skill_manage_call,
+    },
+    ToolDef {
         name: SKILL_VIEW,
         offered: |env| {
             env.skills_indexed
@@ -484,6 +515,7 @@ mod tests {
             terminal: true,
             has_profile: true,
             skills_indexed: true,
+            skill_desc_limit: 0,
             memory: Some(MemorySettings::default()),
             browser: None,
             web: Some(WebSettings {
@@ -504,7 +536,7 @@ mod tests {
             .filter(|name| ours.contains(name))
             .collect();
         assert_eq!(ours, reference);
-        assert_eq!(ours.len(), 11);
+        assert_eq!(ours.len(), 12);
     }
 
     #[test]
@@ -548,6 +580,7 @@ mod tests {
                 "read_file",
                 "search_files",
                 "session_search",
+                "skill_manage",
                 "skill_view",
                 "skills_list",
                 "terminal",

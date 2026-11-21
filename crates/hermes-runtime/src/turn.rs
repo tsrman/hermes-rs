@@ -99,6 +99,7 @@ impl TurnHistory {
         } else {
             SkillCatalog::default()
         };
+        self.env.skill_desc_limit = self.skills.desc_limit();
         if self.system_prompt.is_none() {
             let context = load_cli_context(
                 options.profile,
@@ -276,6 +277,7 @@ where
     messages.push(json!({"role": "user", "content": query}));
     let mut env = ToolEnv::from_options(&options);
     env.skills_indexed = system_prompt.contains("\n<available_skills>\n");
+    env.skill_desc_limit = history.skills.desc_limit();
     let mut tools = tools::offered_schemas(&env);
     if let Some(mcp) = options.mcp {
         tools.extend(mcp.lock().await.schemas());

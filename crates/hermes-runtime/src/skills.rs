@@ -50,6 +50,12 @@ pub(crate) struct SkillSettings {
     external_dirs: Vec<String>,
     disabled: BTreeSet<String>,
     index_desc_limit: usize,
+    /// `skills.guard_agent_created`: the reference scans agent-written skills when this is on.
+    #[serde(default)]
+    guard_agent_created: bool,
+    /// `skills.write_approval`: the reference stages skill writes for later approval when on.
+    #[serde(default)]
+    write_approval: bool,
 }
 
 impl Default for SkillSettings {
@@ -61,6 +67,8 @@ impl Default for SkillSettings {
             external_dirs: Vec::new(),
             disabled: BTreeSet::new(),
             index_desc_limit: 60,
+            guard_agent_created: false,
+            write_approval: false,
         }
     }
 }
@@ -87,8 +95,52 @@ impl SkillSettings {
                 .or_else(|| config["index_desc_limit"].as_str()?.trim().parse().ok())
                 .unwrap_or(60)
                 .clamp(60, 1024) as usize,
+            guard_agent_created: truthy(&config["guard_agent_created"]),
+            write_approval: truthy(&config["write_approval"]),
         }
     }
+
+    pub(crate) fn create_dir(&self) -> Option<&str> {
+        self.create_dir.as_deref()
+    }
+
+    pub(crate) fn index_desc_limit(&self) -> usize {
+        self.index_desc_limit
+    }
+
+    pub(crate) fn guard_agent_created(&self) -> bool {
+        self.guard_agent_created
+    }
+
+    pub(crate) fn write_approval(&self) -> bool {
+        self.write_approval
+    }
+}
+
+/// The reference's truthy settings: a boolean, or one of `1`, `true`, `yes`, `on`.
+fn truthy(value: &Yaml) -> bool {
+    match value {
+        Yaml::Bool(flag) => *flag,
+        Yaml::String(text) => {
+            matches!(
+                text.trim().to_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        }
+        Yaml::Number(number) => number.as_f64().is_some_and(|n| n != 0.0),
+        _ => false,
+    }
+}
+
+/// The directories skills are managed in: the profile's own, `skills.create_dir`, then the
+/// external ones (project directories are read-only context and never written).
+pub(crate) fn skill_roots(home: &Path, settings: &SkillSettings) -> Vec<PathBuf> {
+    let mut settings = settings.clone();
+    settings.project_discovery = false;
+    search_roots(Some(home), home, &settings)
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect()
 }
 
 fn strings(value: &Yaml) -> Vec<&str> {
@@ -131,6 +183,8 @@ pub(crate) struct SkillCatalog {
     rows: Vec<(String, usize)>,
     visible: HashSet<usize>,
     desc_limit: usize,
+    /// The profile's skill settings, for `skill_manage`.
+    settings: SkillSettings,
 }
 
 #[derive(Clone)]
@@ -180,7 +234,22 @@ impl SkillCatalog {
                 skills.push(skill);
             }
         }
-        Self::resolve(skills, settings)
+        let mut catalog = Self::resolve(skills, settings);
+        catalog.settings = settings.clone();
+        catalog
+    }
+
+    /// The index description width; 60 for a catalog that was never loaded.
+    pub(crate) fn desc_limit(&self) -> usize {
+        if self.desc_limit == 0 {
+            60
+        } else {
+            self.desc_limit
+        }
+    }
+
+    pub(crate) fn settings(&self) -> &SkillSettings {
+        &self.settings
     }
 
     fn resolve(skills: Vec<Skill>, settings: &SkillSettings) -> Self {
@@ -229,6 +298,7 @@ impl SkillCatalog {
             rows,
             visible,
             desc_limit: settings.index_desc_limit.clamp(60, 1024),
+            settings: settings.clone(),
         }
     }
 
@@ -433,6 +503,12 @@ fn search_roots(
 }
 
 fn resolve_config_path(entry: &str, base: &Path) -> Option<PathBuf> {
+    expand_config_path(entry, base)?.canonicalize().ok()
+}
+
+/// A configured path with `$VAR` and `~` expanded and relative paths joined to `base`; it need
+/// not exist.
+pub(crate) fn expand_config_path(entry: &str, base: &Path) -> Option<PathBuf> {
     static ENV: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
             .expect("valid path expansion syntax")
@@ -451,7 +527,7 @@ fn resolve_config_path(entry: &str, base: &Path) -> Option<PathBuf> {
     } else {
         base.join(expanded.as_ref())
     };
-    path.canonicalize().ok()
+    Some(path)
 }
 
 fn collect_paths(dir: &Path, depth: usize, limit: usize, out: &mut Vec<PathBuf>) {
@@ -631,7 +707,7 @@ fn compatible(metadata: &Yaml, write_files: bool, terminal_enabled: bool) -> boo
             .all(has_toolset)
 }
 
-fn clip_description(description: &str, limit: usize) -> String {
+pub(crate) fn clip_description(description: &str, limit: usize) -> String {
     if description.chars().count() <= limit {
         return description.to_owned();
     }

@@ -17,7 +17,7 @@ from pathlib import Path
 # Tools the Rust CLI can offer when everything is switched on.
 IMPLEMENTED = {"clarify", "read_file", "write_file", "patch", "search_files", "terminal", "skills_list",
                "skill_view", "web_search", "web_extract", "memory", "session_search", "todo_list",
-               "process_manage"}
+               "process_manage", "skill_manage"}
 # Tools whose schema the Rust CLI records from the reference verbatim: only these may be deferred in
 # the cases, since the catalog quotes their descriptions.
 EVERY_TOOL = ["clarify", "memory", "process_manage", "session_search", "todo_list", "web_extract", "web_search"]
