@@ -5,7 +5,8 @@ Usage: create_tool_schema_fixture.py <reference checkout> <schema directory> <fi
 Run it with the reference interpreter. Writes one `<name>.json` per ported tool, which the
 Rust runtime includes at build time, a fixture with the full default tool list in order,
 `toolsets.json` (every toolset resolved to its tools) beside the schema directory, and
-`toolset_cases.json` next to the fixture: which tools the CLI exposes for sample configs.
+`toolset_cases.json` next to the fixture: which tools the CLI exposes for sample configs,
+and `guidance.json`: the system-prompt paragraphs that go with optional tools.
 """
 
 import json
@@ -72,6 +73,18 @@ def main():
                                       if t["function"]["name"] in RUST_TOOLS)})
     (fixture.parent / "toolset_cases.json").write_text(
         json.dumps(cases, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    from agent import prompt_builder
+
+    guidance = {
+        "memory": {
+            f"{mem}-{user}": prompt_builder.build_memory_guidance(mem, user, skill_manage_available=False)
+            for mem, user in ((True, True), (False, True), (True, False), (False, False))
+        },
+        "skills": prompt_builder.SKILLS_GUIDANCE,
+        "session_search": prompt_builder.SESSION_SEARCH_GUIDANCE,
+    }
+    (fixture.parent / "guidance.json").write_text(
+        json.dumps(guidance, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     default = model_tools.get_tool_definitions(quiet_mode=True)
     fixture.write_text(json.dumps(default, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     print([tool["function"]["name"] for tool in default])

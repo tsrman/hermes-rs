@@ -6,19 +6,17 @@ use std::path::Path;
 use hermes_core::prompt::{cli_system_prompt, update_cli_prompt_route};
 use serde_json::{json, Value};
 
-use crate::clarify::{self, CLARIFY};
 use crate::compaction::{messages_bytes, CompactedHistory, CompactionSettings};
-use crate::file_tools::{
-    patch_schema, search_schema, write_schema, FileWorkspace, PATCH, SEARCH_FILES, WRITE_FILE,
-};
+use crate::file_tools::FileWorkspace;
 use crate::mcp::McpClients;
-use crate::memory_tool::{self, MemorySettings, MemoryTurn, MEMORY};
+use crate::memory_tool::{MemorySettings, MemoryTurn};
 use crate::prompt::{load_cli_context, PromptSettings};
 use crate::providers::{Provider, ProviderError};
-use crate::skills::{SkillCatalog, SKILLS_LIST, SKILL_VIEW};
+use crate::skills::SkillCatalog;
 use crate::terminal::{self, TERMINAL};
 use crate::tool_policy::ToolPolicy;
-use crate::web_tools::{self, WebSettings, WEB_EXTRACT, WEB_SEARCH};
+use crate::tools::{self, ToolContext, ToolEnv};
+use crate::web_tools::WebSettings;
 
 pub use crate::file_tools::{ApprovalAction, ApprovalDecision, ApprovalRequest};
 
@@ -50,6 +48,7 @@ pub struct TurnHistory {
     pub(crate) messages: Vec<Value>,
     pub(crate) skills: SkillCatalog,
     pub(crate) policy: ToolPolicy,
+    pub(crate) env: ToolEnv,
     pub(crate) compaction: Option<CompactedHistory>,
     pub(crate) write_files: bool,
     pub(crate) terminal_enabled: bool,
@@ -84,6 +83,7 @@ impl TurnHistory {
         self.write_files = options.can_write_files();
         self.terminal_enabled = options.can_run_terminal();
         self.policy = options.tools.clone();
+        self.env = ToolEnv::from_options(options);
         // The skills index is built only when a skills tool is enabled.
         self.skills = if self.policy.allows_skills() {
             SkillCatalog::load(
@@ -122,7 +122,7 @@ impl TurnHistory {
         let system = route.system_prompt(self.system_prompt.as_deref());
         let write_files = self.write_files;
         let terminal_enabled = self.terminal_enabled;
-        let old_prefix = prefix_bytes(&system, write_files, terminal_enabled, &self.policy);
+        let old_prefix = prefix_bytes(&system, &self.env);
         let input_bytes = match trigger {
             CompactionTrigger::Estimate { query } => {
                 old_prefix + messages_bytes(&self.messages) + query.len()
@@ -179,9 +179,7 @@ impl TurnHistory {
             return CompactionOutcome::Skipped;
         };
         // A newly loaded memory or project file can outweigh the savings.
-        if prefix_bytes(&system, write_files, terminal_enabled, &self.policy) + summary_bytes
-            >= old_prefix + removed_bytes
-        {
+        if prefix_bytes(&system, &self.env) + summary_bytes >= old_prefix + removed_bytes {
             return CompactionOutcome::Skipped;
         }
         self.system_prompt = Some(system);
@@ -234,11 +232,11 @@ pub struct TurnOptions<'a> {
 }
 
 impl TurnOptions<'_> {
-    fn can_write_files(&self) -> bool {
+    pub(crate) fn can_write_files(&self) -> bool {
         self.approval_timeout_secs.is_some() && cfg!(target_os = "linux")
     }
 
-    fn can_run_terminal(&self) -> bool {
+    pub(crate) fn can_run_terminal(&self) -> bool {
         self.approval_timeout_secs.is_some() && self.terminal_local && terminal::SUPPORTED
     }
 }
@@ -254,8 +252,8 @@ pub async fn run_turn<F, A, D>(
 ) -> Result<TurnOutcome, TurnError>
 where
     F: FnMut(TurnEvent<'_>),
-    A: FnMut(ApprovalRequest) -> D,
-    D: Future<Output = ApprovalDecision>,
+    A: FnMut(ApprovalRequest) -> D + Send,
+    D: Future<Output = ApprovalDecision> + Send + 'static,
 {
     let mut files = FileWorkspace::new(options.root, options.profile);
     let saved_prompt = history.system_prompt.as_deref();
@@ -267,34 +265,18 @@ where
     messages.insert(0, json!({"role": "system", "content": system_prompt}));
     let first_new_message = messages.len();
     messages.push(json!({"role": "user", "content": query}));
-    let skill_tools = system_prompt.contains("\n<available_skills>\n");
-    let mut tools = tools_for_prompt(
-        &system_prompt,
-        options.can_write_files(),
-        options.can_run_terminal(),
-        options.tools,
-    );
-    let memory = options.memory.filter(|settings| {
-        settings.offered() && options.profile.is_some() && options.tools.allows(MEMORY)
-    });
-    if memory.is_some() {
-        tools.push(memory_tool::schema());
-    }
-    if options.tools.allows(CLARIFY) {
-        tools.push(clarify::schema());
-    }
-    if let Some(web) = options.web {
-        if web.offers_search() && options.tools.allows(WEB_SEARCH) {
-            tools.push(web_tools::search_schema());
-        }
-        if web.offers_extract() && options.tools.allows(WEB_EXTRACT) {
-            tools.push(web_tools::extract_schema());
-        }
-    }
+    let mut env = ToolEnv::from_options(&options);
+    env.skills_indexed = system_prompt.contains("\n<available_skills>\n");
+    let mut tools = tools::offered_schemas(&env);
     if let Some(mcp) = options.mcp {
         tools.extend(mcp.lock().await.schemas());
     }
+    tools::sort_by_name(&mut tools);
     let mut memory_turn = MemoryTurn::default();
+    let mut approve_dyn =
+        |request: ApprovalRequest| -> tools::BoxFuture<'static, ApprovalDecision> {
+            Box::pin(approve(request))
+        };
     let mut route = primary;
     let mut fallback_routes = fallbacks.iter();
     for _ in 0..options.max_turns {
@@ -354,78 +336,30 @@ where
         messages.push(json!({"role": "assistant", "content": if result.content.is_empty() { None } else { Some(result.content) }, "tool_calls": calls}));
         for call in result.tool_calls {
             on_event(TurnEvent::ToolStarted(&call.name));
-            let output = match call.name.as_str() {
+            let mcp_tool = match options.mcp {
+                Some(mcp) if call.name.starts_with("mcp_") => {
+                    let mcp = mcp.lock().await;
+                    mcp.owns(&call.name).then_some(())
+                }
+                _ => None,
+            };
+            let output = if mcp_tool.is_some() {
+                match options.mcp {
+                    Some(mcp) => mcp.lock().await.call(&call.name, &call.arguments).await,
+                    None => json!({"error": format!("Unknown tool: {}", call.name)}),
+                }
+            } else if let Some(tool) = tools::find(&call.name, options.tools) {
+                let mut context = ToolContext {
+                    options: &options,
+                    skills: &history.skills,
+                    files: &mut files,
+                    memory_turn: &mut memory_turn,
+                    approve: &mut approve_dyn,
+                };
+                tool.call(&mut context, &call.arguments).await
+            } else {
                 // A tool the toolset configuration does not allow is unknown, whatever the model sends.
-                name if !options.tools.allows(name)
-                    && !options.mcp.is_some_and(|_| name.starts_with("mcp_")) =>
-                {
-                    json!({"error": format!("Unknown tool: {name}")})
-                }
-                "read_file" => files.read(&call.arguments),
-                SEARCH_FILES => files.search(&call.arguments),
-                WRITE_FILE | PATCH => {
-                    files
-                        .edit(
-                            &call.name,
-                            &call.arguments,
-                            options.approval_timeout_secs,
-                            &mut approve,
-                        )
-                        .await
-                }
-                TERMINAL if options.terminal_local => {
-                    terminal::execute(
-                        &files,
-                        &call.arguments,
-                        options.approval_timeout_secs,
-                        &mut approve,
-                    )
-                    .await
-                }
-                TERMINAL => json!({
-                    "error": "The configured terminal backend is unavailable in the Rust CLI.",
-                    "status": "backend_unavailable"
-                }),
-                SKILL_VIEW if skill_tools => history.skills.view(&call.arguments),
-                SKILLS_LIST if skill_tools => history.skills.list(&call.arguments),
-                CLARIFY => ask_questions(&call.arguments, &options, &mut approve).await,
-                MEMORY if memory.is_some() && options.profile.is_some() => memory_tool::call(
-                    memory.unwrap_or(&MemorySettings::default()),
-                    &mut memory_turn,
-                    options.profile.unwrap_or(Path::new("")),
-                    &call.arguments,
-                ),
-                WEB_SEARCH
-                    if options.web.is_some_and(WebSettings::offers_search)
-                        && options.tools.allows(WEB_SEARCH) =>
-                {
-                    web_tools::search(
-                        options.web.unwrap_or(&WebSettings::default()),
-                        &call.arguments,
-                    )
-                    .await
-                }
-                WEB_EXTRACT
-                    if options.web.is_some_and(WebSettings::offers_extract)
-                        && options.tools.allows(WEB_EXTRACT) =>
-                {
-                    web_tools::extract(
-                        options.web.unwrap_or(&WebSettings::default()),
-                        &call.arguments,
-                    )
-                    .await
-                }
-                name => match options.mcp {
-                    Some(mcp) => {
-                        let mut mcp = mcp.lock().await;
-                        if mcp.owns(name) {
-                            mcp.call(name, &call.arguments).await
-                        } else {
-                            json!({"error": format!("Unknown tool: {name}")})
-                        }
-                    }
-                    None => json!({"error": format!("Unknown tool: {name}")}),
-                },
+                json!({"error": format!("Unknown tool: {}", call.name)})
             };
             // A tool may answer with ready-made text, such as the web tools' indented JSON.
             let (content, structured) = match output {
@@ -474,106 +408,10 @@ fn chat_request(model: &str, messages: &[Value], tools: &[Value]) -> Value {
     request
 }
 
-/// Put the questions of a `clarify` call to the person, when someone is there to answer.
-async fn ask_questions<A, D>(arguments: &str, options: &TurnOptions<'_>, approve: &mut A) -> Value
-where
-    A: FnMut(ApprovalRequest) -> D,
-    D: Future<Output = ApprovalDecision>,
-{
-    let args: Value = serde_json::from_str(arguments).unwrap_or(Value::Null);
-    let questions = match clarify::normalize(&args) {
-        Ok(questions) => questions,
-        Err(message) => return json!({"error": message}),
-    };
-    // Without a person at the terminal (one-shot runs, cron) nothing can answer.
-    if options.approval_timeout_secs.is_none() {
-        return json!({"error": clarify::UNAVAILABLE});
-    }
-    let limit = options.clarify_timeout_secs;
-    let request = ApprovalRequest {
-        target: String::new(),
-        content: clarify::request_payload(&questions),
-        action: ApprovalAction::Clarify,
-        timeout_secs: limit,
-    };
-    let reply = match approve(request).await {
-        ApprovalDecision::Answered(text) => {
-            serde_json::from_str::<Value>(&text).unwrap_or_else(|_| {
-                clarify::empty_reply("undelivered", "The answer could not be read.")
-            })
-        }
-        ApprovalDecision::TimedOut => {
-            let minutes = limit.div_ceil(60).max(1);
-            clarify::empty_reply(
-                "timed_out",
-                &format!("[user did not respond within {minutes}m]"),
-            )
-        }
-        ApprovalDecision::Denied => {
-            clarify::empty_reply("cancelled", "The user cancelled the question.")
-        }
-        ApprovalDecision::Approved | ApprovalDecision::Unavailable => {
-            return json!({"error": clarify::UNAVAILABLE});
-        }
-    };
-    clarify::result(&questions, &reply)
-}
-
-fn prefix_bytes(
-    system: &str,
-    write_files: bool,
-    terminal_enabled: bool,
-    policy: &ToolPolicy,
-) -> usize {
-    system.len()
-        + messages_bytes(&tools_for_prompt(
-            system,
-            write_files,
-            terminal_enabled,
-            policy,
-        ))
-}
-
-fn tools_for_prompt(
-    system: &str,
-    write_files: bool,
-    terminal_enabled: bool,
-    policy: &ToolPolicy,
-) -> Vec<Value> {
-    let mut tools = vec![
-        json!({
-            "type": "function",
-            "function": {
-                "name": "read_file",
-                "description": "Read a UTF-8 file within the current working directory with line numbers.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string"},
-                        "offset": {"type": "integer", "minimum": 1, "default": 1},
-                        "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 2000}
-                    },
-                    "required": ["path"]
-                }
-            }
-        }),
-        search_schema(),
-    ];
-    if system.contains("\n<available_skills>\n") {
-        tools.extend(SkillCatalog::schemas());
-    }
-    if write_files {
-        tools.extend([write_schema(), patch_schema()]);
-    }
-    if terminal_enabled {
-        tools.push(terminal::schema());
-    }
-    tools.retain(|tool| {
-        tool["function"]["name"]
-            .as_str()
-            .is_some_and(|name| policy.allows(name))
-    });
-    tools
+fn prefix_bytes(system: &str, env: &ToolEnv) -> usize {
+    let mut env = env.clone();
+    env.skills_indexed = system.contains("\n<available_skills>\n");
+    system.len() + messages_bytes(&tools::offered_schemas(&env))
 }
 
 #[cfg(test)]

@@ -316,6 +316,8 @@ class CliTest(unittest.TestCase):
         result, recorded = self.chat_with_profile(dotenv=dotenv)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue({"read_file", "search_files", "memory", "web_search", "web_extract"} <= names(recorded[0]))
+        listed = [tool["function"]["name"] for tool in recorded[0]["tools"]]
+        self.assertEqual(listed, sorted(listed))  # the reference lists tools in name order
         self.assertIn("You have persistent memory", recorded[0]["messages"][0]["content"])
 
         only_web, recorded = self.chat_with_profile(

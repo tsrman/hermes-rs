@@ -1302,6 +1302,24 @@ mod tests {
     }
 
     #[test]
+    fn the_prompt_guidance_equals_the_reference_text() {
+        let recorded: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/guidance.json")).unwrap();
+        for (memory, user) in [(true, true), (false, true), (true, false), (false, false)] {
+            let expected = recorded["memory"][format!("{memory}-{user}")
+                .replace("true", "True")
+                .replace("false", "False")]
+            .as_str()
+            .filter(|text| !text.is_empty());
+            assert_eq!(
+                guidance(memory, user).as_deref(),
+                expected,
+                "memory={memory} user={user}"
+            );
+        }
+    }
+
+    #[test]
     fn counts_overlapping_spans_and_formats_thousands() {
         assert_eq!(span_occurrences("1000", "00"), 2);
         assert_eq!(thousands(1234567), "1,234,567");

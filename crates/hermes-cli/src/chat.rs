@@ -213,8 +213,8 @@ pub async fn execute<A, F>(
     approve: A,
 ) -> Result<u8, String>
 where
-    A: FnMut(ApprovalRequest) -> F,
-    F: Future<Output = ApprovalDecision>,
+    A: FnMut(ApprovalRequest) -> F + Send,
+    F: Future<Output = ApprovalDecision> + Send + 'static,
 {
     let root = Path::new(&request.root);
     if !root.is_absolute()
