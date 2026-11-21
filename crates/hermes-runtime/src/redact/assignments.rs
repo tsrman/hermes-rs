@@ -109,7 +109,7 @@ fn is_word_end(chars: &[char], j: usize, allow_plural: bool) -> bool {
     allow_plural && matches!(cur, 's' | 'S') && is_word_end(chars, j + 1, false)
 }
 
-fn has_word_bounded_keyword(key: &str, keyword: &Regex) -> bool {
+pub(super) fn has_word_bounded_keyword(key: &str, keyword: &Regex) -> bool {
     let chars: Vec<char> = key.chars().collect();
     let char_of = |byte: usize| key[..byte].chars().count();
     keyword.find_iter(key).any(|m| {
@@ -118,7 +118,7 @@ fn has_word_bounded_keyword(key: &str, keyword: &Regex) -> bool {
 }
 
 /// `password` or `passwd` ending a word, wherever it starts (`dbpassword`, not `passwordless`).
-fn has_password_keyword(key: &str) -> bool {
+pub(super) fn has_password_keyword(key: &str) -> bool {
     let chars: Vec<char> = key.chars().collect();
     PASSWORD_WORD
         .find_iter(key)
@@ -181,7 +181,7 @@ fn key_name_words(key: &str) -> Vec<String> {
 }
 
 /// A `…key` name whose qualifier (`secret`, `private`, `signing`, …) makes it a credential.
-fn is_qualified_key_name(key: &str) -> bool {
+pub(super) fn is_qualified_key_name(key: &str) -> bool {
     let words = key_name_words(key);
     if words.len() < 2 || words.last().map(String::as_str) != Some("key") {
         return false;

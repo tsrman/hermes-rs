@@ -514,6 +514,91 @@
    "input": "\"{\\\"access_token\\\": \\\"abcdefghijklmnop1234567890\\\"}\"",
    "force": true,
    "output": "\"{\\\"access_token\\\": \\\"abcdef...7890\\\"}\""
+  },
+  {
+   "input": "{\"DB_PASSWORD\": \"hunter2hunter2\"}",
+   "force": true,
+   "output": "{\"DB_PASSWORD\": \"***\"}"
+  },
+  {
+   "input": "{\"client_secret\": \"abcdefghijklmnop1234567890\"}",
+   "force": true,
+   "output": "{\"client_secret\": \"abcdef...7890\"}"
+  },
+  {
+   "input": "{\"passwordChanged\": \"2026-01-01T00:00:00Z\"}",
+   "force": true,
+   "output": "{\"passwordChanged\": \"2026-01-01T00:00:00Z\"}"
+  },
+  {
+   "input": "{\"tokenUrl\": \"https://x.test/token\"}",
+   "force": true,
+   "output": "{\"tokenUrl\": \"https://x.test/token\"}"
+  },
+  {
+   "input": "{\"api_key_value\": \"abcdefghijklmnop1234567890\"}",
+   "force": true,
+   "output": "{\"api_key_value\": \"abcdef...7890\"}"
+  },
+  {
+   "input": "{\"secret_id\": \"abcdefghijklmnopqrstuvwxyz0123\"}",
+   "force": true,
+   "output": "{\"secret_id\": \"abcdefghijklmnopqrstuvwxyz0123\"}"
+  },
+  {
+   "input": "{\"encryptKey\": \"true\"}",
+   "force": true,
+   "output": "{\"encryptKey\": \"true\"}"
+  },
+  {
+   "input": "{\"master_key\": \"default\"}",
+   "force": true,
+   "output": "{\"master_key\": \"default\"}"
+  },
+  {
+   "input": "{\"signing_key\": \"Zq8x4kLm2PvN7wRt\"}",
+   "force": true,
+   "output": "{\"signing_key\": \"***\"}"
+  },
+  {
+   "input": "{\"token\": \"os.getenv('X')\"}",
+   "force": true,
+   "output": "{\"token\": \"os.getenv('X')\"}"
+  },
+  {
+   "input": "{\"password\": \"<your password>\"}",
+   "force": true,
+   "output": "{\"password\": \"***\"}"
+  },
+  {
+   "input": "{\"max_tokens\": 4096, \"token\": \"short\"}",
+   "force": true,
+   "output": "{\"max_tokens\": 4096, \"token\": \"short\"}"
+  },
+  {
+   "input": "{\"apikey\": \"abcdefghijklmnop1234567890\"}",
+   "force": true,
+   "output": "{\"apikey\": \"abcdef...7890\"}"
+  },
+  {
+   "input": "{\"x\": \"{\\\"DB_PASSWORD\\\": \\\"hunter2hunter2\\\"}\"}",
+   "force": true,
+   "output": "{\"x\": \"{\\\"DB_PASSWORD\\\": \\\"***\\\"}\"}"
+  },
+  {
+   "input": "{\"awsSecretAccessKey\": \"abcdefghijklmnop1234567890\"}",
+   "force": true,
+   "output": "{\"awsSecretAccessKey\": \"abcdef...7890\"}"
+  },
+  {
+   "input": "{\"key\": \"value\", \"public_key\": \"abcdefghijklmnop1234567890\"}",
+   "force": true,
+   "output": "{\"key\": \"value\", \"public_key\": \"abcdefghijklmnop1234567890\"}"
+  },
+  {
+   "input": "{\"tok\": \"abcdefghijklmnop1234567890\", \"password\": \"\"}",
+   "force": true,
+   "output": "{\"tok\": \"abcdefghijklmnop1234567890\", \"password\": \"\"}"
   }
  ],
  "cli_flag": [
@@ -691,6 +776,51 @@
    "input": "E   AssertionError: {'token': 'abcdefghijklmnop1234567890'}",
    "force": true,
    "output": "E   AssertionError: {'token': '***'}"
+  },
+  {
+   "input": "{'UserPassword': 'hunter2hunter2'}",
+   "force": true,
+   "output": "{'UserPassword': '***'}"
+  },
+  {
+   "input": "{'sessionToken': b'abcdefghijklmnop1234567890'}",
+   "force": true,
+   "output": "{'sessionToken': b'***'}"
+  },
+  {
+   "input": "{'token_count': 'abcdefghijkl'}",
+   "force": true,
+   "output": "{'token_count': 'abcdefghijkl'}"
+  },
+  {
+   "input": "{'password_policy': 'strict-and-long'}",
+   "force": true,
+   "output": "{'password_policy': 'strict-and-long'}"
+  },
+  {
+   "input": "{'secret_key': \"abcdefghijklmnop1234567890\"}",
+   "force": true,
+   "output": "{'secret_key': \"***\"}"
+  },
+  {
+   "input": "{'API_KEY': 'os.getenv(\"X\")'}",
+   "force": true,
+   "output": "{'API_KEY': 'os.getenv(\"X\")'}"
+  },
+  {
+   "input": "{'Authorization': 'Digest ***'}",
+   "force": true,
+   "output": "{'Authorization': 'Digest ***'}"
+  },
+  {
+   "input": "{'public_key': 'abcdefghijklmnop1234567890'}",
+   "force": true,
+   "output": "{'public_key': 'abcdefghijklmnop1234567890'}"
+  },
+  {
+   "input": "{'aws_secret_access_key': 'short'}",
+   "force": true,
+   "output": "{'aws_secret_access_key': '***'}"
   }
  ],
  "webhook": [

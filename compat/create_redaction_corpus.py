@@ -63,6 +63,15 @@ CORPUS = {
         json.dumps({"token": A, "nested": {"client_secret": A}}), '{"apiKey": "test"}',
         json.dumps({"safe": "value", "authorization": "Bearer " + A}),
         json.dumps(json.dumps({"access_token": A})),
+        json.dumps({"DB_PASSWORD": "hunter2hunter2"}), json.dumps({"client_secret": A}),
+        json.dumps({"passwordChanged": "2026-01-01T00:00:00Z"}), json.dumps({"tokenUrl": "https://x.test/token"}),
+        json.dumps({"api_key_value": A}), json.dumps({"secret_id": "abcdefghijklmnopqrstuvwxyz0123"}),
+        json.dumps({"encryptKey": "true"}), json.dumps({"master_key": "default"}),
+        json.dumps({"signing_key": "Zq8x4kLm2PvN7wRt"}), json.dumps({"token": "os.getenv('X')"}),
+        json.dumps({"password": "<your password>"}), json.dumps({"max_tokens": 4096, "token": "short"}),
+        json.dumps({"apikey": A}), json.dumps({"x": json.dumps({"DB_PASSWORD": "hunter2hunter2"})}),
+        json.dumps({"awsSecretAccessKey": A}), json.dumps({"key": "value", "public_key": A}),
+        "{\"tok\": \"" + A + "\", \"password\": \"\"}",
     ],
     "cli_flag": [
         f"tool --password {A}", f"tool --token={A}", f"mysql -p{A} -u root", "run --api-key $KEY",
@@ -89,6 +98,9 @@ CORPUS = {
     "python_repr": [
         "{'API_KEY': '" + A + "', 'name': 'x'}", "{'password': 'hunter2hunter2'}",
         "E   AssertionError: {'token': '" + A + "'}",
+        "{'UserPassword': 'hunter2hunter2'}", "{'sessionToken': b'" + A + "'}", "{'token_count': 'abcdefghijkl'}",
+        "{'password_policy': 'strict-and-long'}", "{'secret_key': \"" + A + "\"}", "{'API_KEY': 'os.getenv(\"X\")'}",
+        "{'Authorization': 'Digest ***'}", "{'public_key': '" + A + "'}", "{'aws_secret_access_key': 'short'}",
     ],
     "webhook": [
         "https://hooks.slack.com/services/T00000000/B00000000/" + "X" * 24,
