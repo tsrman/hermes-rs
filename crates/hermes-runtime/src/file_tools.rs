@@ -6,6 +6,8 @@ use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use ring::digest::{digest, SHA256};
+
+use crate::redact::{is_secret_file_arg, redact_file_read};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -156,6 +158,10 @@ impl<'a> FileWorkspace<'a> {
             .map(|(index, line)| format!("{}|{}", start + index + 1, line))
             .collect::<Vec<_>>()
             .join("\n");
+        // File content reaches the model with credentials masked by a sentinel it cannot write
+        // back as a usable key; a file known to hold credentials gets every pass.
+        let homes: Vec<&Path> = self.profile.iter().map(PathBuf::as_path).collect();
+        let content = redact_file_read(&content, is_secret_file_arg(path, &homes));
         if data.len() <= WRITE_LIMIT {
             let hash = fingerprint(data.as_bytes());
             let observation = self

@@ -191,6 +191,93 @@ DERIVED = [
 ]
 
 
+STORES = [
+    "machine example.test login alice password hunter2hunter2",
+    "machine a.test login bob password s3cr3t machine b.test login carol password \"two words\"",
+    "default login anonymous password guest@example.test",
+    "login password password",
+    "db.test:5432:app:alice:Zq8x4kLm2PvN7wRt",
+    "localhost:*:*:user:p4ss#word",
+    "//registry.npmjs.org/:_authToken=abcdef0123456789abcdef",
+    "//registry.test/:_authToken=${NPM_TOKEN}",
+    "//registry.test/:_auth=\"Zm9vOmJhcg==\"",
+    "[pypi]\nusername = __token__\npassword = pypi-AgEIcHlwaS5vcmcCJGZvbw\n",
+    "[default]\naws_access_key_id = AKIAABCDEFGHIJKLMNOP\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n",
+    "[profile x]\ncredential_process = /usr/bin/aws-vault exec x --json\nregion = us-east-1\n",
+    "[profile x]\ncredential_process = sh -c 'SECRET=hunter2hunter2 run'\n",
+    "credential_process = not-in-a-section\n",
+    "password = a b c\nusername = u\n",
+    "   5|machine h login u password pw12345",
+    "     8\tpassword = spaced out value",
+    "[a]\nsecret: yaml-ish-colon-value\n",
+    "api key = Zq8x4kLm2PvN7wRt9s\nAPI_KEY=Zq8x4kLm2PvN7wRt9s",
+    "# password comment line\nPATH=/a:/b:/c:/d:/e",
+    "OPENAI_API_KEY=Zq8x4kLm2PvN7wRt9s\nMAX_TOKENS=100\nDB_PASSWORD=short",
+    "config:\n  api_key: \"Zq8x4kLm2PvN7wRt9s\"\n  mode: fast",
+    "{\"apiKey\": \"test\", \"token\": \"Zq8x4kLm2PvN7wRt9s\"}",
+    "{'API_KEY': 'Zq8x4kLm2PvN7wRt9s'}",
+    "E   AssertionError: {'API_KEY': 'Zq8x4kLm2PvN7wRt9s'}",
+    "ValueError: bad {'password': 'Zq8x4kLm2PvN7wRt9s'}",
+    "url = f\"postgresql://{user}:{password}@{host}/db\"",
+    "postgresql://user:{pw}@host/db",
+    "Server=db;Database=x;Password={0};",
+    "Server=db;Password=${DB_PASS};",
+    "Server=db;Password={Zq7x;LmP2};",
+    "host=db password=hunter2hunter2 dbname=x",
+    "https://hooks.slack.com/services/T0000000/B0000000/abcdefghijklmnopqrstuvwx",
+    "curl --password hunter2hunter2 https://x.test",
+    "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456",
+    "sk-abcdefghijklmnop1234567890 and ghp_abcdefghijklmnop1234567890",
+    "token: ghp_abcdefghijklmnop1234567890\npassword: hunter2hunter2",
+    "xoxb-1234567890-abcdefghijklmnop1234567890",
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijklmnopqrstuvwxyz",
+]
+TERMINAL = [
+    ("env", "OPENAI_API_KEY=Zq8x4kLm2PvN7wRt9s\nMAX_TOKENS=100\nPATH=/usr/bin"),
+    ("printenv", "MY_SERVICE_TOKEN=abc123randomstring\nHOME=/root"),
+    ("cat .env", "API_KEY=Zq8x4kLm2PvN7wRt9s\nDEBUG=true"),
+    ("cat ~/.env | head", "API_KEY=Zq8x4kLm2PvN7wRt9s"),
+    ("cat src/config.py", "MAX_TOKENS=100\nAPI_KEY=Zq8x4kLm2PvN7wRt9s\n"),
+    ("cat config.yaml", "api_key: Zq8x4kLm2PvN7wRt9s\nmax_tokens: 100"),
+    ("cat ~/.hermes/config.yaml", "api_key: Zq8x4kLm2PvN7wRt9s\nmax_tokens: 100"),
+    ("cat $HERMES_HOME/config.yaml", "api_key: Zq8x4kLm2PvN7wRt9s"),
+    ("cat ${HOME}/.netrc", "machine h login u password hunter2hunter2"),
+    ("cat ~/.aws/credentials", "[default]\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"),
+    ("grep token .bashrc", "export GH_TOKEN=Zq8x4kLm2PvN7wRt9s"),
+    ("grep .bashrc app.py", "TOKEN=Zq8x4kLm2PvN7wRt9s"),
+    ("ls && cat .env.local", "SECRET_KEY=Zq8x4kLm2PvN7wRt9s"),
+    ("echo 'a|b' | cat .envrc", "export API_TOKEN=Zq8x4kLm2PvN7wRt9s"),
+    ("python -m pytest", "E   AssertionError: {'API_KEY': 'Zq8x4kLm2PvN7wRt9s'}\nplain {'API_KEY': 'Zq8x4kLm2PvN7wRt9s'}\nValueError: {'token': 'Zq8x4kLm2PvN7wRt9s'}"),
+    ("python x.py", "Traceback\nKeyError: {'password': 'hunter2hunter2'}\n"),
+    ("cat 'unbalanced", "API_KEY=Zq8x4kLm2PvN7wRt9s"),
+    ("'env' | sort", "SECRET_KEY=Zq8x4kLm2PvN7wRt9s"),
+    ("Get-Content -Path:~/.npmrc", "//r.test/:_authToken=abcdef0123456789abcdef"),
+    ("", "API_KEY=Zq8x4kLm2PvN7wRt9s"),
+    ("cat README.md", "sk-abcdefghijklmnop1234567890 in prose"),
+]
+SECRET_ARGS = [
+    ".env", ".env.local", "./sub/.env.production", ".envrc", "env", ".bashrc", "~/.zshrc", ".netrc", "_netrc", ".pgpass",
+    ".npmrc", ".pypirc", ".git-credentials", "~/.aws/credentials", "~/.aws/config", "credentials", "config",
+    "config.yaml", "~/.hermes/config.yaml", "$HERMES_HOME/config.yaml", "${HERMES_HOME}/config.yaml",
+    "$HOME/.hermes/config.yaml", "$FOO/.env", "'.env'", "\"~/.netrc\"", "C:\\Users\\u\\.env", "x/.hermes/config.yaml.good.20250101",
+    "x/config.yaml.corrupt.1", "<home>/config.yaml", "<home>/sub/config.yaml", "/other/config.yaml", ".ENV", "app.py", "",
+]
+COMMANDS = [c for c, _ in TERMINAL] + ["declare -x A=1", "set", "FOO=1 env", "sudo cat .env", "head -n 5 .env", "tail -f .bashrc",
+                                     "sed -n 1,5p ~/.npmrc", "awk '{print $1}' .env", "nl .env", "bat -p .envrc"]
+
+
+def modes(redact_sensitive_text):
+    rows = []
+    texts = [t for inputs in CORPUS.values() for t in inputs] + STORES
+    for text in texts:
+        for code_file, file_read, secret_file in ((True, False, False), (False, True, False), (False, True, True),
+                                                  (False, False, True), (True, False, True)):
+            rows.append({"input": text, "code_file": code_file, "file_read": file_read, "secret_file": secret_file,
+                         "output": redact_sensitive_text(text, force=True, code_file=code_file, file_read=file_read,
+                                                         secret_file=secret_file)})
+    return rows
+
+
 def main():
     reference, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
     os.environ["HERMES_HOME"] = tempfile.mkdtemp()
@@ -207,6 +294,19 @@ def main():
             {"input": text, "force": True, "derived": True, "output": redact_derived_text(text)})
     output.write_text(json.dumps(rows, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     print({category: len(items) for category, items in rows.items()})
+    from agent import redact as r
+    home = os.environ["HERMES_HOME"]
+    fixed = lambda arg: arg.replace("<home>", home)
+    extra = {
+        "modes": modes(redact_sensitive_text),
+        "terminal": [{"command": c, "input": t, "output": r.redact_terminal_output(t, c)} for c, t in TERMINAL],
+        "secret_args": [{"arg": a, "result": r._is_secret_file_arg(fixed(a))} for a in SECRET_ARGS],
+        "reads": [{"command": c, "reads": r._command_reads_secret_file(c), "env_dump": r.is_env_dump_command(c)}
+                  for c in COMMANDS],
+    }
+    modes_path = output.with_name("redaction_modes.json")
+    modes_path.write_text(json.dumps(extra, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    print({key: len(items) for key, items in extra.items()})
 
 
 if __name__ == "__main__":

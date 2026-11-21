@@ -15,7 +15,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 use tokio::sync::Notify;
 
-use crate::redact::redact_sensitive_text;
+use crate::redact::{redact_terminal_output, redact_with, Mode};
 use crate::session_search::{host_zone, strip_ansi};
 
 pub(crate) const PROCESS_MANAGE: &str = "process_manage";
@@ -640,19 +640,32 @@ fn stdin_error(session: &Session) -> Value {
 
 // ── Redaction ────────────────────────────────────────────────────────────────────────────────────
 
-/// Secrets are removed from output and command before the result reaches the model.
+/// Secrets are removed from output and command before the result reaches the model. Output is
+/// redacted by what the command was (a read of `.env` masks every assignment; ordinary output
+/// is treated as source), and the command itself as source.
 fn redact_result(mut result: Value) -> Value {
     if let Value::Object(map) = &mut result {
+        let command = map
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
         for key in ["output", "output_preview"] {
             if let Some(Value::String(text)) = map.get_mut(key) {
                 if !text.is_empty() {
-                    *text = redact_sensitive_text(text);
+                    *text = redact_terminal_output(text, Some(&command), &[]);
                 }
             }
         }
-        if let Some(Value::String(command)) = map.get_mut("command") {
-            if !command.is_empty() {
-                *command = redact_sensitive_text(command);
+        if let Some(Value::String(text)) = map.get_mut("command") {
+            if !text.is_empty() {
+                *text = redact_with(
+                    text,
+                    Mode {
+                        code_file: true,
+                        ..Mode::default()
+                    },
+                );
             }
         }
     }

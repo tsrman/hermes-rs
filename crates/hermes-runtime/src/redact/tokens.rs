@@ -93,11 +93,15 @@ static PLACEHOLDER: LazyLock<Regex> = LazyLock::new(|| {
     .expect("valid pattern")
 });
 
-pub(super) fn redact_db_urls(text: &str) -> String {
+pub(super) fn redact_db_urls(text: &str, code_file: bool) -> String {
     if !text.contains("://") {
         return text.to_owned();
     }
     replace_all(&DB_CONNSTR, text, |caps| {
+        // In source, a pure `{...}` password is an f-string template reference.
+        if code_file && caps[2].starts_with('{') && caps[2].ends_with('}') {
+            return caps[0].to_owned();
+        }
         // A password-only URL in documentation names a placeholder, which is not a credential.
         if caps[1].ends_with("://:") && PLACEHOLDER.is_match(&caps[2]) {
             return caps[0].to_owned();

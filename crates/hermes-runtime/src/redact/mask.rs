@@ -32,8 +32,39 @@ pub fn mask_secret(
     format!("{first}...{last}")
 }
 
+thread_local! {
+    static NONREUSABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `body` with credential masks switched to the non-reusable sentinel when `on`: file content
+/// shown to the agent must not carry a head/tail mask it could write back as a dead credential.
+pub(super) fn with_nonreusable<T>(on: bool, body: impl FnOnce() -> T) -> T {
+    let previous = NONREUSABLE.with(|flag| flag.replace(on));
+    let out = body();
+    NONREUSABLE.with(|flag| flag.set(previous));
+    out
+}
+
+/// `«redacted:<vendor prefix>…»`: no head or tail characters, only the kind of credential.
+fn mask_token_nonreusable(token: &str) -> String {
+    let label = if token.is_empty() {
+        None
+    } else {
+        super::prefix::literal_prefixes()
+            .iter()
+            .find(|prefix| token.starts_with(prefix.as_str()))
+    };
+    match label {
+        Some(label) => format!("«redacted:{label}…»"),
+        None => "«redacted-secret»".into(),
+    }
+}
+
 /// Mask a log token: an 18-character floor, six characters kept in front and four behind.
 pub fn mask_token(token: &str) -> String {
+    if NONREUSABLE.with(std::cell::Cell::get) {
+        return mask_token_nonreusable(token);
+    }
     if token.is_empty() {
         return "***".into();
     }

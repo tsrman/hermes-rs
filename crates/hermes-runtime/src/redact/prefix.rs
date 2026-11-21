@@ -75,6 +75,22 @@ const PATTERNS: &[&str] = &[
     r"pk-lf-[A-Za-z0-9\-]{8,}",
 ];
 
+/// Leading literal characters of each pattern, up to its first metacharacter.
+pub(super) fn literal_prefixes() -> &'static [String] {
+    static PREFIXES: LazyLock<Vec<String>> = LazyLock::new(|| {
+        PATTERNS
+            .iter()
+            .map(|pattern| {
+                let end = pattern
+                    .find(|c: char| "[(\\.?*+|{^$".contains(c))
+                    .unwrap_or(pattern.len());
+                pattern[..end].to_owned()
+            })
+            .collect()
+    });
+    &PREFIXES
+}
+
 /// Text of the last `[...]` class in `pattern`, escape-aware.
 fn last_char_class(pattern: &str) -> Option<String> {
     let chars: Vec<char> = pattern.chars().collect();

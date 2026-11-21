@@ -70,6 +70,7 @@ mod shell {
     use tokio::time::timeout;
 
     use crate::file_tools::{directory::open_directory, request_approval, ApprovalAction};
+    use crate::redact::redact_terminal_output;
 
     use super::*;
 
@@ -211,8 +212,9 @@ mod shell {
             Ok(Ok((status, stdout_truncated, stderr_truncated))) => {
                 let stdout = String::from_utf8_lossy(&output);
                 let stderr = String::from_utf8_lossy(&errors);
+                let text = redact_terminal_output(&format!("{stdout}{stderr}"), Some(command), &[]);
                 Ok(
-                    json!({"output": format!("{stdout}{stderr}"), "exit_code": status.code().unwrap_or(-1),
+                    json!({"output": text, "exit_code": status.code().unwrap_or(-1),
                            "status": "completed", "truncated": stdout_truncated || stderr_truncated}),
                 )
             }
@@ -222,7 +224,11 @@ mod shell {
                 let _ = group.child.wait().await;
                 Ok(
                     json!({"error": "The command timed out", "exit_code": -1, "status": "timeout",
-                           "output": format!("{}{}", String::from_utf8_lossy(&output), String::from_utf8_lossy(&errors))}),
+                    "output": redact_terminal_output(
+                        &format!("{}{}", String::from_utf8_lossy(&output), String::from_utf8_lossy(&errors)),
+                        Some(command),
+                        &[],
+                    )}),
                 )
             }
         }
@@ -344,5 +350,33 @@ mod tests {
         assert!(denied.get("session_id").is_none(), "{denied}");
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         assert!(!marker.exists());
+    }
+
+    #[tokio::test]
+    async fn foreground_output_is_redacted_by_what_the_command_was() {
+        let directory = tempfile::tempdir().unwrap();
+        let key = "ghp_abcdefghijklmnop1234567890";
+        let plain = run(
+            directory.path(),
+            json!({"command": format!("echo MAX_TOKENS=100 {key}")}),
+            None,
+            ApprovalDecision::Approved,
+        )
+        .await;
+        // Ordinary output is source: assignments stay, a vendor key is masked.
+        assert_eq!(plain["output"], "MAX_TOKENS=100 ghp_ab...7890\n");
+        std::fs::write(
+            directory.path().join(".env"),
+            "SECRET_KEY=Zq8x4kLm2PvN7wRt9s\n",
+        )
+        .unwrap();
+        let dump = run(
+            directory.path(),
+            json!({"command": "cat .env"}),
+            None,
+            ApprovalDecision::Approved,
+        )
+        .await;
+        assert_eq!(dump["output"], "SECRET_KEY=***\n");
     }
 }

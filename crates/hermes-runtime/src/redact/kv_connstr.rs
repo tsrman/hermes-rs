@@ -110,7 +110,12 @@ fn value_end(line: &[char], i: usize, semicolon: bool) -> usize {
     j.min(n)
 }
 
-fn redact_line(line: &str) -> String {
+static FORMAT_SLOT: LazyLock<Fancy> = LazyLock::new(|| {
+    Fancy::new(r"^\{\s*(?>(?:[A-Za-z0-9_](?:[^;{}@$&#!]|![rsa](?=\s*(?>[:}])))*)?)\}$")
+        .expect("valid pattern")
+});
+
+fn redact_line(line: &str, code_file: bool) -> String {
     if !GATE.is_match(line) || !COMPANION.is_match(line).unwrap_or(false) {
         return line.to_owned();
     }
@@ -145,6 +150,28 @@ fn redact_line(line: &str) -> String {
             continue;
         }
         scanned = value_finish;
+        // A template, not a credential: `Password={0}`, `Password=${DB_PASS}`. ODBC braces a
+        // literal value, so on a `;` line only a format slot or a `${…}` counts.
+        let bare = value.trim_matches(['"', '\'']);
+        if code_file
+            && (bare.starts_with('{') || bare.starts_with("${"))
+            && bare.ends_with('}')
+            && (!semicolon || bare.starts_with("${") || FORMAT_SLOT.is_match(bare).unwrap_or(false))
+            && !PASSWORD_KEY
+                .is_match(
+                    &line[line
+                        .char_indices()
+                        .nth(value_start)
+                        .map_or(line.len(), |(i, _)| i)
+                        ..line
+                            .char_indices()
+                            .nth(value_finish)
+                            .map_or(line.len(), |(i, _)| i)],
+                )
+                .unwrap_or(false)
+        {
+            continue;
+        }
         let first = chars[value_start];
         let masked = if first == '{' && semicolon {
             "{***}".to_owned()
@@ -203,9 +230,12 @@ fn lines(text: &str) -> Vec<&str> {
 }
 
 /// Mask `Password=` and `Pwd=` values in connection strings, one companion-key scan per line.
-pub(super) fn redact_kv_connection_strings(text: &str) -> String {
+pub(super) fn redact_kv_connection_strings(text: &str, code_file: bool) -> String {
     if !GATE.is_match(text) {
         return text.to_owned();
     }
-    lines(text).into_iter().map(redact_line).collect()
+    lines(text)
+        .into_iter()
+        .map(|line| redact_line(line, code_file))
+        .collect()
 }

@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{open_read, FileWorkspace, READ_LIMIT};
+use crate::redact::{is_secret_file_arg, redact_file_read};
 
 pub(crate) const SEARCH_FILES: &str = "search_files";
 const ENTRY_LIMIT: usize = 20_000;
@@ -313,7 +314,8 @@ fn add_content_results(
 
 fn match_line(path: &str, line: usize, content: &str) -> Value {
     let limit = content.floor_char_boundary(MAX_LINE_BYTES);
-    json!({"path": path, "line": line + 1, "content": &content[..limit]})
+    let text = redact_file_read(&content[..limit], is_secret_file_arg(path, &[]));
+    json!({"path": path, "line": line + 1, "content": text})
 }
 
 fn compile(pattern: &str) -> Result<Regex, String> {

@@ -458,6 +458,31 @@ mod tests {
     }
 
     #[test]
+    fn file_content_is_masked_with_a_sentinel_that_cannot_be_written_back() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join(".netrc"),
+            "machine example.test login alice password hunter2hunter2\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("app.py"),
+            "MAX_TOKENS=100\nKEY = 'ghp_abcdefghijklmnop1234567890'\nAPI_KEY=Zq8x4kLm2PvN7wRt9s\n",
+        )
+        .unwrap();
+        let netrc = read_file(directory.path(), r#"{"path": ".netrc"}"#);
+        assert_eq!(
+            netrc["content"],
+            "1|machine example.test login alice password «redacted-secret»"
+        );
+        let source = read_file(directory.path(), r#"{"path": "app.py"}"#);
+        assert_eq!(
+            source["content"],
+            "1|MAX_TOKENS=100\n2|KEY = '«redacted:ghp_…»'\n3|API_KEY=Zq8x4kLm2PvN7wRt9s"
+        );
+    }
+
+    #[test]
     fn reads_paginated_utf8_with_one_based_line_numbers() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("file.txt"), "one\nдва\nthree\n").unwrap();
