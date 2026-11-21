@@ -17,6 +17,7 @@ def main():
     parser.add_argument("checkout", type=Path)
     parser.add_argument("profile", type=Path)
     parser.add_argument("base_url")
+    parser.add_argument("--max-turns", type=int, default=sys.maxsize)
     args = parser.parse_args()
     checkout = args.checkout.resolve(strict=True)
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
@@ -38,6 +39,8 @@ def main():
         provider="custom",
         api_mode="chat_completions",
         model="fixture",
+        platform="cli",
+        max_iterations=args.max_turns,
         quiet_mode=True,
         skip_memory=True,
         skip_context_files=True,
@@ -50,6 +53,7 @@ def main():
             "completed": result["completed"],
             "failed": result["failed"],
             "api_calls": result["api_calls"],
+            "turn_exit_reason": result.get("turn_exit_reason"),
         }, ensure_ascii=False))
     finally:
         agent.close()

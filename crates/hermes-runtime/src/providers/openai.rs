@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use hermes_core::sse::{SseDecoder, SseError};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 #[derive(Debug)]
 pub enum ProviderError {
@@ -14,6 +14,19 @@ pub enum ProviderError {
     InvalidEvent,
     InvalidSse(SseError),
     IncompleteStream,
+}
+
+impl ProviderError {
+    pub(crate) fn allows_fallback(&self) -> bool {
+        match self {
+            Self::Http(error) => {
+                error.is_connect() || error.is_timeout() || error.is_request() || error.is_body()
+            }
+            Self::HttpStatus(status) => matches!(status, 401..=404 | 429 | 500..=599),
+            Self::IncompleteStream | Self::InvalidSse(SseError::IncompleteEvent) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -34,6 +47,7 @@ pub struct OpenAiProvider {
     client: reqwest::Client,
     endpoint: String,
     api_key: String,
+    max_attempts: u32,
 }
 
 impl OpenAiProvider {
@@ -58,7 +72,61 @@ impl OpenAiProvider {
             client,
             endpoint: endpoint.to_string(),
             api_key: api_key.to_owned(),
+            max_attempts: 3,
         })
+    }
+
+    pub fn with_max_attempts(mut self, max_attempts: u32) -> Self {
+        self.max_attempts = max_attempts.max(1);
+        self
+    }
+
+    async fn open_stream(
+        &self,
+        request: &Map<String, Value>,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let mut attempt = 1;
+        loop {
+            let last_attempt = attempt == self.max_attempts;
+            let backoff = (2_u64 << (attempt - 1).min(5)).min(60);
+            let mut builder = self.client.post(&self.endpoint).json(request);
+            if !self.api_key.is_empty() {
+                builder = builder.bearer_auth(&self.api_key);
+            }
+            let delay = match builder.send().await {
+                Ok(response) => {
+                    let status = response.status().as_u16();
+                    let delay = response
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(|value| value.trim().parse::<u64>().ok())
+                        .map_or(backoff, |seconds| seconds.min(600));
+                    if response.status().is_success() {
+                        return Ok(response);
+                    }
+                    let retryable = !last_attempt
+                        && match status {
+                            429 => is_transient_rate_limit(response).await?,
+                            500 | 502 | 503 | 504 => true,
+                            _ => false,
+                        };
+                    if !retryable {
+                        return Err(ProviderError::HttpStatus(status));
+                    }
+                    delay
+                }
+                Err(error)
+                    if !last_attempt
+                        && (error.is_connect() || error.is_timeout() || error.is_request()) =>
+                {
+                    backoff
+                }
+                Err(error) => return Err(ProviderError::Http(error.without_url())),
+            };
+            attempt += 1;
+            tokio::time::sleep(Duration::from_secs(delay)).await;
+        }
     }
 
     pub async fn complete<F>(
@@ -74,40 +142,7 @@ impl OpenAiProvider {
             .cloned()
             .ok_or(ProviderError::InvalidRequest)?;
         request.insert("stream".into(), Value::Bool(true));
-        let mut attempt = 0;
-        let mut response = loop {
-            let response = self
-                .client
-                .post(&self.endpoint)
-                .bearer_auth(&self.api_key)
-                .json(&request)
-                .send()
-                .await
-                .map_err(ProviderError::Http)?;
-            let status = response.status().as_u16();
-            let delay = response
-                .headers()
-                .get(reqwest::header::RETRY_AFTER)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.trim().parse::<u64>().ok())
-                .map(|seconds| seconds.min(600))
-                .unwrap_or(2_u64 << attempt);
-            if attempt == 2 {
-                break response;
-            }
-            if status == 429 {
-                if !is_transient_rate_limit(response).await? {
-                    return Err(ProviderError::HttpStatus(status));
-                }
-            } else if !matches!(status, 500 | 502 | 503 | 504) {
-                break response;
-            }
-            attempt += 1;
-            tokio::time::sleep(Duration::from_secs(delay)).await;
-        };
-        if !response.status().is_success() {
-            return Err(ProviderError::HttpStatus(response.status().as_u16()));
-        }
+        let mut response = self.open_stream(&request).await?;
 
         let mut decoder = SseDecoder::new();
         let mut completion = Completion::default();

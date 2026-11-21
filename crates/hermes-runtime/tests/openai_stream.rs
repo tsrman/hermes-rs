@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -82,6 +83,42 @@ async fn retries_server_error_before_streaming() {
         .unwrap();
     assert_eq!(result.content, "ok");
     handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn times_out_when_provider_stalls_after_a_text_delta() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (release, hold) = mpsc::channel::<()>();
+    let handle = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut buffer = [0; 4096];
+        assert!(socket.read(&mut buffer).unwrap() > 0);
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n")
+            .unwrap();
+        let _ = hold.recv_timeout(Duration::from_secs(5));
+    });
+    let provider = OpenAiProvider::new(
+        &format!("http://{address}/v1"),
+        "fixture",
+        Duration::from_secs(1),
+    )
+    .unwrap()
+    .with_max_attempts(1);
+    let mut output = String::new();
+    let result = provider
+        .complete(&json!({"model":"test", "messages":[]}), |delta| {
+            output.push_str(delta)
+        })
+        .await;
+    drop(release);
+    handle.join().unwrap();
+    assert!(matches!(result, Err(ProviderError::Http(error)) if error.is_timeout()));
+    assert_eq!(output, "partial");
 }
 
 #[tokio::test]

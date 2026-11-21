@@ -2,28 +2,60 @@
 
 use std::path::{Path, PathBuf};
 
+use hermes_core::prompt::cli_system_prompt;
 use serde_json::{json, Value};
 
 use crate::providers::openai::{OpenAiProvider, ProviderError};
+
+const ITERATION_SUMMARY_REQUEST: &str = "You've reached the maximum number of tool-calling iterations allowed. Please provide a final response summarizing what you've found and accomplished so far, without calling any more tools.";
 
 #[derive(Debug)]
 pub enum TurnError {
     Provider(ProviderError),
     InvalidCompletion,
+    InvalidIterationSummary,
+}
+
+pub enum TurnOutcome {
+    Completed,
     IterationLimit,
 }
 
+pub struct ModelRoute {
+    pub provider: OpenAiProvider,
+    pub provider_name: &'static str,
+    pub model: String,
+}
+
+impl ModelRoute {
+    fn system_message(&self) -> Value {
+        json!({"role": "system", "content": cli_system_prompt(&self.model, self.provider_name)})
+    }
+}
+
+pub enum TurnEvent<'a> {
+    Text(&'a str),
+    Fallback(&'a str),
+    ToolStarted(&'a str),
+    ToolFinished { name: &'a str, succeeded: bool },
+    IterationLimit(u32),
+}
+
 pub async fn run_turn<F>(
-    provider: &OpenAiProvider,
-    model: &str,
+    primary: &ModelRoute,
+    fallbacks: &[ModelRoute],
     query: &str,
     root: &Path,
-    mut on_text: F,
-) -> Result<(), TurnError>
+    max_turns: u32,
+    mut on_event: F,
+) -> Result<TurnOutcome, TurnError>
 where
-    F: FnMut(&str),
+    F: FnMut(TurnEvent<'_>),
 {
-    let mut messages = vec![json!({"role": "user", "content": query})];
+    let mut messages = vec![
+        primary.system_message(),
+        json!({"role": "user", "content": query}),
+    ];
     let tools = json!([{
         "type": "function",
         "function": {
@@ -40,14 +72,36 @@ where
             }
         }
     }]);
-    for _ in 0..16 {
-        let request = json!({"model": model, "messages": messages, "tools": tools});
-        let result = provider
-            .complete(&request, &mut on_text)
-            .await
-            .map_err(TurnError::Provider)?;
+    let mut route = primary;
+    let mut fallback_routes = fallbacks.iter();
+    for _ in 0..max_turns {
+        let result = loop {
+            let request = json!({"model": route.model, "messages": messages, "tools": tools});
+            let mut emitted_text = false;
+            let result = route
+                .provider
+                .complete(&request, |text| {
+                    emitted_text |= !text.is_empty();
+                    on_event(TurnEvent::Text(text));
+                })
+                .await;
+            match result {
+                Ok(result) => break result,
+                Err(error) => {
+                    if emitted_text || !error.allows_fallback() {
+                        return Err(TurnError::Provider(error));
+                    }
+                    let Some(next) = fallback_routes.next() else {
+                        return Err(TurnError::Provider(error));
+                    };
+                    route = next;
+                    messages[0] = route.system_message();
+                    on_event(TurnEvent::Fallback(&route.model));
+                }
+            }
+        };
         match result.finish_reason.as_deref() {
-            Some("stop") if result.tool_calls.is_empty() => return Ok(()),
+            Some("stop") if result.tool_calls.is_empty() => return Ok(TurnOutcome::Completed),
             Some("tool_calls") if !result.tool_calls.is_empty() => {}
             _ => return Err(TurnError::InvalidCompletion),
         }
@@ -64,17 +118,40 @@ where
             .collect();
         messages.push(json!({"role": "assistant", "content": if result.content.is_empty() { None } else { Some(result.content) }, "tool_calls": calls}));
         for call in result.tool_calls {
+            on_event(TurnEvent::ToolStarted(&call.name));
             let output = if call.name == "read_file" {
                 read_file(root, &call.arguments)
             } else {
                 json!({"error": format!("Unknown tool: {}", call.name)})
             };
+            let succeeded = output.get("error").is_none();
             messages.push(
                 json!({"role": "tool", "tool_call_id": call.id, "content": output.to_string()}),
             );
+            on_event(TurnEvent::ToolFinished {
+                name: &call.name,
+                succeeded,
+            });
         }
     }
-    Err(TurnError::IterationLimit)
+    on_event(TurnEvent::IterationLimit(max_turns));
+    messages.push(json!({"role": "user", "content": ITERATION_SUMMARY_REQUEST}));
+    let request = json!({"model": route.model, "messages": messages, "tools": tools});
+    // Keep the active route and tool definitions so the provider can reuse its prompt prefix.
+    // Emit the summary only after verifying that the completion contains no tool calls.
+    let summary = route
+        .provider
+        .complete(&request, |_| {})
+        .await
+        .map_err(TurnError::Provider)?;
+    if summary.finish_reason.as_deref() != Some("stop")
+        || !summary.tool_calls.is_empty()
+        || summary.content.trim().is_empty()
+    {
+        return Err(TurnError::InvalidIterationSummary);
+    }
+    on_event(TurnEvent::Text(&summary.content));
+    Ok(TurnOutcome::IterationLimit)
 }
 
 fn read_file(root: &Path, arguments: &str) -> Value {

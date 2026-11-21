@@ -1,14 +1,44 @@
-//! Profile-scoped settings required by the first chat entry point.
+//! Profile-scoped settings for the CLI.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-#[derive(Default)]
+mod edit;
+pub use edit::set_config_value;
+
 pub struct ChatSettings {
     pub model: Option<String>,
+    pub provider: &'static str,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
+    pub api_max_attempts: u32,
+    pub max_turns: u32,
+    pub fallbacks: Vec<FallbackSettings>,
     openai_api_key: Option<String>,
     openai_base_url: Option<String>,
+}
+
+pub struct FallbackSettings {
+    pub model: String,
+    pub provider: &'static str,
+    pub base_url: String,
+    pub api_key: Option<String>,
+}
+
+impl Default for ChatSettings {
+    fn default() -> Self {
+        Self {
+            model: None,
+            provider: "custom",
+            base_url: None,
+            api_key: None,
+            api_max_attempts: 3,
+            max_turns: 16,
+            fallbacks: Vec::new(),
+            openai_api_key: None,
+            openai_base_url: None,
+        }
+    }
 }
 
 impl ChatSettings {
@@ -100,12 +130,8 @@ pub fn profile_home(profile: Option<&str>) -> Result<Option<PathBuf>, String> {
     Ok(Some(profile_home))
 }
 
-pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
-    let Some(home) = home else {
-        return Ok(ChatSettings::default());
-    };
-    let config_path = home.join("config.yaml");
-    let config: serde_yaml::Value = match std::fs::read_to_string(&config_path) {
+fn read_config(path: &Path) -> Result<serde_yaml::Value, String> {
+    let config: serde_yaml::Value = match std::fs::read_to_string(path) {
         Ok(contents) => {
             serde_yaml::from_str(&contents).map_err(|_| "invalid profile config.yaml")?
         }
@@ -115,16 +141,24 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     if !config.is_mapping() && !config.is_null() {
         return Err("profile config.yaml must be a mapping".into());
     }
+    Ok(config)
+}
+
+pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
+    let Some(home) = home else {
+        return Ok(ChatSettings::default());
+    };
+    let config = read_config(&home.join("config.yaml"))?;
     let mut settings = ChatSettings::default();
     if let Some(model) = config.get("model") {
         if let Some(name) = model.as_str() {
             settings.model = Some(name.to_owned());
         } else if model.is_mapping() {
-            if let Some(provider) = model.get("provider").and_then(serde_yaml::Value::as_str) {
-                if !matches!(provider, "" | "auto" | "custom" | "openai") {
-                    return Err(format!("provider '{provider}' is not supported"));
-                }
-            }
+            settings.provider = match model.get("provider").and_then(serde_yaml::Value::as_str) {
+                None | Some("" | "auto" | "custom") => "custom",
+                Some("openai") => "openai",
+                Some(provider) => return Err(format!("provider '{provider}' is not supported")),
+            };
             settings.model = model
                 .get("default")
                 .and_then(serde_yaml::Value::as_str)
@@ -134,7 +168,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
                 .and_then(serde_yaml::Value::as_str)
                 .map(str::to_owned);
             if settings.base_url.as_deref().is_none_or(str::is_empty)
-                && model.get("provider").and_then(serde_yaml::Value::as_str) == Some("openai")
+                && settings.provider == "openai"
             {
                 settings.base_url = Some("https://api.openai.com/v1".to_owned());
             }
@@ -142,18 +176,97 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
             return Err("invalid model settings in config.yaml".into());
         }
     }
+    let agent = config.get("agent");
+    if let Some(attempts) = agent
+        .and_then(|agent| agent.get("api_max_retries"))
+        .and_then(serde_yaml::Value::as_i64)
+        .and_then(|value| u32::try_from(value.max(1)).ok())
+    {
+        settings.api_max_attempts = attempts;
+    }
+    if let Some(max_turns) = agent
+        .and_then(|agent| agent.get("max_turns"))
+        .filter(|value| !value.is_null())
+        .or_else(|| config.get("max_turns"))
+        .and_then(serde_yaml::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value > 0)
+    {
+        settings.max_turns = max_turns;
+    }
+    let mut secrets = HashMap::new();
     let env_path = home.join(".env");
     if env_path.exists() {
         let iter = dotenvy::from_path_iter(&env_path).map_err(|_| "cannot read profile .env")?;
         for entry in iter {
             let (key, value) = entry.map_err(|_| "invalid profile .env")?;
-            match key.as_str() {
-                "HERMES_API_KEY" => settings.api_key = Some(value),
-                "OPENAI_API_KEY" => settings.openai_api_key = Some(value),
-                "OPENAI_BASE_URL" => settings.openai_base_url = Some(value),
-                _ => {}
-            }
+            secrets.insert(key, value);
         }
     }
+    settings.api_key = secrets.get("HERMES_API_KEY").cloned();
+    settings.openai_api_key = secrets.get("OPENAI_API_KEY").cloned();
+    settings.openai_base_url = secrets.get("OPENAI_BASE_URL").cloned();
+    let fallback = config
+        .get("fallback_providers")
+        .filter(|entries| !entries.is_null())
+        .or_else(|| config.get("fallback_model"));
+    let entries = match fallback {
+        Some(serde_yaml::Value::Sequence(entries)) => entries.as_slice(),
+        Some(entry @ serde_yaml::Value::Mapping(_)) => std::slice::from_ref(entry),
+        _ => &[],
+    };
+    settings.fallbacks = entries
+        .iter()
+        .filter_map(|entry| fallback_settings(entry, &settings, &secrets))
+        .collect();
     Ok(settings)
+}
+
+fn fallback_settings(
+    entry: &serde_yaml::Value,
+    settings: &ChatSettings,
+    secrets: &HashMap<String, String>,
+) -> Option<FallbackSettings> {
+    let field = |name| {
+        entry
+            .get(name)
+            .and_then(serde_yaml::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let provider = match field("provider")? {
+        "custom" => "custom",
+        "openai" => "openai",
+        _ => return None,
+    };
+    if field("api_mode").is_some_and(|mode| mode != "chat_completions") {
+        return None;
+    }
+    let model = field("model")?;
+    let base_url =
+        field("base_url").or((provider == "openai").then_some("https://api.openai.com/v1"))?;
+    let api_key = if let Some(key) = field("api_key") {
+        Some(key.to_owned())
+    } else if let Some(name) = field("key_env") {
+        Some(
+            std::env::var(name)
+                .ok()
+                .or_else(|| secrets.get(name).cloned())
+                .filter(|key| !key.trim().is_empty())?,
+        )
+    } else if provider == "openai" {
+        Some(
+            settings
+                .openai_key_for(base_url)
+                .filter(|key| !key.trim().is_empty())?,
+        )
+    } else {
+        None
+    };
+    Some(FallbackSettings {
+        model: model.to_owned(),
+        provider,
+        base_url: base_url.to_owned(),
+        api_key,
+    })
 }
