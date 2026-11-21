@@ -31,6 +31,7 @@ class CliTest(unittest.TestCase):
             "test_context_overflow_compresses_history_and_retries_once": "overflow",
             "test_context_overflow_after_a_tool_call_is_not_retried": "overflow_tools",
             "test_mcp_stdio_tool_is_exposed_and_called": "mcp",
+            "test_todo_list_is_hidden_by_default_and_survives_a_resume": "todo",
             "test_memory_tool_writes_the_store_without_changing_the_prompt_snapshot": "memory",
             "test_web_search_uses_the_configured_backend_and_hides_tools_without_one": "web",
             "test_mcp_streamable_http_tool_uses_profile_secrets": "mcp",
@@ -354,6 +355,31 @@ class CliTest(unittest.TestCase):
             authorizations = json.load(response)
         self.assertTrue(authorizations)
         self.assertEqual(set(authorizations), {"Bearer nv-secret"})
+
+    def test_todo_list_is_hidden_by_default_and_survives_a_resume(self):
+        hidden, recorded = self.chat_with_profile(query="read")
+        self.assertEqual(hidden.returncode, 0, hidden.stderr)
+        self.assertNotIn("todo_list", {tool["function"]["name"] for tool in recorded[0]["tools"]})
+        # The reference hides it behind the tool-search bridge, so a call is refused here.
+        self.assertEqual(json.loads(recorded[1]["messages"][-1]["content"]), {"error": "Unknown tool: todo_list"})
+        count = len(recorded)
+
+        direct = "tools:\n  tool_search:\n    enabled: off\n"
+        written, recorded = self.chat_with_profile(extra_config=direct, args=("--save-session",), query="write")
+        self.assertEqual(written.returncode, 0, written.stderr)
+        self.assertIn("todo_list", {tool["function"]["name"] for tool in recorded[count]["tools"]})
+        result = json.loads(recorded[count + 1]["messages"][-1]["content"])
+        self.assertEqual(result["revision"], 1)
+        self.assertEqual(result["summary"], {"total": 2, "pending": 1, "in_progress": 1, "completed": 0, "cancelled": 0})
+        self.assertEqual(result["todos"][1]["parent"], "1")
+        session = written.stderr.splitlines()[-1].removeprefix("Session: ")
+        count = len(recorded)
+
+        resumed, recorded = self.chat_with_profile(extra_config=direct, args=("--resume", session), query="read")
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        again = json.loads(recorded[count + 1]["messages"][-1]["content"])
+        self.assertEqual(again["revision"], 1)
+        self.assertEqual([item["content"] for item in again["todos"]], ["Draft the plan", "Review it"])
 
     def test_invalid_compaction_summary_keeps_the_original_context(self):
         session, database, original, config = self.seed_compression_history()

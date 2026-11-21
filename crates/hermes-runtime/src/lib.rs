@@ -12,6 +12,7 @@ pub mod providers;
 mod skills;
 pub mod storage;
 mod terminal;
+mod todo_tool;
 pub mod tool_policy;
 mod tools;
 pub mod turn;

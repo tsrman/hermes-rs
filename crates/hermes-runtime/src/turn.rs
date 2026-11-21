@@ -14,6 +14,7 @@ use crate::prompt::{load_cli_context, PromptSettings};
 use crate::providers::{Provider, ProviderError};
 use crate::skills::SkillCatalog;
 use crate::terminal::{self, TERMINAL};
+use crate::todo_tool::TodoStore;
 use crate::tool_policy::ToolPolicy;
 use crate::tools::{self, ToolContext, ToolEnv};
 use crate::web_tools::WebSettings;
@@ -256,6 +257,8 @@ where
     D: Future<Output = ApprovalDecision> + Send + 'static,
 {
     let mut files = FileWorkspace::new(options.root, options.profile);
+    // The task list lives in the history, so resuming a session keeps it.
+    let mut todo = TodoStore::from_history(&history.messages);
     let saved_prompt = history.system_prompt.as_deref();
     let mut system_prompt = primary.system_prompt(saved_prompt);
     let (mut messages, original) = match &history.compaction {
@@ -354,6 +357,7 @@ where
                     skills: &history.skills,
                     files: &mut files,
                     memory_turn: &mut memory_turn,
+                    todo: &mut todo,
                     approve: &mut approve_dyn,
                 };
                 tool.call(&mut context, &call.arguments).await

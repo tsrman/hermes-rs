@@ -4,7 +4,8 @@
 Usage: create_tool_schema_fixture.py <reference checkout> <schema directory> <fixture.json>
 Run it with the reference interpreter. Writes one `<name>.json` per ported tool, which the
 Rust runtime includes at build time, a fixture with the full default tool list in order,
-`toolsets.json` (every toolset resolved to its tools) beside the schema directory, and
+`toolsets.json` (every toolset resolved to its tools) and `tool_search_defaults.json` (the
+tools deferred behind the tool-search bridge by default) beside the schema directory, and
 `toolset_cases.json` next to the fixture: which tools the CLI exposes for sample configs,
 and `guidance.json`: the system-prompt paragraphs that go with optional tools.
 """
@@ -73,6 +74,11 @@ def main():
                                       if t["function"]["name"] in RUST_TOOLS)})
     (fixture.parent / "toolset_cases.json").write_text(
         json.dumps(cases, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    from hermes_cli.config_defaults import DEFAULT_CONFIG
+
+    search_defaults = DEFAULT_CONFIG["tools"]["tool_search"]
+    (schemas.parent / "tool_search_defaults.json").write_text(
+        json.dumps({"defer": list(search_defaults["defer"])}, indent=1) + "\n", encoding="utf-8")
     from agent import prompt_builder
 
     guidance = {

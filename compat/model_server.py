@@ -127,6 +127,16 @@ class Handler(BaseHTTPRequestHandler):
                 })}
             wants_tool = step < (2 if fixture.get("read") else 1)
             call_id = f"file-{step}"
+        elif scenario == "todo":
+            last_user = max(i for i, message in enumerate(messages) if message.get("role") == "user")
+            wants_tool = not any(message.get("role") == "tool" for message in messages[last_user + 1:])
+            call_id = f"todo-{len(self.server.requests)}"
+            if messages[last_user]["content"] == "write":
+                function = {"name": "todo_list", "arguments": json.dumps({"todos": [
+                    {"id": "1", "content": "Draft the plan", "status": "in_progress"},
+                    {"id": "2", "content": "Review it", "status": "pending", "parent": "1"}]})}
+            else:
+                function = {"name": "todo_list", "arguments": "{}"}
         elif scenario == "cron_failure":
             wants_tool = False
             call_id = "none"
@@ -229,7 +239,7 @@ def main():
         "text", "tool", "partial_tool", "stall", "tool_retry", "tool_rate_limit",
         "fallback_after_tool", "fallback_auth", "partial_text", "disconnect_once",
         "iteration_limit", "iteration_summary_tool", "partial_after_tool", "stall_on_resume", "burst", "skill",
-        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "mcp", "web", "memory", "cron_failure",
+        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "mcp", "web", "memory", "cron_failure", "todo",
     ), default="text")
     args = parser.parse_args()
     if bool(args.tls_cert) != bool(args.tls_key):

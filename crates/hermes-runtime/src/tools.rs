@@ -18,6 +18,7 @@ use crate::file_tools::{
 use crate::memory_tool::{self, MemorySettings, MemoryTurn, MEMORY};
 use crate::skills::{SkillCatalog, SKILLS_LIST, SKILL_VIEW};
 use crate::terminal::{self, TERMINAL};
+use crate::todo_tool::{self, TodoStore, TODO_LIST};
 use crate::tool_policy::ToolPolicy;
 use crate::turn::{ApprovalDecision, ApprovalRequest, TurnOptions};
 use crate::web_tools::{self, WebSettings, WEB_EXTRACT, WEB_SEARCH};
@@ -64,6 +65,7 @@ pub(crate) struct ToolContext<'c, 'w> {
     pub skills: &'c SkillCatalog,
     pub files: &'c mut FileWorkspace<'w>,
     pub memory_turn: &'c mut MemoryTurn,
+    pub todo: &'c mut TodoStore,
     pub approve: &'c mut Approver<'c>,
 }
 
@@ -151,6 +153,10 @@ fn skills_list_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFu
 
 fn clarify_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
     Box::pin(async move { ask_questions(args, cx.options, &mut cx.approve).await })
+}
+
+fn todo_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
+    Box::pin(async move { todo_tool::call(cx.todo, args) })
 }
 
 fn memory_available(env: &ToolEnv) -> Option<&MemorySettings> {
@@ -286,6 +292,12 @@ static TOOLS: &[ToolDef] = &[
         call: terminal_call,
     },
     ToolDef {
+        // Hidden behind the tool-search bridge unless the profile lists it directly.
+        name: TODO_LIST,
+        offered: |env| (!env.policy.is_deferred(TODO_LIST)).then(todo_tool::schema),
+        call: todo_call,
+    },
+    ToolDef {
         name: WEB_EXTRACT,
         offered: |env| {
             env.web
@@ -322,11 +334,12 @@ pub(crate) fn offered_schemas(env: &ToolEnv) -> Vec<Value> {
         .collect()
 }
 
-/// The built-in tool of that name, when the profile's toolsets allow it.
+/// The built-in tool of that name, when the profile's toolsets allow it and it is not kept
+/// behind the tool-search bridge (the bridge calls those itself).
 pub(crate) fn find(name: &str, policy: &ToolPolicy) -> Option<&'static ToolDef> {
     TOOLS
         .iter()
-        .find(|tool| tool.name == name && policy.allows(name))
+        .find(|tool| tool.name == name && policy.allows(name) && !policy.is_deferred(name))
 }
 
 impl ToolDef {
@@ -378,7 +391,8 @@ mod tests {
                 extract: crate::web_tools::Backend::Tavily,
                 ..WebSettings::default()
             }),
-            policy: ToolPolicy::allow_all(),
+            // The default configuration hides the todo tool, as the reference does.
+            policy: ToolPolicy::from_config(&serde_yaml::Value::Null),
         };
         let ours: Vec<String> = offered_schemas(&env)
             .iter()
@@ -408,7 +422,13 @@ mod tests {
         };
         assert_eq!(
             names(&env),
-            ["clarify", "memory", "read_file", "search_files"]
+            [
+                "clarify",
+                "memory",
+                "read_file",
+                "search_files",
+                "todo_list"
+            ]
         );
         env.write_files = true;
         env.terminal = true;
@@ -428,6 +448,7 @@ mod tests {
                 "skill_view",
                 "skills_list",
                 "terminal",
+                "todo_list",
                 "web_search",
                 "write_file"
             ]

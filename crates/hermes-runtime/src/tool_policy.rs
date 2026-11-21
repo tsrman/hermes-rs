@@ -18,15 +18,33 @@ fn resolve(name: &str) -> &'static [String] {
     TOOLSETS.get(name).map_or(&[], Vec::as_slice)
 }
 
+/// Tools the reference hides behind the tool-search bridge unless the profile says otherwise.
+static DEFAULT_DEFERRED: LazyLock<Vec<String>> = LazyLock::new(|| {
+    #[derive(Deserialize)]
+    struct Defaults {
+        defer: Vec<String>,
+    }
+    serde_json::from_str::<Defaults>(include_str!("tool_search_defaults.json"))
+        .expect("valid tool_search_defaults.json")
+        .defer
+});
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ToolPolicy {
     /// `None` allows every tool, as without a profile.
     allowed: Option<BTreeSet<String>>,
+    /// Tools served through the tool-search bridge instead of being listed in every request.
+    /// Empty when the bridge is off, so every allowed tool is listed.
+    #[serde(default)]
+    deferred: BTreeSet<String>,
 }
 
 impl ToolPolicy {
     pub fn allow_all() -> Self {
-        Self { allowed: None }
+        Self {
+            allowed: None,
+            deferred: BTreeSet::new(),
+        }
     }
 
     pub(crate) fn from_config(config: &serde_yaml::Value) -> Self {
@@ -87,7 +105,13 @@ impl ToolPolicy {
         }
         Self {
             allowed: Some(allowed),
+            deferred: deferred_tools(config),
         }
+    }
+
+    /// Whether the tool is reached through the tool-search bridge rather than listed directly.
+    pub fn is_deferred(&self, tool: &str) -> bool {
+        self.deferred.contains(tool)
     }
 
     pub fn allows(&self, tool: &str) -> bool {
@@ -101,6 +125,43 @@ impl ToolPolicy {
         ["skills_list", "skill_view", "skill_manage"]
             .iter()
             .any(|tool| self.allows(tool))
+    }
+}
+
+/// The tools behind the bridge: `tools.tool_search.defer` (default: the reference's curated list;
+/// an explicit list, even an empty one, replaces it), none when `tools.tool_search.enabled` is off.
+fn deferred_tools(config: &serde_yaml::Value) -> BTreeSet<String> {
+    let section = config
+        .get("tools")
+        .and_then(|tools| tools.get("tool_search"));
+    let enabled = match section {
+        Some(serde_yaml::Value::Bool(flag)) => *flag,
+        Some(serde_yaml::Value::Mapping(_)) => {
+            let raw = section.and_then(|s| s.get("enabled"));
+            let text = match raw {
+                None => "auto".to_owned(),
+                Some(serde_yaml::Value::Bool(flag)) => flag.to_string(),
+                Some(other) => serde_yaml::to_string(other)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned(),
+            };
+            !matches!(text.to_lowercase().as_str(), "false" | "0" | "no" | "off")
+        }
+        _ => true,
+    };
+    if !enabled {
+        return BTreeSet::new();
+    }
+    match section.and_then(|section| section.get("defer")) {
+        Some(serde_yaml::Value::Sequence(names)) => names
+            .iter()
+            .filter_map(|name| name.as_str())
+            .map(|name| name.trim().to_owned())
+            .filter(|name| !name.is_empty())
+            .collect(),
+        // A scalar is a typo; the reference falls back to its default list.
+        _ => DEFAULT_DEFERRED.iter().cloned().collect(),
     }
 }
 
@@ -161,6 +222,40 @@ mod tests {
                 .collect();
             assert_eq!(exposed, expected, "{}", case["name"]);
         }
+    }
+
+    #[test]
+    fn deferral_defaults_to_the_curated_list_and_follows_the_config() {
+        let deferred = |yaml: &str, tool: &str| {
+            ToolPolicy::from_config(&serde_yaml::from_str(yaml).unwrap()).is_deferred(tool)
+        };
+        assert!(deferred("{}", "todo_list"));
+        assert!(deferred("{}", "process_manage"));
+        assert!(!deferred("{}", "clarify"));
+        assert!(!deferred("{}", "memory"));
+        assert!(!deferred(
+            "tools: {tool_search: {enabled: off}}",
+            "todo_list"
+        ));
+        assert!(!deferred("tools: {tool_search: false}", "todo_list"));
+        assert!(deferred(
+            "tools: {tool_search: {enabled: auto}}",
+            "todo_list"
+        ));
+        // An explicit list replaces the default wholesale; an empty one defers nothing.
+        assert!(!deferred("tools: {tool_search: {defer: []}}", "todo_list"));
+        assert!(deferred(
+            "tools: {tool_search: {defer: [memory]}}",
+            "memory"
+        ));
+        assert!(!deferred(
+            "tools: {tool_search: {defer: [memory]}}",
+            "todo_list"
+        ));
+        assert!(deferred(
+            "tools: {tool_search: {defer: nonsense}}",
+            "todo_list"
+        ));
     }
 
     #[test]
