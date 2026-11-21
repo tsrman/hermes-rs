@@ -65,6 +65,10 @@ impl OpenAiProvider {
             endpoint.path().trim_end_matches('/')
         ));
         let client = reqwest::Client::builder()
+            .use_rustls_tls()
+            // Keep OS trust as the only source even if another dependency enables bundled roots.
+            .tls_built_in_root_certs(false)
+            .tls_built_in_native_certs(true)
             .timeout(timeout)
             .build()
             .map_err(ProviderError::Http)?;

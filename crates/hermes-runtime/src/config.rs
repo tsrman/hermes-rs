@@ -3,8 +3,28 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::prompt::PromptSettings;
+
+pub use crate::compaction::CompactionSettings;
+
 mod edit;
 pub use edit::set_config_value;
+
+pub(crate) fn truthy(value: &serde_yaml::Value, default: bool) -> bool {
+    use serde_yaml::Value;
+    match value {
+        Value::Null => default,
+        Value::Bool(value) => *value,
+        Value::String(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Value::Number(value) => value.as_f64().is_some_and(|number| number != 0.0),
+        Value::Mapping(value) => !value.is_empty(),
+        Value::Sequence(value) => !value.is_empty(),
+        Value::Tagged(tag) => truthy(&tag.value, default),
+    }
+}
 
 pub struct ChatSettings {
     pub model: Option<String>,
@@ -14,6 +34,8 @@ pub struct ChatSettings {
     pub api_max_attempts: u32,
     pub max_turns: u32,
     pub fallbacks: Vec<FallbackSettings>,
+    pub prompt: PromptSettings,
+    pub compression: CompactionSettings,
     openai_api_key: Option<String>,
     openai_base_url: Option<String>,
 }
@@ -35,6 +57,8 @@ impl Default for ChatSettings {
             api_max_attempts: 3,
             max_turns: 16,
             fallbacks: Vec::new(),
+            prompt: PromptSettings::default(),
+            compression: CompactionSettings::default(),
             openai_api_key: None,
             openai_base_url: None,
         }
@@ -149,7 +173,11 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
         return Ok(ChatSettings::default());
     };
     let config = read_config(&home.join("config.yaml"))?;
-    let mut settings = ChatSettings::default();
+    let mut settings = ChatSettings {
+        prompt: PromptSettings::from_config(&config),
+        compression: CompactionSettings::from_config(&config),
+        ..ChatSettings::default()
+    };
     if let Some(model) = config.get("model") {
         if let Some(name) = model.as_str() {
             settings.model = Some(name.to_owned());

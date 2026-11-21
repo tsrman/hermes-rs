@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -22,6 +23,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/requests":
             self.send_json(200, self.server.requests)
+        elif self.path == "/release" and self.server.scenario in ("stall_on_resume", "compact"):
+            self.server.release.set()
+            self.send_json(200, {})
         else:
             self.send_json(404, {"error": "unknown endpoint"})
 
@@ -86,14 +90,28 @@ class Handler(BaseHTTPRequestHandler):
             "model": model,
         }
         messages = body.get("messages", [])
-        if scenario in ("iteration_limit", "iteration_summary_tool"):
+        if scenario == "stall_on_resume" and messages and messages[-1].get("content") == "hold resume":
+            self.server.release.wait(timeout=15)
+        if scenario == "compact" and messages and messages[-1].get("content") == "Cancel this turn":
+            self.server.release.wait(timeout=15)
+        function = {"name": "read_file", "arguments": '{"path":"fixture.txt"}'}
+        if scenario == "skill":
+            last_user = max(i for i, message in enumerate(messages) if message.get("role") == "user")
+            wants_tool = not any(message.get("role") == "tool" for message in messages[last_user + 1:])
+            call_id = f"skill-{len(self.server.requests)}"
+            name = messages[last_user]["content"]
+            if name == "list docs skills":
+                function = {"name": "skills_list", "arguments": '{"category":"docs"}'}
+            else:
+                function = {"name": "skill_view", "arguments": json.dumps({"name": name})}
+        elif scenario in ("iteration_limit", "iteration_summary_tool"):
             summary = messages and isinstance(messages[-1], dict) and str(messages[-1].get("content", "")).startswith(
                 "You've reached the maximum number of tool-calling iterations"
             )
             wants_tool = not summary or scenario == "iteration_summary_tool"
             call_id = f"iteration-{len(self.server.requests)}"
         else:
-            wants_tool = scenario in ("tool", "partial_tool", "tool_retry", "tool_rate_limit", "fallback_after_tool") and not any(
+            wants_tool = scenario in ("tool", "partial_tool", "tool_retry", "tool_rate_limit", "fallback_after_tool", "partial_after_tool", "stall_on_resume") and not any(
                 isinstance(message, dict) and message.get("role") == "tool"
                 for message in messages
             )
@@ -102,13 +120,17 @@ class Handler(BaseHTTPRequestHandler):
             tool_call = {
                 "id": call_id,
                 "type": "function",
-                "function": {"name": "read_file", "arguments": '{"path":"fixture.txt"}'},
+                "function": function,
             }
             message = {"role": "assistant", "content": None, "tool_calls": [tool_call]}
             finish_reason = "tool_calls"
         else:
             message = {"role": "assistant", "content": "Ответ модели"}
             finish_reason = "stop"
+        if scenario in ("compact", "compact_failure") and messages[0]["content"].startswith("Summarize completed conversation history"):
+            message["content"] = "Earlier turns resolved the fixture checks."
+            if scenario == "compact_failure":
+                finish_reason = "length"
         if not body.get("stream"):
             self.send_json(200, {
                 **common,
@@ -136,8 +158,10 @@ class Handler(BaseHTTPRequestHandler):
                 "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
             },
         ]
+        if scenario == "burst":
+            chunks = [{**chunks[0], "choices": [{"index": 0, "delta": {"content": "x"}, "finish_reason": None}]}] * 256 + chunks[1:]
         data = "".join(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n" for chunk in chunks)
-        if self.server.scenario not in ("partial_tool", "partial_text"):
+        if scenario not in ("partial_tool", "partial_text") and not (scenario == "partial_after_tool" and not wants_tool):
             data += "data: [DONE]\n\n"
         data = data.encode()
         self.send_response(200)
@@ -153,12 +177,14 @@ def main():
     parser.add_argument("--scenario", choices=(
         "text", "tool", "partial_tool", "stall", "tool_retry", "tool_rate_limit",
         "fallback_after_tool", "fallback_auth", "partial_text", "disconnect_once",
-        "iteration_limit", "iteration_summary_tool",
+        "iteration_limit", "iteration_summary_tool", "partial_after_tool", "stall_on_resume", "burst", "skill",
+        "compact", "compact_failure",
     ), default="text")
     args = parser.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.requests = []
     server.scenario = args.scenario
+    server.release = threading.Event()
     print(f"http://127.0.0.1:{server.server_port}", flush=True)
     try:
         server.serve_forever()

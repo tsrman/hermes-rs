@@ -1,11 +1,14 @@
-//! One in-memory conversation turn with local file reading.
+//! One in-memory conversation turn with read-only local tools.
 
 use std::path::{Path, PathBuf};
 
-use hermes_core::prompt::cli_system_prompt;
+use hermes_core::prompt::{cli_system_prompt, update_cli_prompt_route};
 use serde_json::{json, Value};
 
+use crate::compaction::{messages_bytes, CompactedHistory, CompactionSettings};
+use crate::prompt::{load_cli_context, PromptSettings};
 use crate::providers::openai::{OpenAiProvider, ProviderError};
+use crate::skills::{SkillCatalog, SKILLS_LIST, SKILL_VIEW};
 
 const ITERATION_SUMMARY_REQUEST: &str = "You've reached the maximum number of tool-calling iterations allowed. Please provide a final response summarizing what you've found and accomplished so far, without calling any more tools.";
 
@@ -17,8 +20,108 @@ pub enum TurnError {
 }
 
 pub enum TurnOutcome {
-    Completed,
+    Completed(CompletedTurn),
     IterationLimit,
+}
+
+pub struct CompletedTurn {
+    pub(crate) model: String,
+    pub(crate) system_prompt: String,
+    pub(crate) replayed_history: Vec<Value>,
+    pub(crate) messages: Vec<Value>,
+    pub(crate) compaction: Option<CompactedHistory>,
+}
+
+#[derive(Default)]
+pub struct TurnHistory {
+    pub(crate) system_prompt: Option<String>,
+    pub(crate) messages: Vec<Value>,
+    pub(crate) skills: SkillCatalog,
+    pub(crate) compaction: Option<CompactedHistory>,
+}
+
+pub enum CompactionOutcome {
+    Unchanged,
+    Skipped,
+    Applied,
+}
+
+impl TurnHistory {
+    pub fn capture_prompt(
+        &mut self,
+        profile: Option<&Path>,
+        root: &Path,
+        settings: &PromptSettings,
+        route: &ModelRoute,
+    ) {
+        self.skills = SkillCatalog::load(profile, root, &settings.skills);
+        if self.system_prompt.is_none() {
+            let context = load_cli_context(profile, root, settings, self.skills.prompt());
+            self.system_prompt = Some(context.render(&route.model, route.provider_name));
+        }
+    }
+
+    pub async fn compact(
+        &mut self,
+        profile: Option<&Path>,
+        root: &Path,
+        prompt: &PromptSettings,
+        settings: &CompactionSettings,
+        route: &ModelRoute,
+        query: &str,
+    ) -> CompactionOutcome {
+        if !settings.enabled() || self.messages.is_empty() {
+            return CompactionOutcome::Unchanged;
+        }
+        let system = route.system_prompt(self.system_prompt.as_deref());
+        let old_prefix = prefix_bytes(&system);
+        let input_bytes = old_prefix + messages_bytes(&self.messages) + query.len();
+        let Some(range) = settings.select(&self.messages, input_bytes) else {
+            return CompactionOutcome::Unchanged;
+        };
+        let middle = &self.messages[range.clone()];
+        let Some(request) = settings.request(&route.model, middle) else {
+            return CompactionOutcome::Skipped;
+        };
+        let Ok(result) = route.provider.complete(&request, |_| {}).await else {
+            return CompactionOutcome::Skipped;
+        };
+        if result.finish_reason.as_deref() != Some("stop") || !result.tool_calls.is_empty() {
+            return CompactionOutcome::Skipped;
+        }
+        let removed_bytes = messages_bytes(middle);
+        let Some(compaction) = CompactedHistory::new(range, &result.content) else {
+            return CompactionOutcome::Skipped;
+        };
+        let summary_bytes =
+            messages_bytes(&[json!({"role": "user", "content": compaction.summary})]);
+        if summary_bytes >= removed_bytes {
+            return CompactionOutcome::Skipped;
+        }
+
+        let profile = profile.map(Path::to_owned);
+        let root = root.to_owned();
+        let settings = prompt.clone();
+        let model = route.model.clone();
+        let provider = route.provider_name;
+        let refreshed = tokio::task::spawn_blocking(move || {
+            let skills = SkillCatalog::load(profile.as_deref(), &root, &settings.skills);
+            let prompt = load_cli_context(profile.as_deref(), &root, &settings, skills.prompt());
+            (prompt.render(&model, provider), skills)
+        })
+        .await;
+        let Ok((system, skills)) = refreshed else {
+            return CompactionOutcome::Skipped;
+        };
+        // A newly loaded memory or project file can outweigh the savings.
+        if prefix_bytes(&system) + summary_bytes >= old_prefix + removed_bytes {
+            return CompactionOutcome::Skipped;
+        }
+        self.system_prompt = Some(system);
+        self.skills = skills;
+        self.compaction = Some(compaction);
+        CompactionOutcome::Applied
+    }
 }
 
 pub struct ModelRoute {
@@ -28,8 +131,11 @@ pub struct ModelRoute {
 }
 
 impl ModelRoute {
-    fn system_message(&self) -> Value {
-        json!({"role": "system", "content": cli_system_prompt(&self.model, self.provider_name)})
+    fn system_prompt(&self, saved: Option<&str>) -> String {
+        match saved {
+            Some(saved) => update_cli_prompt_route(saved, &self.model, self.provider_name),
+            None => cli_system_prompt(&self.model, self.provider_name),
+        }
     }
 }
 
@@ -47,31 +153,23 @@ pub async fn run_turn<F>(
     query: &str,
     root: &Path,
     max_turns: u32,
+    history: TurnHistory,
     mut on_event: F,
 ) -> Result<TurnOutcome, TurnError>
 where
     F: FnMut(TurnEvent<'_>),
 {
-    let mut messages = vec![
-        primary.system_message(),
-        json!({"role": "user", "content": query}),
-    ];
-    let tools = json!([{
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "Read a UTF-8 file within the current working directory with line numbers.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "offset": {"type": "integer", "minimum": 1, "default": 1},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 2000}
-                },
-                "required": ["path"]
-            }
-        }
-    }]);
+    let saved_prompt = history.system_prompt.as_deref();
+    let mut system_prompt = primary.system_prompt(saved_prompt);
+    let (mut messages, original) = match &history.compaction {
+        Some(compaction) => (compaction.replay(&history.messages), Some(history.messages)),
+        None => (history.messages, None),
+    };
+    messages.insert(0, json!({"role": "system", "content": system_prompt}));
+    let first_new_message = messages.len();
+    messages.push(json!({"role": "user", "content": query}));
+    let skill_tools = system_prompt.contains("\n<available_skills>\n");
+    let tools = tools_for_prompt(&system_prompt);
     let mut route = primary;
     let mut fallback_routes = fallbacks.iter();
     for _ in 0..max_turns {
@@ -95,13 +193,25 @@ where
                         return Err(TurnError::Provider(error));
                     };
                     route = next;
-                    messages[0] = route.system_message();
+                    system_prompt = route.system_prompt(saved_prompt);
+                    messages[0] = json!({"role": "system", "content": system_prompt});
                     on_event(TurnEvent::Fallback(&route.model));
                 }
             }
         };
         match result.finish_reason.as_deref() {
-            Some("stop") if result.tool_calls.is_empty() => return Ok(TurnOutcome::Completed),
+            Some("stop") if result.tool_calls.is_empty() => {
+                messages.push(json!({"role": "assistant", "content": result.content}));
+                let appended = messages.split_off(first_new_message);
+                messages.remove(0);
+                return Ok(TurnOutcome::Completed(CompletedTurn {
+                    model: route.model.clone(),
+                    system_prompt,
+                    replayed_history: original.unwrap_or(messages),
+                    messages: appended,
+                    compaction: history.compaction,
+                }));
+            }
             Some("tool_calls") if !result.tool_calls.is_empty() => {}
             _ => return Err(TurnError::InvalidCompletion),
         }
@@ -119,10 +229,11 @@ where
         messages.push(json!({"role": "assistant", "content": if result.content.is_empty() { None } else { Some(result.content) }, "tool_calls": calls}));
         for call in result.tool_calls {
             on_event(TurnEvent::ToolStarted(&call.name));
-            let output = if call.name == "read_file" {
-                read_file(root, &call.arguments)
-            } else {
-                json!({"error": format!("Unknown tool: {}", call.name)})
+            let output = match call.name.as_str() {
+                "read_file" => read_file(root, &call.arguments),
+                SKILL_VIEW if skill_tools => history.skills.view(&call.arguments),
+                SKILLS_LIST if skill_tools => history.skills.list(&call.arguments),
+                _ => json!({"error": format!("Unknown tool: {}", call.name)}),
             };
             let succeeded = output.get("error").is_none();
             messages.push(
@@ -152,6 +263,33 @@ where
     }
     on_event(TurnEvent::Text(&summary.content));
     Ok(TurnOutcome::IterationLimit)
+}
+
+fn prefix_bytes(system: &str) -> usize {
+    system.len() + messages_bytes(&tools_for_prompt(system))
+}
+
+fn tools_for_prompt(system: &str) -> Vec<Value> {
+    let mut tools = vec![json!({
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a UTF-8 file within the current working directory with line numbers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "offset": {"type": "integer", "minimum": 1, "default": 1},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 2000}
+                },
+                "required": ["path"]
+            }
+        }
+    })];
+    if system.contains("\n<available_skills>\n") {
+        tools.extend(SkillCatalog::schemas());
+    }
+    tools
 }
 
 fn read_file(root: &Path, arguments: &str) -> Value {
