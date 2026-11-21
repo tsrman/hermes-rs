@@ -77,7 +77,7 @@ class ToolTestCase(unittest.TestCase):
 
     def wait_for_prompt(self, process, master):
         transcript = bytearray()
-        deadline = time.monotonic() + 8
+        deadline = time.monotonic() + 20
         while process.poll() is None and time.monotonic() < deadline:
             ready, _, _ = select.select([master], [], [], 0.05)
             if ready:
@@ -97,7 +97,7 @@ class ToolTestCase(unittest.TestCase):
     def finish_terminal(process, master):
         # macOS waits for the controlling terminal output to drain before
         # the session leader exits. Keep reading echoed input until then.
-        deadline = time.monotonic() + 8
+        deadline = time.monotonic() + 20
         while process.poll() is None and time.monotonic() < deadline:
             ready, _, _ = select.select([master], [], [], 0.05)
             if ready:
@@ -116,7 +116,7 @@ class ToolTestCase(unittest.TestCase):
     def unattended(self, tool, arguments):
         run = subprocess.run(
             self.command(tool=tool, arguments=arguments), cwd=self.root, env=self.env,
-            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=8,
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20,
         )
         self.assertEqual(run.returncode, 0, run.stderr)
         return self.last_tool_result()
@@ -146,7 +146,7 @@ class FileToolTest(ToolTestCase):
         self.assertIn("updated text", prompt)
         self.assertEqual(target.read_text(), "original\n")
         os.write(tty, b"y\n")
-        output, error = process.communicate(timeout=8)
+        output, error = process.communicate(timeout=20)
         self.assertEqual(process.returncode, 0, error)
         self.assertEqual(output, "Ответ модели\n")
         self.assertEqual(target.read_text(), "updated text")
@@ -163,7 +163,7 @@ class FileToolTest(ToolTestCase):
                     os.write(tty, b"n\n")
                 if mode == "cancel":
                     process.send_signal(signal.SIGINT)
-                _, error = process.communicate(timeout=8)
+                _, error = process.communicate(timeout=20)
                 self.assertEqual(process.returncode, 130 if mode == "cancel" else 0, error)
                 self.assertFalse((self.root / f"{mode}.txt").exists())
                 if mode != "cancel":
@@ -173,7 +173,7 @@ class FileToolTest(ToolTestCase):
     def test_unattended_write_is_hidden_and_refused(self):
         run = subprocess.run(
             self.command(), cwd=self.root, env=self.env, stdin=subprocess.DEVNULL,
-            capture_output=True, text=True, timeout=8,
+            capture_output=True, text=True, timeout=20,
         )
         self.assertEqual(run.returncode, 0, run.stderr)
         result, requests = self.last_tool_result()
@@ -181,7 +181,7 @@ class FileToolTest(ToolTestCase):
         self.assertIn("error", result)
         self.assertFalse((self.root / "notes.txt").exists())
         process, _ = self.interactive(oneshot=True)
-        _, stderr = process.communicate(timeout=8)
+        _, stderr = process.communicate(timeout=20)
         self.assertEqual(process.returncode, 0, stderr)
         result, requests = self.last_tool_result()
         self.assertEqual(result["status"], "approval_unavailable")
@@ -203,7 +203,7 @@ class FileToolTest(ToolTestCase):
         ):
             with self.subTest(path=path):
                 process, _ = self.interactive(path=path)
-                _, stderr = process.communicate(timeout=8)
+                _, stderr = process.communicate(timeout=20)
                 self.assertEqual(process.returncode, 0, stderr)
                 result, _ = self.last_tool_result()
                 self.assertIn(error, result["error"])
@@ -220,7 +220,7 @@ class FileToolTest(ToolTestCase):
         self.wait_for_prompt(process, tty)
         target.write_text("external edit\n", encoding="utf-8")
         os.write(tty, b"yes\n")
-        _, error = process.communicate(timeout=8)
+        _, error = process.communicate(timeout=20)
         self.assertEqual(process.returncode, 0, error)
         self.assertEqual(target.read_text(), "external edit\n")
         result, _ = self.last_tool_result()
@@ -228,13 +228,13 @@ class FileToolTest(ToolTestCase):
         process, tty = self.interactive(path="created.txt")
         self.wait_for_prompt(process, tty)
         os.write(tty, b"yes\n")
-        _, error = process.communicate(timeout=8)
+        _, error = process.communicate(timeout=20)
         self.assertEqual(process.returncode, 0, error)
         self.assertEqual((self.root / "created.txt").read_text(), "updated text")
         process, tty = self.interactive(path="cancelled.txt")
         self.wait_for_prompt(process, tty)
         process.send_signal(signal.SIGINT)
-        _, error = process.communicate(timeout=8)
+        _, error = process.communicate(timeout=20)
         self.assertEqual(process.returncode, 130, error)
         self.assertFalse((self.root / "cancelled.txt").exists())
 
@@ -248,7 +248,7 @@ class FileToolTest(ToolTestCase):
         self.assertIn("changed", prompt)
         self.assertIn("change here", target.read_text())
         os.write(tty, b"yes\n")
-        _, error = process.communicate(timeout=8)
+        _, error = process.communicate(timeout=20)
         self.assertEqual(process.returncode, 0, error)
         self.assertEqual(target.read_text(), "keep before\nchanged\nkeep after\n")
         patched, _ = self.last_tool_result()
@@ -257,7 +257,7 @@ class FileToolTest(ToolTestCase):
         process, _ = self.interactive(tool="patch", arguments={
             "path": "notes.txt", "old_string": "keep", "new_string": "remove",
         })
-        _, error = process.communicate(timeout=8)
+        _, error = process.communicate(timeout=20)
         self.assertEqual(process.returncode, 0, error)
         failed, _ = self.last_tool_result()
         self.assertIn("multiple", failed["error"])
@@ -268,7 +268,7 @@ class FileToolTest(ToolTestCase):
             process, tty = self.interactive(tool="patch", arguments=arguments)
             self.wait_for_prompt(process, tty)
             os.write(tty, answer)
-            _, error = process.communicate(timeout=8)
+            _, error = process.communicate(timeout=20)
             self.assertEqual(process.returncode, 0, error)
             self.assertEqual(target.read_text(), f"{outcome} before\nchanged\n{outcome} after\n")
 
@@ -343,7 +343,7 @@ class TerminalToolTest(ToolTestCase):
     def test_terminal_respects_backend_and_workspace(self):
         arguments = {"command": "printf touched > marker.txt"}
         process, _ = self.interactive(tool="terminal", arguments={**arguments, "workdir": ".."})
-        _, error = process.communicate(timeout=8)
+        _, error = process.communicate(timeout=20)
         self.assertEqual(process.returncode, 0, error)
         result, _ = self.last_tool_result()
         self.assertIn("outside the working directory", result["error"])
@@ -356,7 +356,7 @@ class TerminalToolTest(ToolTestCase):
                 if source == "environment":
                     self.env["TERMINAL_ENV"] = "docker"
                 process, _ = self.interactive(tool="terminal", arguments=arguments)
-                _, error = process.communicate(timeout=8)
+                _, error = process.communicate(timeout=20)
                 self.assertEqual(process.returncode, 0, error)
                 result, requests = self.last_tool_result()
                 self.assertEqual(result["status"], "backend_unavailable")

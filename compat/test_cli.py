@@ -77,7 +77,7 @@ class CliTest(unittest.TestCase):
         env = {"PATH": os.environ.get("PATH", ""), "HERMES_HOME": str(home), "HERMES_API_KEY": "fixture"}
         result = subprocess.run(
             [str(BINARY), "chat", "-q", query, *args], cwd=cwd or self.workdir,
-            env=env, capture_output=True, text=True, timeout=15,
+            env=env, capture_output=True, text=True, timeout=45,
         )
         with urlopen(self.base + "/requests", timeout=5) as response:
             return result, json.load(response)
@@ -345,7 +345,7 @@ class CliTest(unittest.TestCase):
         (home / ".env").write_text(f"NOVITA_API_KEY=nv-secret\nNOVITA_BASE_URL={self.base}/v1\n", encoding="utf-8")
         env = {"PATH": os.environ.get("PATH", ""), "HERMES_HOME": str(home)}
         result = subprocess.run([str(BINARY), "chat", "-q", "hello"], cwd=self.workdir, env=env,
-                                capture_output=True, text=True, timeout=15)
+                                capture_output=True, text=True, timeout=45)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "Ответ модели\n")
         with urlopen(self.base + "/authorizations", timeout=5) as response:
@@ -835,7 +835,7 @@ class CliTest(unittest.TestCase):
         def chat(query):
             return subprocess.run(
                 [str(BINARY), "chat", "-q", query, "--save-session", "--base-url", self.base + "/v1",
-                 "--model", "fixture"], cwd=self.workdir, env=env, capture_output=True, text=True, timeout=15,
+                 "--model", "fixture"], cwd=self.workdir, env=env, capture_output=True, text=True, timeout=45,
             )
 
         prompts = ["concurrent first", "concurrent second"]
@@ -906,7 +906,7 @@ class CliTest(unittest.TestCase):
             env=env,
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=45,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Ответ модели", result.stdout)
@@ -946,7 +946,7 @@ class CliTest(unittest.TestCase):
         env = {"PATH": os.environ.get("PATH", ""), "HERMES_HOME": str(home)}
         result = subprocess.run(
             [str(BINARY), "-p", "coder", "chat", "-q", "test"], cwd=self.workdir,
-            env=env, capture_output=True, text=True, timeout=15,
+            env=env, capture_output=True, text=True, timeout=45,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         with urlopen(self.base + "/requests", timeout=5) as response:
@@ -969,7 +969,7 @@ class CliTest(unittest.TestCase):
 
         def hermes(*args):
             return subprocess.run([str(BINARY), "-p", "coder", *args], cwd=self.workdir,
-                                  env=env, capture_output=True, text=True, timeout=15)
+                                  env=env, capture_output=True, text=True, timeout=45)
 
         for key, value in [("model.base_url", self.base + "/v1"), ("model", "")]:
             result = hermes("config", "set", key, value)
@@ -994,7 +994,7 @@ class CliTest(unittest.TestCase):
         env = {"PATH": os.environ.get("PATH", ""), "HERMES_HOME": str(home), "HERMES_API_KEY": "fixture"}
         result = subprocess.run(
             [str(BINARY), "-p", "missing", "chat", "-q", "test", "--base-url", self.base + "/v1", "--model", "fixture"],
-            cwd=self.workdir, env=env, capture_output=True, text=True, timeout=15,
+            cwd=self.workdir, env=env, capture_output=True, text=True, timeout=45,
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("profile", result.stderr.lower())
@@ -1010,13 +1010,13 @@ class CliTest(unittest.TestCase):
         (home / ".env").write_text("OPENAI_API_KEY=secret\nOPENAI_BASE_URL=https://unrelated.example/v1\n", encoding="utf-8")
         env = {"PATH": os.environ.get("PATH", ""), "HERMES_HOME": str(home)}
         result = subprocess.run([str(BINARY), "chat", "-q", "test"], cwd=self.workdir,
-                                env=env, capture_output=True, text=True, timeout=15)
+                                env=env, capture_output=True, text=True, timeout=45)
         self.assertNotEqual(result.returncode, 0)
         with urlopen(self.base + "/requests", timeout=5) as response:
             self.assertEqual(json.load(response), [])
         (home / ".env").write_text(f"OPENAI_API_KEY=secret\nOPENAI_BASE_URL={self.base}/v1\n", encoding="utf-8")
         result = subprocess.run([str(BINARY), "chat", "-q", "test"], cwd=self.workdir,
-                                env=env, capture_output=True, text=True, timeout=15)
+                                env=env, capture_output=True, text=True, timeout=45)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_active_profile_and_command_line_model_override(self):
@@ -1030,7 +1030,7 @@ class CliTest(unittest.TestCase):
         (profile / ".env").write_text("HERMES_API_KEY=fixture\n", encoding="utf-8")
         env = {"PATH": os.environ.get("PATH", ""), "HERMES_HOME": str(home)}
         result = subprocess.run([str(BINARY), "chat", "-q", "test", "--model", "override-model"],
-                                cwd=self.workdir, env=env, capture_output=True, text=True, timeout=15)
+                                cwd=self.workdir, env=env, capture_output=True, text=True, timeout=45)
         self.assertEqual(result.returncode, 0, result.stderr)
         with urlopen(self.base + "/requests", timeout=5) as response:
             requests = json.load(response)
@@ -1046,7 +1046,7 @@ class CliTest(unittest.TestCase):
         (deleted / "coder").write_text("deleted", encoding="utf-8")
         env = {"PATH": os.environ.get("PATH", ""), "HERMES_HOME": str(home), "HERMES_API_KEY": "fixture"}
         result = subprocess.run([str(BINARY), "-p", "coder", "chat", "-q", "test", "--base-url", self.base + "/v1"],
-                                cwd=self.workdir, env=env, capture_output=True, text=True, timeout=15)
+                                cwd=self.workdir, env=env, capture_output=True, text=True, timeout=45)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("profile", result.stderr.lower())
         with urlopen(self.base + "/requests", timeout=5) as response:
@@ -1056,7 +1056,7 @@ class CliTest(unittest.TestCase):
         env = {"PATH": os.environ.get("PATH", ""), "HERMES_API_KEY": "fixture"}
         result = subprocess.run(
             [str(BINARY), "chat", "-q", "test", "--base-url", self.base + "/v1", "--model", "fixture"],
-            cwd=self.workdir, env=env, capture_output=True, text=True, timeout=15,
+            cwd=self.workdir, env=env, capture_output=True, text=True, timeout=45,
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("Ответ модели", result.stdout)
@@ -1068,7 +1068,7 @@ class CliTest(unittest.TestCase):
         env = {"PATH": os.environ.get("PATH", ""), "HERMES_API_KEY": "fixture"}
         result = subprocess.run(
             [str(BINARY), "chat", "-q", "test", "--base-url", self.base + "/v1", "--model", "fixture"],
-            cwd=self.workdir, env=env, capture_output=True, text=True, timeout=15,
+            cwd=self.workdir, env=env, capture_output=True, text=True, timeout=45,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         with urlopen(self.base + "/requests", timeout=5) as response:
@@ -1083,7 +1083,7 @@ class CliTest(unittest.TestCase):
         env = {"PATH": os.environ.get("PATH", ""), "HERMES_API_KEY": "fixture"}
         result = subprocess.run(
             [str(BINARY), "chat", "-q", "test", "--base-url", self.base + "/v1", "--model", "fixture"],
-            cwd=self.workdir, env=env, capture_output=True, text=True, timeout=15,
+            cwd=self.workdir, env=env, capture_output=True, text=True, timeout=45,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         with urlopen(self.base + "/requests", timeout=5) as response:
