@@ -40,7 +40,7 @@ def archive_binary(binary, archive):
         entry = tarfile.TarInfo(binary.name)
         entry.size = binary.stat().st_size
         entry.mode = 0o755
-        with archive.open("wb") as raw, gzip.GzipFile(filename="", fileobj=raw, mtime=0) as compressed:
+        with archive.open("wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as compressed:
             with binary.open("rb") as source, tarfile.open(fileobj=compressed, mode="w") as package:
                 package.addfile(entry, source)
 
