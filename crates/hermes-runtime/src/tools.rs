@@ -402,9 +402,35 @@ static TOOLS: &[ToolDef] = &[
 pub(crate) fn offered_schemas(env: &ToolEnv) -> Vec<Value> {
     TOOLS
         .iter()
-        .filter(|tool| env.policy.allows(tool.name))
+        .filter(|tool| env.policy.allows(tool.name) && !env.policy.is_deferred(tool.name))
         .filter_map(|tool| (tool.offered)(env))
         .collect()
+}
+
+/// The schemas of the tools the profile defers behind the bridge, as they would be listed if
+/// they were not deferred.
+pub(crate) fn deferred_schemas(env: &ToolEnv) -> Vec<Value> {
+    let open = ToolEnv {
+        policy: env.policy.without_deferral(),
+        ..env.clone()
+    };
+    TOOLS
+        .iter()
+        .filter(|tool| env.policy.allows(tool.name) && env.policy.is_deferred(tool.name))
+        .filter_map(|tool| (tool.offered)(&open))
+        .collect()
+}
+
+/// Add the bridge tools, last, as the reference lists them.
+pub(crate) fn append_bridge(env: &ToolEnv, tools: &mut Vec<Value>) {
+    tools.extend(crate::tool_search::bridge_for(env));
+}
+
+/// A tool the bridge may invoke: allowed, and one the profile defers.
+pub(crate) fn find_deferred(name: &str, policy: &ToolPolicy) -> Option<&'static ToolDef> {
+    TOOLS
+        .iter()
+        .find(|tool| tool.name == name && policy.allows(name) && policy.is_deferred(name))
 }
 
 /// The built-in tool of that name, when the profile's toolsets allow it and it is not kept

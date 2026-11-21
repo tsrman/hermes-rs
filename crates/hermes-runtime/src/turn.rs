@@ -17,6 +17,7 @@ use crate::skills::SkillCatalog;
 use crate::terminal::{self, TERMINAL};
 use crate::todo_tool::TodoStore;
 use crate::tool_policy::ToolPolicy;
+use crate::tool_search;
 use crate::tools::{self, ToolContext, ToolEnv};
 use crate::web_tools::WebSettings;
 
@@ -280,6 +281,7 @@ where
         tools.extend(mcp.lock().await.schemas());
     }
     tools::sort_by_name(&mut tools);
+    tools::append_bridge(&env, &mut tools);
     let mut memory_turn = MemoryTurn::default();
     let mut approve_dyn =
         |request: ApprovalRequest| -> tools::BoxFuture<'static, ApprovalDecision> {
@@ -343,20 +345,37 @@ where
             .collect();
         messages.push(json!({"role": "assistant", "content": if result.content.is_empty() { None } else { Some(result.content) }, "tool_calls": calls}));
         for call in result.tool_calls {
-            on_event(TurnEvent::ToolStarted(&call.name));
+            // The bridge answers searches and descriptions itself and hands a call back as the
+            // real tool, which every later step then sees by its own name.
+            let (name, arguments, bridged) =
+                match tool_search::dispatch(&env, &call.name, &call.arguments) {
+                    Some(tool_search::Bridged::Call { name, arguments }) => (name, arguments, None),
+                    Some(tool_search::Bridged::Done(answer)) => {
+                        (call.name.clone(), call.arguments.clone(), Some(answer))
+                    }
+                    None => (call.name.clone(), call.arguments.clone(), None),
+                };
+            let through_bridge = name != call.name;
+            on_event(TurnEvent::ToolStarted(&name));
             let mcp_tool = match options.mcp {
-                Some(mcp) if call.name.starts_with("mcp_") => {
+                Some(mcp) if name.starts_with("mcp_") && !through_bridge => {
                     let mcp = mcp.lock().await;
-                    mcp.owns(&call.name).then_some(())
+                    mcp.owns(&name).then_some(())
                 }
                 _ => None,
             };
-            let output = if mcp_tool.is_some() {
+            let output = if let Some(answer) = bridged {
+                answer
+            } else if mcp_tool.is_some() {
                 match options.mcp {
-                    Some(mcp) => mcp.lock().await.call(&call.name, &call.arguments).await,
-                    None => json!({"error": format!("Unknown tool: {}", call.name)}),
+                    Some(mcp) => mcp.lock().await.call(&name, &arguments).await,
+                    None => json!({"error": format!("Unknown tool: {name}")}),
                 }
-            } else if let Some(tool) = tools::find(&call.name, options.tools) {
+            } else if let Some(tool) = if through_bridge {
+                tools::find_deferred(&name, options.tools)
+            } else {
+                tools::find(&name, options.tools)
+            } {
                 let mut context = ToolContext {
                     options: &options,
                     skills: &history.skills,
@@ -365,10 +384,10 @@ where
                     todo: &mut todo,
                     approve: &mut approve_dyn,
                 };
-                tool.call(&mut context, &call.arguments).await
+                tool.call(&mut context, &arguments).await
             } else {
                 // A tool the toolset configuration does not allow is unknown, whatever the model sends.
-                json!({"error": format!("Unknown tool: {}", call.name)})
+                json!({"error": format!("Unknown tool: {name}")})
             };
             // A tool may answer with ready-made text, such as the web tools' indented JSON.
             let (content, structured) = match output {
@@ -380,10 +399,10 @@ where
             };
             let succeeded = structured.get("error").is_none_or(Value::is_null)
                 && structured["success"].as_bool() != Some(false)
-                && (call.name != TERMINAL || structured["exit_code"].as_i64() == Some(0));
+                && (name != TERMINAL || structured["exit_code"].as_i64() == Some(0));
             messages.push(json!({"role": "tool", "tool_call_id": call.id, "content": content}));
             on_event(TurnEvent::ToolFinished {
-                name: &call.name,
+                name: &name,
                 succeeded,
             });
         }
@@ -420,7 +439,9 @@ fn chat_request(model: &str, messages: &[Value], tools: &[Value]) -> Value {
 fn prefix_bytes(system: &str, env: &ToolEnv) -> usize {
     let mut env = env.clone();
     env.skills_indexed = system.contains("\n<available_skills>\n");
-    system.len() + messages_bytes(&tools::offered_schemas(&env))
+    let mut tools = tools::offered_schemas(&env);
+    tools::append_bridge(&env, &mut tools);
+    system.len() + messages_bytes(&tools)
 }
 
 #[cfg(test)]

@@ -19,6 +19,7 @@ pub mod storage;
 mod terminal;
 mod todo_tool;
 pub mod tool_policy;
+mod tool_search;
 mod tools;
 pub mod turn;
 pub mod url_safety;

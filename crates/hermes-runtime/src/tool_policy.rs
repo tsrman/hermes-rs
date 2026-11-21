@@ -37,6 +37,81 @@ pub struct ToolPolicy {
     /// Empty when the bridge is off, so every allowed tool is listed.
     #[serde(default)]
     deferred: BTreeSet<String>,
+    /// How the bridge searches and lists the deferred tools.
+    #[serde(default)]
+    search: SearchSettings,
+}
+
+/// `tools.tool_search`'s limits and listing, clamped as the reference clamps them.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct SearchSettings {
+    pub default_limit: usize,
+    pub max_limit: usize,
+    /// `listing: off` sends the bare bridge without the catalog in its description.
+    pub listing: bool,
+    pub listing_max_tokens: usize,
+    pub threshold_pct: f64,
+}
+
+impl Default for SearchSettings {
+    fn default() -> Self {
+        Self {
+            default_limit: 5,
+            max_limit: 25,
+            listing: true,
+            listing_max_tokens: 4000,
+            threshold_pct: 5.0,
+        }
+    }
+}
+
+fn clamped(value: Option<&serde_yaml::Value>, fallback: i64, low: i64, high: i64) -> i64 {
+    let parsed = match value {
+        Some(serde_yaml::Value::Number(number)) => number
+            .as_i64()
+            .or_else(|| number.as_f64().map(|float| float as i64)),
+        Some(serde_yaml::Value::String(text)) => text.trim().parse().ok(),
+        Some(serde_yaml::Value::Bool(flag)) => Some(i64::from(*flag)),
+        _ => None,
+    };
+    parsed.unwrap_or(fallback).clamp(low, high)
+}
+
+impl SearchSettings {
+    fn from_config(config: &serde_yaml::Value) -> Self {
+        let section = config
+            .get("tools")
+            .and_then(|tools| tools.get("tool_search"))
+            .filter(|section| section.is_mapping());
+        let get = |key: &str| section.and_then(|section| section.get(key));
+        let max_limit = clamped(get("max_search_limit"), 25, 1, 50);
+        let listing = match get("listing") {
+            None => true,
+            Some(serde_yaml::Value::Bool(flag)) => *flag,
+            Some(other) => {
+                let text = match other {
+                    serde_yaml::Value::String(text) => text.trim().to_lowercase(),
+                    other => serde_yaml::to_string(other)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_lowercase(),
+                };
+                !matches!(text.as_str(), "off" | "false" | "0" | "no")
+            }
+        };
+        let threshold = match get("threshold_pct") {
+            Some(serde_yaml::Value::Number(number)) => number.as_f64(),
+            Some(serde_yaml::Value::String(text)) => text.trim().parse().ok(),
+            _ => None,
+        };
+        Self {
+            default_limit: clamped(get("search_default_limit"), 5, 1, max_limit) as usize,
+            max_limit: max_limit as usize,
+            listing,
+            listing_max_tokens: clamped(get("listing_max_tokens"), 4000, 200, 60000) as usize,
+            threshold_pct: threshold.unwrap_or(5.0).clamp(0.0, 100.0),
+        }
+    }
 }
 
 impl ToolPolicy {
@@ -44,6 +119,7 @@ impl ToolPolicy {
         Self {
             allowed: None,
             deferred: BTreeSet::new(),
+            search: SearchSettings::default(),
         }
     }
 
@@ -106,12 +182,25 @@ impl ToolPolicy {
         Self {
             allowed: Some(allowed),
             deferred: deferred_tools(config),
+            search: SearchSettings::from_config(config),
         }
     }
 
     /// Whether the tool is reached through the tool-search bridge rather than listed directly.
     pub fn is_deferred(&self, tool: &str) -> bool {
         self.deferred.contains(tool)
+    }
+
+    pub fn search_settings(&self) -> SearchSettings {
+        self.search
+    }
+
+    /// A copy that defers nothing: what the tool list would be without the bridge.
+    pub(crate) fn without_deferral(&self) -> Self {
+        Self {
+            deferred: BTreeSet::new(),
+            ..self.clone()
+        }
     }
 
     pub fn allows(&self, tool: &str) -> bool {
