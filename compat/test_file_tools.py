@@ -87,7 +87,11 @@ class ToolTestCase(unittest.TestCase):
                     break
             if b"[y/N]" in transcript:
                 return transcript.decode(errors="replace")
-        self.fail(f"approval prompt missing; terminal output was {transcript!r}")
+        details = ""
+        if process.poll() is not None:
+            _, stderr = process.communicate(timeout=1)
+            details = f"; exit status {process.returncode}; stderr was {stderr!r}"
+        self.fail(f"approval prompt missing; terminal output was {transcript!r}{details}")
 
     def last_tool_result(self):
         with urlopen(self.url + "/requests", timeout=4) as response:
