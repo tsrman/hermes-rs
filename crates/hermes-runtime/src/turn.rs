@@ -39,7 +39,7 @@ pub struct CompletedTurn {
     pub(crate) compaction: Option<CompactedHistory>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct TurnHistory {
     pub(crate) system_prompt: Option<String>,
     pub(crate) messages: Vec<Value>,
@@ -49,6 +49,15 @@ pub struct TurnHistory {
     pub(crate) terminal_enabled: bool,
 }
 
+/// Why a compaction pass runs.
+#[derive(Clone, Copy)]
+pub enum CompactionTrigger<'a> {
+    /// Before a turn, when the estimated input reaches the configured threshold.
+    Estimate { query: &'a str },
+    /// After the provider reported a context overflow.
+    Overflow,
+}
+
 pub enum CompactionOutcome {
     Unchanged,
     Skipped,
@@ -56,6 +65,10 @@ pub enum CompactionOutcome {
 }
 
 impl TurnHistory {
+    pub fn is_compacted(&self) -> bool {
+        self.compaction.is_some()
+    }
+
     pub fn capture_prompt(
         &mut self,
         options: &TurnOptions<'_>,
@@ -89,7 +102,7 @@ impl TurnHistory {
         prompt: &PromptSettings,
         settings: &CompactionSettings,
         route: &ModelRoute,
-        query: &str,
+        trigger: CompactionTrigger<'_>,
     ) -> CompactionOutcome {
         if !settings.enabled() || self.messages.is_empty() {
             return CompactionOutcome::Unchanged;
@@ -98,7 +111,13 @@ impl TurnHistory {
         let write_files = self.write_files;
         let terminal_enabled = self.terminal_enabled;
         let old_prefix = prefix_bytes(&system, write_files, terminal_enabled);
-        let input_bytes = old_prefix + messages_bytes(&self.messages) + query.len();
+        let input_bytes = match trigger {
+            CompactionTrigger::Estimate { query } => {
+                old_prefix + messages_bytes(&self.messages) + query.len()
+            }
+            // The provider already rejected the request, so the estimate no longer gates it.
+            CompactionTrigger::Overflow => usize::MAX,
+        };
         let Some(range) = settings.select(&self.messages, input_bytes) else {
             return CompactionOutcome::Unchanged;
         };
@@ -178,6 +197,7 @@ pub enum TurnEvent<'a> {
     IterationLimit(u32),
 }
 
+#[derive(Clone, Copy)]
 pub struct TurnOptions<'a> {
     pub root: &'a Path,
     pub profile: Option<&'a Path>,

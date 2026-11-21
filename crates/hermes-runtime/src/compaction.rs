@@ -100,6 +100,7 @@ impl CompactionSettings {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct CompactedHistory {
     pub(crate) range: Range<usize>,
     pub(crate) summary: String,

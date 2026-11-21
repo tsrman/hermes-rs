@@ -124,7 +124,7 @@ enum Tier {
     External,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct SkillCatalog {
     skills: Vec<Skill>,
     aliases: BTreeMap<String, Option<usize>>,
@@ -133,6 +133,7 @@ pub(crate) struct SkillCatalog {
     desc_limit: usize,
 }
 
+#[derive(Clone)]
 struct Skill {
     tier: Tier,
     root: usize,

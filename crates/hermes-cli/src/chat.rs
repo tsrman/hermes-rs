@@ -7,11 +7,13 @@ use std::time::Duration;
 use clap::Args;
 use hermes_runtime::config::{load_chat_settings, CompactionSettings};
 use hermes_runtime::prompt::PromptSettings;
-use hermes_runtime::providers::{AnthropicProvider, OpenAiProvider, Provider, ResponsesProvider};
+use hermes_runtime::providers::{
+    AnthropicProvider, OpenAiProvider, Provider, ProviderError, ResponsesProvider,
+};
 use hermes_runtime::storage::SessionWriter;
 use hermes_runtime::turn::{
-    run_turn, ApprovalDecision, ApprovalRequest, CompactionOutcome, ModelRoute, TurnEvent,
-    TurnOptions, TurnOutcome,
+    run_turn, ApprovalDecision, ApprovalRequest, CompactionOutcome, CompactionTrigger, ModelRoute,
+    TurnError, TurnEvent, TurnOptions, TurnOutcome,
 };
 use serde::{Deserialize, Serialize};
 use tokio::task::block_in_place;
@@ -237,35 +239,68 @@ where
     let mut receiving = true;
     let outcome = {
         let turn = async {
-            let compaction = history
+            let mut approve = approve;
+            let mut compaction = history
                 .compact(
                     home,
                     root,
                     &request.prompt,
                     &request.compression,
                     &primary,
-                    &request.query,
+                    CompactionTrigger::Estimate {
+                        query: &request.query,
+                    },
                 )
                 .await;
-            if let CompactionOutcome::Skipped = compaction {
+            let mut retried = false;
+            loop {
+                if let CompactionOutcome::Skipped = compaction {
+                    receiving = emit(Event::Stderr(
+                        "Context compression skipped: no usable shorter context.".into(),
+                    ));
+                }
+                // Output or tool effects from a failed attempt cannot be replayed safely.
+                let mut started = false;
+                let result = run_turn(
+                    &primary,
+                    &fallbacks,
+                    &request.query,
+                    options,
+                    history.clone(),
+                    |event| {
+                        started |= matches!(event, TurnEvent::Text(_) | TurnEvent::ToolStarted(_));
+                        if receiving {
+                            receiving = emit(format_event(event));
+                        }
+                    },
+                    &mut approve,
+                )
+                .await;
+                let overflow = matches!(
+                    result,
+                    Err(TurnError::Provider(ProviderError::ContextOverflow))
+                );
+                if !overflow || started || retried || history.is_compacted() {
+                    break result;
+                }
+                retried = true;
+                compaction = history
+                    .compact(
+                        home,
+                        root,
+                        &request.prompt,
+                        &request.compression,
+                        &primary,
+                        CompactionTrigger::Overflow,
+                    )
+                    .await;
+                if !matches!(compaction, CompactionOutcome::Applied) {
+                    break result;
+                }
                 receiving = emit(Event::Stderr(
-                    "Context compression skipped: no usable shorter context.".into(),
+                    "Context window exceeded: retrying with compressed history.".into(),
                 ));
             }
-            run_turn(
-                &primary,
-                &fallbacks,
-                &request.query,
-                options,
-                history,
-                |event| {
-                    if receiving {
-                        receiving = emit(format_event(event));
-                    }
-                },
-                approve,
-            )
-            .await
         };
         let period = Duration::from_secs(60);
         let mut refresh = interval_at(Instant::now() + period, period);

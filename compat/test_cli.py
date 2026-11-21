@@ -26,6 +26,8 @@ class CliTest(unittest.TestCase):
             "test_invalid_compaction_summary_keeps_the_original_context": "compact_failure",
             "test_compaction_write_failure_rolls_back_archive_and_turn": "compact",
             "test_cancel_after_summary_leaves_no_compaction": "compact",
+            "test_context_overflow_compresses_history_and_retries_once": "overflow",
+            "test_context_overflow_after_a_tool_call_is_not_retried": "overflow_tools",
             "test_skill_index_uses_profile_and_opted_in_project_roots": "skill",
             "test_skill_view_resolves_exact_paths_and_refuses_ambiguous_names": "skill",
             "test_cancel_interrupts_pending_provider_request": "stall",
@@ -171,6 +173,32 @@ class CliTest(unittest.TestCase):
         self.assertEqual(resumed.returncode, 0, resumed.stderr)
         self.assertEqual(all_requests[-1]["messages"], messages +
                          [{"role": "assistant", "content": "Ответ модели"}, {"role": "user", "content": "Second task"}])
+
+    def test_context_overflow_compresses_history_and_retries_once(self):
+        session, database, original, _ = self.seed_compression_history()
+        config = "compression:\n  threshold_tokens: '100000'\n  protect_first_n: 2\n  protect_last_n: 2\n"
+        result, recorded = self.chat_with_profile(extra_config=config, args=("--resume", session), query="New task")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "Ответ модели\n")
+        self.assertIn("Context window exceeded", result.stderr)
+        rejected, summary, answer = recorded[len(original):]
+        self.assertIn("Archiveword", str(rejected["messages"]))
+        self.assertNotIn("tools", summary)
+        self.assertNotIn("Archiveword", str(answer["messages"]))
+        self.assertIn("[CONTEXT SUMMARY]:", str(answer["messages"]))
+        with sqlite3.connect(database) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM messages WHERE active = 1 AND _compressed_summary = 1")
+                             .fetchone(), (1,))
+
+    def test_context_overflow_after_a_tool_call_is_not_retried(self):
+        session, database, original, _ = self.seed_compression_history()
+        config = "compression:\n  threshold_tokens: '100000'\n  protect_first_n: 2\n  protect_last_n: 2\n"
+        result, recorded = self.chat_with_profile(extra_config=config, args=("--resume", session), query="read the fixture")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("retrying", result.stderr)
+        self.assertEqual(len(recorded) - len(original), 2)
+        with sqlite3.connect(database) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM messages WHERE _compressed_summary = 1").fetchone(), (0,))
 
     def test_invalid_compaction_summary_keeps_the_original_context(self):
         session, database, original, config = self.seed_compression_history()

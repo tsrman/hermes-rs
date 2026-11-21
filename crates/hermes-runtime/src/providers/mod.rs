@@ -12,6 +12,8 @@ pub enum ProviderError {
     InvalidEvent,
     InvalidSse(SseError),
     IncompleteStream,
+    /// The request exceeds the model's context window.
+    ContextOverflow,
 }
 
 impl ProviderError {

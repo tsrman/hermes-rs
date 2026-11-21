@@ -93,6 +93,17 @@ class Handler(BaseHTTPRequestHandler):
         messages = body.get("messages", [])
         if scenario == "stall_on_resume" and messages and messages[-1].get("content") == "hold resume":
             self.server.release.wait(timeout=15)
+        if (
+            scenario in ("overflow", "overflow_tools")
+            and not messages[0]["content"].startswith("Summarize completed conversation history")
+            and "Archiveword" in json.dumps(messages)
+            and (scenario == "overflow" or any(m.get("role") == "tool" and m.get("tool_call_id") != "preserved" for m in messages))
+        ):
+            self.send_json(400, {"error": {
+                "code": "context_length_exceeded",
+                "message": "This model's maximum context length is 8192 tokens.",
+            }})
+            return
         if scenario == "compact" and messages and messages[-1].get("content") == "Cancel this turn":
             self.server.release.wait(timeout=15)
         function = {"name": "read_file", "arguments": '{"path":"fixture.txt"}'}
@@ -126,7 +137,7 @@ class Handler(BaseHTTPRequestHandler):
             wants_tool = not summary or scenario == "iteration_summary_tool"
             call_id = f"iteration-{len(self.server.requests)}"
         else:
-            wants_tool = scenario in ("tool", "partial_tool", "tool_retry", "tool_rate_limit", "fallback_after_tool", "partial_after_tool", "stall_on_resume") and not any(
+            wants_tool = scenario in ("tool", "overflow_tools", "partial_tool", "tool_retry", "tool_rate_limit", "fallback_after_tool", "partial_after_tool", "stall_on_resume") and not any(
                 isinstance(message, dict) and message.get("role") == "tool"
                 for message in messages
             )
@@ -142,7 +153,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             message = {"role": "assistant", "content": "Ответ модели"}
             finish_reason = "stop"
-        if scenario in ("compact", "compact_failure") and messages[0]["content"].startswith("Summarize completed conversation history"):
+        if scenario in ("compact", "compact_failure", "overflow", "overflow_tools") and messages[0]["content"].startswith("Summarize completed conversation history"):
             message["content"] = "Earlier turns resolved the fixture checks."
             if scenario == "compact_failure":
                 finish_reason = "length"
@@ -195,7 +206,7 @@ def main():
         "text", "tool", "partial_tool", "stall", "tool_retry", "tool_rate_limit",
         "fallback_after_tool", "fallback_auth", "partial_text", "disconnect_once",
         "iteration_limit", "iteration_summary_tool", "partial_after_tool", "stall_on_resume", "burst", "skill",
-        "compact", "compact_failure", "local_tools",
+        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools",
     ), default="text")
     args = parser.parse_args()
     if bool(args.tls_cert) != bool(args.tls_key):

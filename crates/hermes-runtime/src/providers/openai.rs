@@ -166,12 +166,18 @@ pub(super) async fn open_stream(
                 if response.status().is_success() {
                     return Ok(response);
                 }
-                let retryable = !last_attempt
-                    && match status {
-                        429 => is_transient_rate_limit(response).await?,
-                        500 | 502 | 503 | 504 | 529 => true,
-                        _ => false,
-                    };
+                let retryable = match status {
+                    429 if !last_attempt => is_transient_rate_limit(response).await?,
+                    400 | 413 => {
+                        return Err(if is_context_overflow(response).await {
+                            ProviderError::ContextOverflow
+                        } else {
+                            ProviderError::HttpStatus(status)
+                        });
+                    }
+                    500 | 502 | 503 | 504 | 529 => !last_attempt,
+                    _ => false,
+                };
                 if !retryable {
                     return Err(ProviderError::HttpStatus(status));
                 }
@@ -214,6 +220,47 @@ pub(super) fn endpoint_url(base_url: &str, suffix: &str) -> Result<String, Provi
         endpoint.path().trim_end_matches('/')
     ));
     Ok(endpoint.to_string())
+}
+
+/// Whether a 400 or 413 error body reports a prompt larger than the context window.
+async fn is_context_overflow(mut response: reqwest::Response) -> bool {
+    const MAX_ERROR_BYTES: usize = 65_536;
+    let mut body = Vec::new();
+    while let Ok(Some(chunk)) = response.chunk().await {
+        if body.len().saturating_add(chunk.len()) > MAX_ERROR_BYTES {
+            return false;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    context_overflow_body(&body)
+}
+
+pub(super) fn context_overflow_body(body: &[u8]) -> bool {
+    let Ok(error) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    let code = error
+        .pointer("/error/code")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let message = error
+        .pointer("/error/message")
+        .or_else(|| error.get("message"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    code == "context_length_exceeded"
+        || [
+            "maximum context length",
+            "context length",
+            "context window",
+            "prompt is too long",
+            "too many tokens",
+            "request_too_large",
+        ]
+        .iter()
+        .any(|signal| message.contains(signal))
+        || error.pointer("/error/type").and_then(Value::as_str) == Some("request_too_large")
 }
 
 pub(super) async fn is_transient_rate_limit(
@@ -329,4 +376,22 @@ pub(super) async fn is_transient_rate_limit(
     Ok(code == "rate_limit_exceeded"
         || has_reset
         || rate_signals.iter().any(|signal| message.contains(signal)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::context_overflow_body;
+
+    #[test]
+    fn recognises_context_overflow_errors_from_each_api() {
+        let openai = br#"{"error":{"code":"context_length_exceeded","message":"x"}}"#;
+        let anthropic = br#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 250000 tokens > 200000 maximum"}}"#;
+        let too_large = br#"{"error":{"type":"request_too_large","message":"Request exceeds the maximum size"}}"#;
+        let other = br#"{"error":{"code":"invalid_api_key","message":"bad key"}}"#;
+        assert!(context_overflow_body(openai));
+        assert!(context_overflow_body(anthropic));
+        assert!(context_overflow_body(too_large));
+        assert!(!context_overflow_body(other));
+        assert!(!context_overflow_body(b"not json"));
+    }
 }
