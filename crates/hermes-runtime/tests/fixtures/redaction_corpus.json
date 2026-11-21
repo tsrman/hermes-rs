@@ -392,6 +392,96 @@
    "input": "PW=abcdefghijklmnop1234567890",
    "force": true,
    "output": "PW=abcdef...7890"
+  },
+  {
+   "input": "SSH_AUTH_SOCK=$HOME/.ssh/agent.sock",
+   "force": true,
+   "output": "SSH_AUTH_SOCK=$HOME/.ssh/agent.sock"
+  },
+  {
+   "input": "DOCKER_AUTH_CONFIG=/home/u/.docker",
+   "force": true,
+   "output": "DOCKER_AUTH_CONFIG=/home/u/.docker"
+  },
+  {
+   "input": "API_KEY=true",
+   "force": true,
+   "output": "API_KEY=true"
+  },
+  {
+   "input": "SESSION_TOKEN=os.getenv('SESSION')",
+   "force": true,
+   "output": "SESSION_TOKEN=os.getenv('SESSION')"
+  },
+  {
+   "input": "PGPASSWORD=s3cr3tpass",
+   "force": true,
+   "output": "PGPASSWORD=***"
+  },
+  {
+   "input": "DB_PASSWORD=/etc/db/pass",
+   "force": true,
+   "output": "DB_PASSWORD=***"
+  },
+  {
+   "input": "AUTHOR=Smith",
+   "force": true,
+   "output": "AUTHOR=Smith"
+  },
+  {
+   "input": "CLIENT_SECRET=<your secret>",
+   "force": true,
+   "output": "CLIENT_SECRET=*** secret>"
+  },
+  {
+   "input": "SECRET_KEY=Zq8x4kLm2PvN7wRt",
+   "force": true,
+   "output": "SECRET_KEY=***"
+  },
+  {
+   "input": "ID_TOKEN=short",
+   "force": true,
+   "output": "ID_TOKEN=***"
+  },
+  {
+   "input": "CACHE_KEY=abcdef",
+   "force": true,
+   "output": "CACHE_KEY=abcdef"
+  },
+  {
+   "input": "export SIGNING_KEY=\"Zq8x4kLm2PvN7wRt9s\"",
+   "force": true,
+   "output": "export SIGNING_KEY=\"***\""
+  },
+  {
+   "input": "API_KEY=***",
+   "force": true,
+   "output": "API_KEY=***"
+  },
+  {
+   "input": "A=1 B_TOKEN=Zq8x4kLm2PvN7wRt C=2",
+   "force": true,
+   "output": "A=1 B_TOKEN=*** C=2"
+  },
+  {
+   "input": "app_secret=Zq8x4kLm2PvN7wRt9s",
+   "force": true,
+   "output": "app_secret=***"
+  },
+  {
+   "input": "tokenizer=cl100k_base",
+   "force": true,
+   "output": "tokenizer=cl100k_base"
+  },
+  {
+   "input": "AUTH_MODE=oauth2",
+   "force": true,
+   "output": "AUTH_MODE=***"
+  },
+  {
+   "input": "ENCRYPTION_KEY=/opt/keys/Zq8x4kLm2PvN7wRt/enc",
+   "force": true,
+   "output": "ENCRYPTION_KEY=/opt/k.../enc"
   }
  ],
  "json_field": [

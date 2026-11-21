@@ -51,6 +51,12 @@ CORPUS = {
         f"MY_SECRET = \"{A}\"", "KEYBOARD=us", "PASSAGE=one", "TOKEN_LIMIT=4096", "API_KEY=",
         f"openai_key={A}", "export PATH=/usr/bin", "AWS_SECRET_ACCESS_KEY=" + A,
         "MAX_TOKENS=1000", "SECRET=${SECRET_FROM_ENV}", f"PW={A}",
+        "SSH_AUTH_SOCK=$HOME/.ssh/agent.sock", "DOCKER_AUTH_CONFIG=/home/u/.docker", "API_KEY=true",
+        "SESSION_TOKEN=os.getenv('SESSION')", "PGPASSWORD=s3cr3tpass", "DB_PASSWORD=/etc/db/pass",
+        "AUTHOR=Smith", "CLIENT_SECRET=<your secret>", "SECRET_KEY=Zq8x4kLm2PvN7wRt", "ID_TOKEN=short",
+        "CACHE_KEY=abcdef", "export SIGNING_KEY=\"Zq8x4kLm2PvN7wRt9s\"", "API_KEY=***",
+        "A=1 B_TOKEN=Zq8x4kLm2PvN7wRt C=2", "app_secret=Zq8x4kLm2PvN7wRt9s", "tokenizer=cl100k_base",
+        "AUTH_MODE=oauth2", "ENCRYPTION_KEY=/opt/keys/Zq8x4kLm2PvN7wRt/enc",
     ],
     "json_field": [
         json.dumps({"api_key": A}), json.dumps({"password": "hunter2hunter2", "user": "bob"}),

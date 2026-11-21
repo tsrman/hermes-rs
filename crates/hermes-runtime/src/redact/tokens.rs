@@ -186,7 +186,7 @@ pub(super) fn redact_jwt(text: &str) -> String {
 }
 
 /// `Regex::replace_all` for the lookaround engine.
-fn replace_all(
+pub(super) fn replace_all(
     pattern: &Fancy,
     text: &str,
     replacement: impl Fn(&Captures<'_, str>) -> String,
