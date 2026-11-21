@@ -16,6 +16,7 @@ use crate::prompt::{load_cli_context, PromptSettings};
 use crate::providers::{Provider, ProviderError};
 use crate::skills::{SkillCatalog, SKILLS_LIST, SKILL_VIEW};
 use crate::terminal::{self, TERMINAL};
+use crate::tool_policy::ToolPolicy;
 use crate::web_tools::{self, WebSettings, WEB_EXTRACT, WEB_SEARCH};
 
 pub use crate::file_tools::{ApprovalAction, ApprovalDecision, ApprovalRequest};
@@ -47,6 +48,7 @@ pub struct TurnHistory {
     pub(crate) system_prompt: Option<String>,
     pub(crate) messages: Vec<Value>,
     pub(crate) skills: SkillCatalog,
+    pub(crate) policy: ToolPolicy,
     pub(crate) compaction: Option<CompactedHistory>,
     pub(crate) write_files: bool,
     pub(crate) terminal_enabled: bool,
@@ -80,13 +82,19 @@ impl TurnHistory {
     ) {
         self.write_files = options.can_write_files();
         self.terminal_enabled = options.can_run_terminal();
-        self.skills = SkillCatalog::load(
-            options.profile,
-            options.root,
-            &settings.skills,
-            self.write_files,
-            self.terminal_enabled,
-        );
+        self.policy = options.tools.clone();
+        // The skills index is built only when a skills tool is enabled.
+        self.skills = if self.policy.allows_skills() {
+            SkillCatalog::load(
+                options.profile,
+                options.root,
+                &settings.skills,
+                self.write_files,
+                self.terminal_enabled,
+            )
+        } else {
+            SkillCatalog::default()
+        };
         if self.system_prompt.is_none() {
             let context = load_cli_context(
                 options.profile,
@@ -113,7 +121,7 @@ impl TurnHistory {
         let system = route.system_prompt(self.system_prompt.as_deref());
         let write_files = self.write_files;
         let terminal_enabled = self.terminal_enabled;
-        let old_prefix = prefix_bytes(&system, write_files, terminal_enabled);
+        let old_prefix = prefix_bytes(&system, write_files, terminal_enabled, &self.policy);
         let input_bytes = match trigger {
             CompactionTrigger::Estimate { query } => {
                 old_prefix + messages_bytes(&self.messages) + query.len()
@@ -149,14 +157,19 @@ impl TurnHistory {
         let settings = prompt.clone();
         let model = route.model.clone();
         let provider = route.provider_name;
+        let skills_allowed = self.policy.allows_skills();
         let refreshed = tokio::task::spawn_blocking(move || {
-            let skills = SkillCatalog::load(
-                profile.as_deref(),
-                &root,
-                &settings.skills,
-                write_files,
-                terminal_enabled,
-            );
+            let skills = if skills_allowed {
+                SkillCatalog::load(
+                    profile.as_deref(),
+                    &root,
+                    &settings.skills,
+                    write_files,
+                    terminal_enabled,
+                )
+            } else {
+                SkillCatalog::default()
+            };
             let prompt = load_cli_context(profile.as_deref(), &root, &settings, skills.prompt());
             (prompt.render(&model, provider), skills)
         })
@@ -165,7 +178,7 @@ impl TurnHistory {
             return CompactionOutcome::Skipped;
         };
         // A newly loaded memory or project file can outweigh the savings.
-        if prefix_bytes(&system, write_files, terminal_enabled) + summary_bytes
+        if prefix_bytes(&system, write_files, terminal_enabled, &self.policy) + summary_bytes
             >= old_prefix + removed_bytes
         {
             return CompactionOutcome::Skipped;
@@ -213,6 +226,8 @@ pub struct TurnOptions<'a> {
     pub max_turns: u32,
     pub approval_timeout_secs: Option<u32>,
     pub terminal_local: bool,
+    /// Tools the profile's toolset configuration allows.
+    pub tools: &'a ToolPolicy,
 }
 
 impl TurnOptions<'_> {
@@ -254,18 +269,19 @@ where
         &system_prompt,
         options.can_write_files(),
         options.can_run_terminal(),
+        options.tools,
     );
-    let memory = options
-        .memory
-        .filter(|settings| settings.offered() && options.profile.is_some());
+    let memory = options.memory.filter(|settings| {
+        settings.offered() && options.profile.is_some() && options.tools.allows(MEMORY)
+    });
     if memory.is_some() {
         tools.push(memory_tool::schema());
     }
     if let Some(web) = options.web {
-        if web.offers_search() {
+        if web.offers_search() && options.tools.allows(WEB_SEARCH) {
             tools.push(web_tools::search_schema());
         }
-        if web.offers_extract() {
+        if web.offers_extract() && options.tools.allows(WEB_EXTRACT) {
             tools.push(web_tools::extract_schema());
         }
     }
@@ -277,7 +293,7 @@ where
     let mut fallback_routes = fallbacks.iter();
     for _ in 0..options.max_turns {
         let result = loop {
-            let request = json!({"model": route.model, "messages": messages, "tools": tools});
+            let request = chat_request(&route.model, &messages, &tools);
             let mut emitted_text = false;
             let result = route
                 .provider
@@ -333,6 +349,12 @@ where
         for call in result.tool_calls {
             on_event(TurnEvent::ToolStarted(&call.name));
             let output = match call.name.as_str() {
+                // A tool the toolset configuration does not allow is unknown, whatever the model sends.
+                name if !options.tools.allows(name)
+                    && !options.mcp.is_some_and(|_| name.starts_with("mcp_")) =>
+                {
+                    json!({"error": format!("Unknown tool: {name}")})
+                }
                 "read_file" => files.read(&call.arguments),
                 SEARCH_FILES => files.search(&call.arguments),
                 WRITE_FILE | PATCH => {
@@ -366,14 +388,20 @@ where
                     options.profile.unwrap_or(Path::new("")),
                     &call.arguments,
                 ),
-                WEB_SEARCH if options.web.is_some_and(WebSettings::offers_search) => {
+                WEB_SEARCH
+                    if options.web.is_some_and(WebSettings::offers_search)
+                        && options.tools.allows(WEB_SEARCH) =>
+                {
                     web_tools::search(
                         options.web.unwrap_or(&WebSettings::default()),
                         &call.arguments,
                     )
                     .await
                 }
-                WEB_EXTRACT if options.web.is_some_and(WebSettings::offers_extract) => {
+                WEB_EXTRACT
+                    if options.web.is_some_and(WebSettings::offers_extract)
+                        && options.tools.allows(WEB_EXTRACT) =>
+                {
                     web_tools::extract(
                         options.web.unwrap_or(&WebSettings::default()),
                         &call.arguments,
@@ -412,7 +440,7 @@ where
     }
     on_event(TurnEvent::IterationLimit(options.max_turns));
     messages.push(json!({"role": "user", "content": ITERATION_SUMMARY_REQUEST}));
-    let request = json!({"model": route.model, "messages": messages, "tools": tools});
+    let request = chat_request(&route.model, &messages, &tools);
     // Keep the active route and tool definitions so the provider can reuse its prompt prefix.
     // Emit the summary only after verifying that the completion contains no tool calls.
     let summary = route
@@ -430,11 +458,36 @@ where
     Ok(TurnOutcome::IterationLimit)
 }
 
-fn prefix_bytes(system: &str, write_files: bool, terminal_enabled: bool) -> usize {
-    system.len() + messages_bytes(&tools_for_prompt(system, write_files, terminal_enabled))
+/// A chat request. An empty `tools` array is omitted, since providers reject it.
+fn chat_request(model: &str, messages: &[Value], tools: &[Value]) -> Value {
+    let mut request = json!({"model": model, "messages": messages});
+    if !tools.is_empty() {
+        request["tools"] = json!(tools);
+    }
+    request
 }
 
-fn tools_for_prompt(system: &str, write_files: bool, terminal_enabled: bool) -> Vec<Value> {
+fn prefix_bytes(
+    system: &str,
+    write_files: bool,
+    terminal_enabled: bool,
+    policy: &ToolPolicy,
+) -> usize {
+    system.len()
+        + messages_bytes(&tools_for_prompt(
+            system,
+            write_files,
+            terminal_enabled,
+            policy,
+        ))
+}
+
+fn tools_for_prompt(
+    system: &str,
+    write_files: bool,
+    terminal_enabled: bool,
+    policy: &ToolPolicy,
+) -> Vec<Value> {
     let mut tools = vec![
         json!({
             "type": "function",
@@ -463,6 +516,11 @@ fn tools_for_prompt(system: &str, write_files: bool, terminal_enabled: bool) -> 
     if terminal_enabled {
         tools.push(terminal::schema());
     }
+    tools.retain(|tool| {
+        tool["function"]["name"]
+            .as_str()
+            .is_some_and(|name| policy.allows(name))
+    });
     tools
 }
 

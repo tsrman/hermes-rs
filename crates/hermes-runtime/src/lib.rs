@@ -11,6 +11,7 @@ pub mod providers;
 mod skills;
 pub mod storage;
 mod terminal;
+pub mod tool_policy;
 pub mod turn;
 pub mod url_safety;
 pub mod web_tools;

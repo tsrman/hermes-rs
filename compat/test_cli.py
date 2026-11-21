@@ -310,6 +310,33 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("memory", [t["function"]["name"] for t in latest["tools"]])
         self.assertNotIn("You have persistent memory", latest["messages"][0]["content"])
 
+    def test_toolset_configuration_limits_the_tools_and_their_prompt_guidance(self):
+        names = lambda request: {tool["function"]["name"] for tool in request["tools"]}
+        dotenv = "SEARXNG_URL=http://127.0.0.1:9\n"
+        result, recorded = self.chat_with_profile(dotenv=dotenv)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue({"read_file", "search_files", "memory", "web_search", "web_extract"} <= names(recorded[0]))
+        self.assertIn("You have persistent memory", recorded[0]["messages"][0]["content"])
+
+        only_web, recorded = self.chat_with_profile(
+            extra_config="platform_toolsets:\n  cli: [web]\n", dotenv=dotenv, query="web only")
+        self.assertEqual(only_web.returncode, 0, only_web.stderr)
+        self.assertEqual(names(recorded[-1]), {"web_search", "web_extract"})
+        self.assertNotIn("You have persistent memory", recorded[-1]["messages"][0]["content"])
+
+        no_memory, recorded = self.chat_with_profile(
+            extra_config="agent:\n  disabled_toolsets: ['memory', 'web']\n", dotenv=dotenv, query="no memory")
+        self.assertEqual(no_memory.returncode, 0, no_memory.stderr)
+        offered = names(recorded[-1])
+        self.assertIn("read_file", offered)
+        self.assertFalse({"memory", "web_search", "web_extract"} & offered)
+        self.assertNotIn("You have persistent memory", recorded[-1]["messages"][0]["content"])
+
+        none, recorded = self.chat_with_profile(
+            extra_config="platform_toolsets:\n  cli: []\n", dotenv=dotenv, query="nothing")
+        self.assertEqual(none.returncode, 0, none.stderr)
+        self.assertNotIn("tools", recorded[-1])  # an empty tool list is not sent
+
     def test_invalid_compaction_summary_keeps_the_original_context(self):
         session, database, original, config = self.seed_compression_history()
         result, recorded = self.chat_with_profile(extra_config=config, args=("--resume", session), query="New task")

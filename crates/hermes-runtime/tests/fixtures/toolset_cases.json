@@ -1,0 +1,248 @@
+[
+ {
+  "name": "default",
+  "config": {},
+  "tools": [
+   "memory",
+   "patch",
+   "read_file",
+   "search_files",
+   "skill_view",
+   "skills_list",
+   "terminal",
+   "web_extract",
+   "web_search",
+   "write_file"
+  ]
+ },
+ {
+  "name": "web_only",
+  "config": {
+   "platform_toolsets": {
+    "cli": [
+     "web"
+    ]
+   }
+  },
+  "tools": [
+   "web_extract",
+   "web_search"
+  ]
+ },
+ {
+  "name": "terminal_and_file",
+  "config": {
+   "platform_toolsets": {
+    "cli": [
+     "terminal",
+     "file"
+    ]
+   }
+  },
+  "tools": [
+   "patch",
+   "read_file",
+   "search_files",
+   "terminal",
+   "write_file"
+  ]
+ },
+ {
+  "name": "composite",
+  "config": {
+   "platform_toolsets": {
+    "cli": [
+     "hermes-cli"
+    ]
+   }
+  },
+  "tools": [
+   "memory",
+   "patch",
+   "read_file",
+   "search_files",
+   "skill_view",
+   "skills_list",
+   "terminal",
+   "web_extract",
+   "web_search",
+   "write_file"
+  ]
+ },
+ {
+  "name": "legacy_alias",
+  "config": {
+   "platform_toolsets": {
+    "cli": [
+     "hermes"
+    ]
+   }
+  },
+  "tools": [
+   "memory",
+   "patch",
+   "read_file",
+   "search_files",
+   "skill_view",
+   "skills_list",
+   "terminal",
+   "web_extract",
+   "web_search",
+   "write_file"
+  ]
+ },
+ {
+  "name": "safe",
+  "config": {
+   "platform_toolsets": {
+    "cli": [
+     "safe"
+    ]
+   }
+  },
+  "tools": [
+   "web_extract",
+   "web_search"
+  ]
+ },
+ {
+  "name": "empty",
+  "config": {
+   "platform_toolsets": {
+    "cli": []
+   }
+  },
+  "tools": []
+ },
+ {
+  "name": "explicit_mixed",
+  "config": {
+   "platform_toolsets": {
+    "cli": [
+     "web",
+     "memory",
+     "skills",
+     "todo"
+    ]
+   }
+  },
+  "tools": [
+   "memory",
+   "skill_view",
+   "skills_list",
+   "web_extract",
+   "web_search"
+  ]
+ },
+ {
+  "name": "disabled_web",
+  "config": {
+   "agent": {
+    "disabled_toolsets": [
+     "web"
+    ]
+   }
+  },
+  "tools": [
+   "memory",
+   "patch",
+   "read_file",
+   "search_files",
+   "skill_view",
+   "skills_list",
+   "terminal",
+   "write_file"
+  ]
+ },
+ {
+  "name": "disabled_memory_list",
+  "config": {
+   "agent": {
+    "disabled_toolsets": [
+     "memory",
+     "skills"
+    ]
+   }
+  },
+  "tools": [
+   "patch",
+   "read_file",
+   "search_files",
+   "terminal",
+   "web_extract",
+   "web_search",
+   "write_file"
+  ]
+ },
+ {
+  "name": "disabled_composite",
+  "config": {
+   "agent": {
+    "disabled_toolsets": [
+     "debugging"
+    ]
+   }
+  },
+  "tools": [
+   "memory",
+   "skill_view",
+   "skills_list"
+  ]
+ },
+ {
+  "name": "disabled_json_string",
+  "config": {
+   "agent": {
+    "disabled_toolsets": "['memory']"
+   }
+  },
+  "tools": [
+   "patch",
+   "read_file",
+   "search_files",
+   "skill_view",
+   "skills_list",
+   "terminal",
+   "web_extract",
+   "web_search",
+   "write_file"
+  ]
+ },
+ {
+  "name": "other_platform_ignored",
+  "config": {
+   "platform_toolsets": {
+    "telegram": [
+     "web"
+    ]
+   }
+  },
+  "tools": [
+   "memory",
+   "patch",
+   "read_file",
+   "search_files",
+   "skill_view",
+   "skills_list",
+   "terminal",
+   "web_extract",
+   "web_search",
+   "write_file"
+  ]
+ },
+ {
+  "name": "unknown_name",
+  "config": {
+   "platform_toolsets": {
+    "cli": [
+     "web",
+     "no-such-toolset"
+    ]
+   }
+  },
+  "tools": [
+   "web_extract",
+   "web_search"
+  ]
+ }
+]

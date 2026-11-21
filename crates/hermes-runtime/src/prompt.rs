@@ -28,6 +28,13 @@ pub struct PromptSettings {
     user_char_limit: usize,
     #[serde(default)]
     pub(crate) skills: SkillSettings,
+    /// Whether the memory tool is enabled, which adds its guidance to the prompt.
+    #[serde(default = "enabled")]
+    pub(crate) memory_tool: bool,
+}
+
+fn enabled() -> bool {
+    true
 }
 
 impl Default for PromptSettings {
@@ -39,6 +46,7 @@ impl Default for PromptSettings {
             memory_char_limit: 2_200,
             user_char_limit: 1_375,
             skills: SkillSettings::default(),
+            memory_tool: true,
         }
     }
 }
@@ -57,6 +65,7 @@ impl PromptSettings {
                 .unwrap_or(defaults.memory_char_limit),
             user_char_limit: count(&memory["user_char_limit"]).unwrap_or(defaults.user_char_limit),
             skills: SkillSettings::from_config(&config["skills"]),
+            memory_tool: true,
         }
     }
 }
@@ -85,7 +94,7 @@ pub(crate) fn load_cli_context(
         Some(truncate(&text, "SOUL.md", &path, cap))
     });
     let mut tool_guidance = Vec::new();
-    if profile.is_some() {
+    if profile.is_some() && settings.memory_tool {
         tool_guidance.extend(crate::memory_tool::guidance(
             settings.memory_enabled,
             settings.user_profile_enabled,

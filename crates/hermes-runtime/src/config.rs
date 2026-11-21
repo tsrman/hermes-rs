@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::mcp::McpServerConfig;
 use crate::memory_tool::MemorySettings;
 use crate::prompt::PromptSettings;
+use crate::tool_policy::ToolPolicy;
 use crate::web_tools::WebSettings;
 
 pub use crate::compaction::CompactionSettings;
@@ -46,6 +47,7 @@ pub struct ChatSettings {
     pub mcp_servers: Vec<McpServerConfig>,
     pub web: WebSettings,
     pub memory: MemorySettings,
+    pub tools: ToolPolicy,
     openai_api_key: Option<String>,
     openai_base_url: Option<String>,
     anthropic_api_key: Option<String>,
@@ -78,6 +80,7 @@ impl Default for ChatSettings {
             mcp_servers: Vec::new(),
             web: WebSettings::default(),
             memory: MemorySettings::default(),
+            tools: ToolPolicy::allow_all(),
             openai_api_key: None,
             openai_base_url: None,
             anthropic_api_key: None,
@@ -313,6 +316,8 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.mcp_servers = mcp_servers(&config, &secrets);
     settings.web = WebSettings::from_config(&config, &secrets);
     settings.memory = MemorySettings::from_config(&config);
+    settings.tools = ToolPolicy::from_config(&config);
+    settings.prompt.memory_tool = settings.tools.allows("memory");
     settings.terminal_local = match &config["terminal"]["backend"] {
         serde_yaml::Value::Null => terminal_env.as_deref().map_or_else(
             || {

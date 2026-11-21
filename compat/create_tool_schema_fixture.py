@@ -3,7 +3,9 @@
 
 Usage: create_tool_schema_fixture.py <reference checkout> <schema directory> <fixture.json>
 Run it with the reference interpreter. Writes one `<name>.json` per ported tool, which the
-Rust runtime includes at build time, and a fixture with the full default tool list in order.
+Rust runtime includes at build time, a fixture with the full default tool list in order,
+`toolsets.json` (every toolset resolved to its tools) beside the schema directory, and
+`toolset_cases.json` next to the fixture: which tools the CLI exposes for sample configs.
 """
 
 import json
@@ -13,6 +15,27 @@ import tempfile
 from pathlib import Path
 
 PORTED = ["memory", "web_search", "web_extract", "todo_list", "session_search", "browser_cdp"]
+
+
+# Tools the Rust CLI implements; the cases only record these.
+RUST_TOOLS = {"read_file", "write_file", "patch", "search_files", "terminal", "skills_list",
+              "skill_view", "web_search", "web_extract", "memory"}
+TOOLSET_CASES = {
+    "default": {},
+    "web_only": {"platform_toolsets": {"cli": ["web"]}},
+    "terminal_and_file": {"platform_toolsets": {"cli": ["terminal", "file"]}},
+    "composite": {"platform_toolsets": {"cli": ["hermes-cli"]}},
+    "legacy_alias": {"platform_toolsets": {"cli": ["hermes"]}},
+    "safe": {"platform_toolsets": {"cli": ["safe"]}},
+    "empty": {"platform_toolsets": {"cli": []}},
+    "explicit_mixed": {"platform_toolsets": {"cli": ["web", "memory", "skills", "todo"]}},
+    "disabled_web": {"agent": {"disabled_toolsets": ["web"]}},
+    "disabled_memory_list": {"agent": {"disabled_toolsets": ["memory", "skills"]}},
+    "disabled_composite": {"agent": {"disabled_toolsets": ["debugging"]}},
+    "disabled_json_string": {"agent": {"disabled_toolsets": "['memory']"}},
+    "other_platform_ignored": {"platform_toolsets": {"telegram": ["web"]}},
+    "unknown_name": {"platform_toolsets": {"cli": ["web", "no-such-toolset"]}},
+}
 
 
 def main():
@@ -32,6 +55,23 @@ def main():
             raise SystemExit(f"reference has no tool {name!r}")
         (schemas / f"{name}.json").write_text(
             json.dumps(schema, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    import toolsets
+    from hermes_cli.tools_config import _get_platform_tools
+
+    resolved = {name: sorted(toolsets.resolve_toolset(name)) for name in sorted(toolsets.TOOLSETS)}
+    (schemas.parent / "toolsets.json").write_text(
+        json.dumps(resolved, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    cases = []
+    for name, config in TOOLSET_CASES.items():
+        enabled = _get_platform_tools(config, "cli")
+        tools = model_tools.get_tool_definitions(
+            enabled_toolsets=sorted(enabled),
+            disabled_toolsets=(config.get("agent") or {}).get("disabled_toolsets"), quiet_mode=True)
+        cases.append({"name": name, "config": config,
+                      "tools": sorted(t["function"]["name"] for t in tools
+                                      if t["function"]["name"] in RUST_TOOLS)})
+    (fixture.parent / "toolset_cases.json").write_text(
+        json.dumps(cases, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     default = model_tools.get_tool_definitions(quiet_mode=True)
     fixture.write_text(json.dumps(default, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     print([tool["function"]["name"] for tool in default])

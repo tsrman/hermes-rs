@@ -13,6 +13,7 @@ use hermes_runtime::providers::{
     AnthropicProvider, OpenAiProvider, Provider, ProviderError, ResponsesProvider,
 };
 use hermes_runtime::storage::SessionWriter;
+use hermes_runtime::tool_policy::ToolPolicy;
 use hermes_runtime::turn::{
     run_turn, ApprovalDecision, ApprovalRequest, CompactionOutcome, CompactionTrigger, ModelRoute,
     TurnError, TurnEvent, TurnOptions, TurnOutcome,
@@ -66,6 +67,8 @@ pub struct ChatRequest {
     web: WebSettings,
     #[serde(default)]
     memory: MemorySettings,
+    #[serde(default)]
+    tools: ToolPolicy,
     model_override: Option<String>,
     primary: Route,
     fallbacks: Vec<Route>,
@@ -169,6 +172,7 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
         mcp_servers: settings.mcp_servers,
         web: settings.web,
         memory: settings.memory,
+        tools: settings.tools,
         model_override: args.model,
         primary: Route {
             model: settings.model,
@@ -244,6 +248,7 @@ where
         mcp: Some(&mcp),
         web: Some(&request.web),
         memory: Some(&request.memory),
+        tools: &request.tools,
         root,
         profile: home,
         max_turns: request.max_turns,
