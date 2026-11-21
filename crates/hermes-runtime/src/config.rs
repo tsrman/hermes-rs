@@ -29,6 +29,8 @@ pub(crate) fn truthy(value: &serde_yaml::Value, default: bool) -> bool {
 pub struct ChatSettings {
     pub model: Option<String>,
     pub provider: &'static str,
+    /// Use the OpenAI Responses API instead of Chat Completions.
+    pub responses: bool,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub api_max_attempts: u32,
@@ -47,6 +49,7 @@ pub struct ChatSettings {
 pub struct FallbackSettings {
     pub model: String,
     pub provider: &'static str,
+    pub responses: bool,
     pub base_url: String,
     pub api_key: Option<String>,
 }
@@ -56,6 +59,7 @@ impl Default for ChatSettings {
         Self {
             model: None,
             provider: "custom",
+            responses: false,
             base_url: None,
             api_key: None,
             api_max_attempts: 3,
@@ -247,6 +251,9 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
                 Some("anthropic") => "anthropic",
                 Some(provider) => return Err(format!("provider '{provider}' is not supported")),
             };
+            settings.responses = settings.provider != "anthropic"
+                && model.get("api_mode").and_then(serde_yaml::Value::as_str)
+                    == Some("codex_responses");
             settings.model = model
                 .get("default")
                 .and_then(serde_yaml::Value::as_str)
@@ -339,14 +346,13 @@ fn fallback_settings(
         "anthropic" => "anthropic",
         _ => return None,
     };
-    let expected_mode = if provider == "anthropic" {
-        "anthropic_messages"
-    } else {
-        "chat_completions"
+    let responses = match (provider, field("api_mode")) {
+        ("anthropic", None | Some("anthropic_messages")) => false,
+        ("anthropic", _) => return None,
+        (_, None | Some("chat_completions")) => false,
+        (_, Some("codex_responses")) => true,
+        _ => return None,
     };
-    if field("api_mode").is_some_and(|mode| mode != expected_mode) {
-        return None;
-    }
     let model = field("model")?;
     let base_url = field("base_url").or(default_base_url(provider))?;
     let api_key = if let Some(key) = field("api_key") {
@@ -370,6 +376,7 @@ fn fallback_settings(
     Some(FallbackSettings {
         model: model.to_owned(),
         provider,
+        responses,
         base_url: base_url.to_owned(),
         api_key,
     })

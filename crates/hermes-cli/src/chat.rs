@@ -7,7 +7,7 @@ use std::time::Duration;
 use clap::Args;
 use hermes_runtime::config::{load_chat_settings, CompactionSettings};
 use hermes_runtime::prompt::PromptSettings;
-use hermes_runtime::providers::{AnthropicProvider, OpenAiProvider, Provider};
+use hermes_runtime::providers::{AnthropicProvider, OpenAiProvider, Provider, ResponsesProvider};
 use hermes_runtime::storage::SessionWriter;
 use hermes_runtime::turn::{
     run_turn, ApprovalDecision, ApprovalRequest, CompactionOutcome, ModelRoute, TurnEvent,
@@ -64,6 +64,8 @@ pub struct ChatRequest {
 struct Route {
     model: Option<String>,
     provider: String,
+    #[serde(default)]
+    responses: bool,
     base_url: String,
     api_key: String,
 }
@@ -81,6 +83,12 @@ impl Route {
         let provider = if provider_name == "anthropic" {
             Provider::Anthropic(
                 AnthropicProvider::new(&self.base_url, &self.api_key, timeout)
+                    .map_err(setup)?
+                    .with_max_attempts(attempts),
+            )
+        } else if self.responses {
+            Provider::Responses(
+                ResponsesProvider::new(&self.base_url, &self.api_key, timeout)
                     .map_err(setup)?
                     .with_max_attempts(attempts),
             )
@@ -151,6 +159,7 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
         primary: Route {
             model: settings.model,
             provider: settings.provider.into(),
+            responses: settings.responses,
             base_url,
             api_key,
         },
@@ -160,6 +169,7 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
             .map(|config| Route {
                 model: Some(config.model),
                 provider: config.provider.into(),
+                responses: config.responses,
                 base_url: config.base_url,
                 api_key: config.api_key.unwrap_or_default(),
             })

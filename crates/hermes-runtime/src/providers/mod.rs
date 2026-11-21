@@ -1,5 +1,6 @@
 pub mod anthropic;
 pub mod openai;
+pub mod responses;
 
 use hermes_core::sse::SseError;
 
@@ -42,11 +43,13 @@ pub struct Completion {
 
 pub use anthropic::AnthropicProvider;
 pub use openai::OpenAiProvider;
+pub use responses::ResponsesProvider;
 
 /// A configured model API backend. Requests use OpenAI chat format for every variant.
 pub enum Provider {
     OpenAi(OpenAiProvider),
     Anthropic(AnthropicProvider),
+    Responses(ResponsesProvider),
 }
 
 impl Provider {
@@ -61,6 +64,7 @@ impl Provider {
         match self {
             Self::OpenAi(provider) => provider.complete(request, on_text).await,
             Self::Anthropic(provider) => provider.complete(request, on_text).await,
+            Self::Responses(provider) => provider.complete(request, on_text).await,
         }
     }
 }
@@ -74,5 +78,11 @@ impl From<OpenAiProvider> for Provider {
 impl From<AnthropicProvider> for Provider {
     fn from(provider: AnthropicProvider) -> Self {
         Self::Anthropic(provider)
+    }
+}
+
+impl From<ResponsesProvider> for Provider {
+    fn from(provider: ResponsesProvider) -> Self {
+        Self::Responses(provider)
     }
 }
