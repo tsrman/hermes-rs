@@ -1,0 +1,130 @@
+[
+ {
+  "name": "arcee",
+  "aliases": [
+   "arcee-ai",
+   "arceeai"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://api.arcee.ai/api/v1",
+  "key_envs": [
+   "ARCEEAI_API_KEY"
+  ],
+  "base_url_envs": []
+ },
+ {
+  "name": "gmi",
+  "aliases": [
+   "gmi-cloud",
+   "gmicloud"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://api.gmi-serving.com/v1",
+  "key_envs": [
+   "GMI_API_KEY"
+  ],
+  "base_url_envs": [
+   "GMI_BASE_URL"
+  ]
+ },
+ {
+  "name": "huggingface",
+  "aliases": [
+   "hf",
+   "hugging-face",
+   "huggingface-hub"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://router.huggingface.co/v1",
+  "key_envs": [
+   "HF_TOKEN"
+  ],
+  "base_url_envs": []
+ },
+ {
+  "name": "kilocode",
+  "aliases": [
+   "kilo-code",
+   "kilo",
+   "kilo-gateway"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://api.kilo.ai/api/gateway",
+  "key_envs": [
+   "KILOCODE_API_KEY"
+  ],
+  "base_url_envs": []
+ },
+ {
+  "name": "novita",
+  "aliases": [
+   "novita-ai",
+   "novitaai"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://api.novita.ai/openai/v1",
+  "key_envs": [
+   "NOVITA_API_KEY"
+  ],
+  "base_url_envs": [
+   "NOVITA_BASE_URL"
+  ]
+ },
+ {
+  "name": "router",
+  "aliases": [
+   "ramp-router",
+   "ramp",
+   "router.com"
+  ],
+  "api_mode": "codex_responses",
+  "base_url": "https://api.router.com/v1",
+  "key_envs": [
+   "RAMP_ROUTER_API_KEY",
+   "ROUTER_API_KEY"
+  ],
+  "base_url_envs": [
+   "RAMP_ROUTER_BASE_URL"
+  ]
+ },
+ {
+  "name": "stepfun",
+  "aliases": [
+   "step",
+   "stepfun-coding-plan"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://api.stepfun.ai/step_plan/v1",
+  "key_envs": [
+   "STEPFUN_API_KEY"
+  ],
+  "base_url_envs": []
+ },
+ {
+  "name": "xai",
+  "aliases": [
+   "grok",
+   "x-ai",
+   "x.ai"
+  ],
+  "api_mode": "codex_responses",
+  "base_url": "https://api.x.ai/v1",
+  "key_envs": [
+   "XAI_API_KEY"
+  ],
+  "base_url_envs": []
+ },
+ {
+  "name": "xiaomi",
+  "aliases": [
+   "mimo",
+   "xiaomi-mimo"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://api.xiaomimimo.com/v1",
+  "key_envs": [
+   "XIAOMI_API_KEY"
+  ],
+  "base_url_envs": []
+ }
+]

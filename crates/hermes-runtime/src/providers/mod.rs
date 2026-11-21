@@ -1,5 +1,6 @@
 pub mod anthropic;
 pub mod openai;
+pub mod profiles;
 pub mod responses;
 
 use hermes_core::sse::SseError;

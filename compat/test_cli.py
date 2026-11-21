@@ -337,6 +337,22 @@ class CliTest(unittest.TestCase):
         self.assertEqual(none.returncode, 0, none.stderr)
         self.assertNotIn("tools", recorded[-1])  # an empty tool list is not sent
 
+    def test_named_provider_uses_its_key_and_the_paired_endpoint_override(self):
+        config = "model:\n  default: primary\n  provider: novita\n"
+        home = self.workdir / "hermes"
+        home.mkdir(exist_ok=True)
+        (home / "config.yaml").write_text(config, encoding="utf-8")
+        (home / ".env").write_text(f"NOVITA_API_KEY=nv-secret\nNOVITA_BASE_URL={self.base}/v1\n", encoding="utf-8")
+        env = {"PATH": os.environ.get("PATH", ""), "HERMES_HOME": str(home)}
+        result = subprocess.run([str(BINARY), "chat", "-q", "hello"], cwd=self.workdir, env=env,
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "Ответ модели\n")
+        with urlopen(self.base + "/authorizations", timeout=5) as response:
+            authorizations = json.load(response)
+        self.assertTrue(authorizations)
+        self.assertEqual(set(authorizations), {"Bearer nv-secret"})
+
     def test_invalid_compaction_summary_keeps_the_original_context(self):
         session, database, original, config = self.seed_compression_history()
         result, recorded = self.chat_with_profile(extra_config=config, args=("--resume", session), query="New task")

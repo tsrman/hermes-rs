@@ -9,6 +9,7 @@ use hermes_runtime::config::{load_chat_settings, CompactionSettings};
 use hermes_runtime::mcp::{McpClients, McpServerConfig};
 use hermes_runtime::memory_tool::MemorySettings;
 use hermes_runtime::prompt::PromptSettings;
+use hermes_runtime::providers::profiles;
 use hermes_runtime::providers::{
     AnthropicProvider, OpenAiProvider, Provider, ProviderError, ResponsesProvider,
 };
@@ -90,7 +91,10 @@ impl Route {
             "custom" => "custom",
             "openai" => "openai",
             "anthropic" => "anthropic",
-            _ => return Err("unsupported provider".into()),
+            other => match profiles::lookup(other) {
+                Some(profile) => profile.name.as_str(),
+                None => return Err("unsupported provider".into()),
+            },
         };
         let timeout = Duration::from_secs(120);
         let setup = |error| format!("provider setup failed: {error:?}");

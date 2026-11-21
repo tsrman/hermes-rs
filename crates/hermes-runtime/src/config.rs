@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::mcp::McpServerConfig;
 use crate::memory_tool::MemorySettings;
 use crate::prompt::PromptSettings;
+use crate::providers::profiles;
 use crate::tool_policy::ToolPolicy;
 use crate::web_tools::WebSettings;
 
@@ -50,6 +51,8 @@ pub struct ChatSettings {
     pub tools: ToolPolicy,
     openai_api_key: Option<String>,
     openai_base_url: Option<String>,
+    /// The profile `.env` values, for the keys of named providers.
+    secrets: HashMap<String, String>,
     anthropic_api_key: Option<String>,
     anthropic_base_url: Option<String>,
 }
@@ -83,6 +86,7 @@ impl Default for ChatSettings {
             tools: ToolPolicy::allow_all(),
             openai_api_key: None,
             openai_base_url: None,
+            secrets: HashMap::new(),
             anthropic_api_key: None,
             anthropic_base_url: None,
         }
@@ -112,13 +116,46 @@ impl ChatSettings {
         )
     }
 
+    /// The key of a named provider: only to its own host or to the endpoint override paired with it.
+    fn profile_key_for(&self, profile: &profiles::Profile, base_url: &str) -> Option<String> {
+        let lookup = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .or_else(|| self.secrets.get(name).cloned())
+                .filter(|value| !value.trim().is_empty())
+        };
+        let key = profile.key_envs.iter().find_map(|name| lookup(name))?;
+        let host = reqwest::Url::parse(&profile.base_url)
+            .ok()?
+            .host_str()?
+            .to_owned();
+        let target = reqwest::Url::parse(base_url).ok()?;
+        let own_host = target.host_str().is_some_and(|candidate| {
+            candidate == host
+                || candidate
+                    .strip_suffix(host.as_str())
+                    .is_some_and(|prefix| prefix.ends_with('.'))
+        });
+        let paired = profile
+            .base_url_envs
+            .iter()
+            .find_map(|name| lookup(name))
+            .is_some_and(|value| {
+                value.trim().trim_end_matches('/') == base_url.trim().trim_end_matches('/')
+            });
+        (own_host || paired).then_some(key)
+    }
+
     /// The vendor key allowed for `base_url`, chosen by provider name.
     pub fn vendor_key_for(&self, provider: &str, base_url: &str) -> Option<String> {
         match provider {
             "openai" => self.openai_key_for(base_url),
             "anthropic" => self.anthropic_key_for(base_url),
-            // Custom endpoints keep using an OpenAI key paired with their URL.
-            _ => self.openai_key_for(base_url),
+            other => match profiles::lookup(other) {
+                Some(profile) => self.profile_key_for(profile, base_url),
+                // Custom endpoints keep using an OpenAI key paired with their URL.
+                None => self.openai_key_for(base_url),
+            },
         }
     }
 }
@@ -257,15 +294,21 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
         if let Some(name) = model.as_str() {
             settings.model = Some(name.to_owned());
         } else if model.is_mapping() {
-            settings.provider = match model.get("provider").and_then(serde_yaml::Value::as_str) {
-                None | Some("" | "auto" | "custom") => "custom",
-                Some("openai") => "openai",
-                Some("anthropic") => "anthropic",
-                Some(provider) => return Err(format!("provider '{provider}' is not supported")),
+            let name = model.get("provider").and_then(serde_yaml::Value::as_str);
+            let Some((provider, profile_responses)) = resolve_provider(name.unwrap_or("")) else {
+                return Err(format!(
+                    "provider '{}' is not supported",
+                    name.unwrap_or("")
+                ));
             };
-            settings.responses = settings.provider != "anthropic"
-                && model.get("api_mode").and_then(serde_yaml::Value::as_str)
-                    == Some("codex_responses");
+            settings.provider = provider;
+            let api_mode = model.get("api_mode").and_then(serde_yaml::Value::as_str);
+            settings.responses = provider != "anthropic"
+                && match api_mode {
+                    Some("codex_responses") => true,
+                    Some("chat_completions") => false,
+                    _ => profile_responses,
+                };
             settings.model = model
                 .get("default")
                 .and_then(serde_yaml::Value::as_str)
@@ -275,7 +318,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
                 .and_then(serde_yaml::Value::as_str)
                 .map(str::to_owned);
             if settings.base_url.as_deref().is_none_or(str::is_empty) {
-                settings.base_url = default_base_url(settings.provider).map(str::to_owned);
+                settings.base_url = default_base_url(provider).map(str::to_owned);
             }
         } else if !model.is_null() {
             return Err("invalid model settings in config.yaml".into());
@@ -306,6 +349,25 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
         for entry in iter {
             let (key, value) = entry.map_err(|_| "invalid profile .env")?;
             secrets.insert(key, value);
+        }
+    }
+    settings.secrets = secrets.clone();
+    // A named provider's endpoint may be overridden from the environment or the profile `.env`.
+    let configured_base_url = config["model"]
+        .get("base_url")
+        .and_then(serde_yaml::Value::as_str)
+        .is_some_and(|url| !url.is_empty());
+    if !configured_base_url {
+        if let Some(profile) = profiles::lookup(settings.provider) {
+            let overridden = profile.base_url_envs.iter().find_map(|name| {
+                std::env::var(name)
+                    .ok()
+                    .or_else(|| secrets.get(name).cloned())
+                    .filter(|value| !value.trim().is_empty())
+            });
+            if overridden.is_some() {
+                settings.base_url = overridden;
+            }
         }
     }
     settings.api_key = secrets.get("HERMES_API_KEY").cloned();
@@ -357,16 +419,13 @@ fn fallback_settings(
             .map(str::trim)
             .filter(|value| !value.is_empty())
     };
-    let provider = match field("provider")? {
-        "custom" => "custom",
-        "openai" => "openai",
-        "anthropic" => "anthropic",
-        _ => return None,
-    };
+    let (provider, profile_responses) = resolve_provider(field("provider")?)?;
+    // An empty name would mean `custom` in the primary model; a fallback must name its provider.
     let responses = match (provider, field("api_mode")) {
         ("anthropic", None | Some("anthropic_messages")) => false,
         ("anthropic", _) => return None,
-        (_, None | Some("chat_completions")) => false,
+        (_, None) => profile_responses,
+        (_, Some("chat_completions")) => false,
         (_, Some("codex_responses")) => true,
         _ => return None,
     };
@@ -403,7 +462,19 @@ fn default_base_url(provider: &str) -> Option<&'static str> {
     match provider {
         "openai" => Some("https://api.openai.com/v1"),
         "anthropic" => Some("https://api.anthropic.com/v1"),
-        _ => None,
+        other => profiles::lookup(other).map(|profile| profile.base_url.as_str()),
+    }
+}
+
+/// The canonical provider name and whether it speaks the Responses API by default.
+fn resolve_provider(name: &str) -> Option<(&'static str, bool)> {
+    match name.trim() {
+        "" | "auto" | "custom" => Some(("custom", false)),
+        "openai" => Some(("openai", false)),
+        "anthropic" => Some(("anthropic", false)),
+        other => {
+            profiles::lookup(other).map(|profile| (profile.name.as_str(), profile.uses_responses()))
+        }
     }
 }
 

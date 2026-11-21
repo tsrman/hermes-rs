@@ -24,6 +24,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/requests":
             self.send_json(200, self.server.requests)
+        elif self.path == "/authorizations":
+            self.send_json(200, getattr(self.server, "authorizations", []))
         elif self.path == "/release" and self.server.scenario in ("stall_on_resume", "compact"):
             self.server.release.set()
             self.send_json(200, {})
@@ -45,6 +47,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "invalid JSON request"})
             return
         self.server.requests.append(body)
+        # Servers built by other tests do not define the list.
+        if not hasattr(self.server, "authorizations"):
+            self.server.authorizations = []
+        self.server.authorizations.append(self.headers.get("Authorization"))
         model = body.get("model", "fixture")
         scenario = self.server.scenario
         if scenario == "fallback_after_tool" and model == "backup":
@@ -226,6 +232,7 @@ def main():
         parser.error("--tls-cert and --tls-key must be supplied together")
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.requests = []
+    server.authorizations = []
     server.scenario = args.scenario
     server.release = threading.Event()
     try:
