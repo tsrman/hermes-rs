@@ -1,19 +1,19 @@
 use hermes_runtime::turn::{ApprovalDecision, ApprovalRequest};
 
 pub fn available() -> bool {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use std::io::IsTerminal;
         std::io::stdin().is_terminal() && terminal::open().is_ok()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         false
     }
 }
 
 pub async fn prompt(request: ApprovalRequest) -> ApprovalDecision {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use std::time::Duration;
         match tokio::time::timeout(
@@ -27,14 +27,14 @@ pub async fn prompt(request: ApprovalRequest) -> ApprovalDecision {
             Err(_) => ApprovalDecision::TimedOut,
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = request;
         ApprovalDecision::Unavailable
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod terminal {
     use std::fs::{File, OpenOptions};
     use std::io::{self, Read, Write};
@@ -48,11 +48,15 @@ mod terminal {
     use super::{ApprovalDecision, ApprovalRequest};
 
     pub(super) fn open() -> io::Result<File> {
+        #[cfg(target_os = "linux")]
+        let device = "/dev/tty";
+        #[cfg(target_os = "macos")]
+        let device = stdin_device()?;
         let file = OpenOptions::new()
             .read(true)
             .write(true)
-            .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
-            .open("/dev/tty")?;
+            .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_NOFOLLOW)
+            .open(device)?;
         // SAFETY: these calls read the process group associated with a live
         // terminal descriptor and the group ID for this process.
         if unsafe { libc::tcgetpgrp(file.as_raw_fd()) } != unsafe { libc::getpgrp() } {
@@ -62,6 +66,31 @@ mod terminal {
             ));
         }
         Ok(file)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn stdin_device() -> io::Result<std::path::PathBuf> {
+        use std::ffi::{CStr, OsStr};
+        use std::os::unix::ffi::OsStrExt;
+
+        // Darwin rejects kqueue registration on /dev/tty, but supports it on
+        // the underlying terminal device. Open it separately for O_NONBLOCK.
+        let mut name = [0; libc::PATH_MAX as usize];
+        // SAFETY: the live stdin descriptor is borrowed and the buffer is
+        // writable for the supplied length.
+        let error = unsafe {
+            libc::ttyname_r(
+                io::stdin().as_raw_fd(),
+                name.as_mut_ptr().cast(),
+                name.len(),
+            )
+        };
+        if error != 0 {
+            return Err(io::Error::from_raw_os_error(error));
+        }
+        let path = CStr::from_bytes_until_nul(&name)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        Ok(OsStr::from_bytes(path.to_bytes()).into())
     }
 
     pub(super) async fn ask(request: &ApprovalRequest) -> io::Result<ApprovalDecision> {

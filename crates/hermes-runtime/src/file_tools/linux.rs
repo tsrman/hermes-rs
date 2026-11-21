@@ -5,15 +5,10 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
-use rustix::fs::{open, openat, renameat, renameat_with, Mode, OFlags, RenameFlags};
+use rustix::fs::{openat, renameat, renameat_with, Mode, OFlags, RenameFlags};
 use rustix::io::Errno;
 
-use super::{fingerprint, WRITE_LIMIT};
-
-const DIRECTORY: OFlags = OFlags::RDONLY
-    .union(OFlags::DIRECTORY)
-    .union(OFlags::NOFOLLOW)
-    .union(OFlags::CLOEXEC);
+use super::{directory::open_directory, fingerprint, WRITE_LIMIT};
 
 pub(super) struct WritePlan {
     pub(super) target: Target,
@@ -124,20 +119,6 @@ impl Target {
         }
         Ok(())
     }
-}
-
-pub(crate) fn open_directory(root: &Path, path: &Path) -> Result<File, String> {
-    let relative = path
-        .strip_prefix(root)
-        .map_err(|_| "Path is outside the working directory")?;
-    let mut directory = open(root, DIRECTORY, Mode::empty()).map_err(error)?;
-    for component in relative.components() {
-        let Component::Normal(name) = component else {
-            return Err("A path without parent traversal is required".into());
-        };
-        directory = openat(&directory, name, DIRECTORY, Mode::empty()).map_err(error)?;
-    }
-    Ok(File::from(directory))
 }
 
 fn read_version(parent: &File, name: &OsStr) -> Result<Option<(Stamp, String)>, String> {

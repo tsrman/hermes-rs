@@ -10,22 +10,21 @@ import unittest
 from pathlib import Path
 from urllib.request import urlopen
 
-if sys.platform == "linux":
+if sys.platform in ("linux", "darwin"):
     import fcntl
     import pty
     import termios
 
 
 ROOT = Path(__file__).resolve().parent.parent
-BINARY = ROOT / "target/debug/hermes"
+BINARY = Path(os.environ.get("HERMES_TEST_BINARY", ROOT / "target/debug/hermes")).resolve()
 
 
-@unittest.skipUnless(sys.platform == "linux", "requires Linux and a terminal")
-class FileToolTest(unittest.TestCase):
+class ToolTestCase(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.root = Path(directory.name)
+        self.root = Path(directory.name).resolve()
         self.profile = self.root / "profile"
         self.profile.mkdir()
         self.server = subprocess.Popen(
@@ -88,7 +87,26 @@ class FileToolTest(unittest.TestCase):
                     break
             if b"[y/N]" in transcript:
                 return transcript.decode(errors="replace")
-        self.fail(f"approval prompt missing; terminal output was {transcript!r}")
+        details = ""
+        if process.poll() is not None:
+            _, stderr = process.communicate(timeout=1)
+            details = f"; exit status {process.returncode}; stderr was {stderr!r}"
+        self.fail(f"approval prompt missing; terminal output was {transcript!r}{details}")
+
+    @staticmethod
+    def finish_terminal(process, master):
+        # macOS waits for the controlling terminal output to drain before
+        # the session leader exits. Keep reading echoed input until then.
+        deadline = time.monotonic() + 8
+        while process.poll() is None and time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.05)
+            if ready:
+                try:
+                    if not os.read(master, 16384):
+                        break
+                except OSError:
+                    break
+        return process.communicate(timeout=max(0.1, deadline - time.monotonic()))
 
     def last_tool_result(self):
         with urlopen(self.url + "/requests", timeout=4) as response:
@@ -116,6 +134,9 @@ class FileToolTest(unittest.TestCase):
             time.sleep(0.02)
         self.fail("local owner did not open its socket")
 
+
+@unittest.skipUnless(sys.platform == "linux", "requires Linux file approvals")
+class FileToolTest(ToolTestCase):
     def test_write_after_full_read_and_explicit_approval(self):
         target = self.root / "notes.txt"
         target.write_text("original\n", encoding="utf-8")
@@ -269,6 +290,9 @@ class FileToolTest(unittest.TestCase):
         blocked, _ = self.unattended("search_files", {"pattern": "marker", "path": ".env"})
         self.assertIn("error", blocked)
 
+
+@unittest.skipUnless(sys.platform in ("linux", "darwin"), "requires a supported POSIX terminal")
+class TerminalToolTest(ToolTestCase):
     def test_terminal_runs_in_the_approved_directory_without_profile_environment(self):
         (self.root / "subdir").mkdir()
         command = "printf '%s\\n' \"${HERMES_API_KEY:-no-key}\"; pwd"
@@ -277,15 +301,20 @@ class FileToolTest(unittest.TestCase):
         self.assertIn("subdir", prompt)
         self.assertIn("no-key", prompt)
         os.write(tty, b"yes\n")
-        _, error = process.communicate(timeout=8)
+        _, error = self.finish_terminal(process, tty)
         self.assertEqual(process.returncode, 0, error)
-        result, _ = self.last_tool_result()
+        result, requests = self.last_tool_result()
+        tools = [tool["function"]["name"] for tool in requests[0]["tools"]]
+        self.assertIn("terminal", tools)
+        if sys.platform == "darwin":
+            self.assertNotIn("write_file", tools)
+            self.assertNotIn("patch", tools)
         self.assertEqual(result["exit_code"], 0)
         self.assertEqual(result["output"].splitlines(), ["no-key", str(self.root / "subdir")])
         process, tty = self.interactive(tool="terminal", arguments={"command": "exit 7"})
         self.wait_for_prompt(process, tty)
         os.write(tty, b"yes\n")
-        _, error = process.communicate(timeout=8)
+        _, error = self.finish_terminal(process, tty)
         self.assertEqual(process.returncode, 0, error)
         self.assertIn('Tool failed: "terminal"', error)
         result, _ = self.last_tool_result()
@@ -304,7 +333,7 @@ class FileToolTest(unittest.TestCase):
                     os.write(tty, b"n\n")
                 if mode == "cancel":
                     process.send_signal(signal.SIGINT)
-                _, error = process.communicate(timeout=8)
+                _, error = self.finish_terminal(process, tty)
                 self.assertEqual(process.returncode, 130 if mode == "cancel" else 0, error)
                 self.assertFalse((self.root / "marker.txt").exists())
                 if mode != "cancel":
@@ -334,10 +363,26 @@ class FileToolTest(unittest.TestCase):
                 self.assertNotIn("terminal", [tool["function"]["name"] for tool in requests[-1]["tools"]])
                 self.assertFalse((self.root / "marker.txt").exists())
 
-    def test_terminal_timeout_and_owner_cancellation_end_the_child_group(self):
-        for mode in ("finish", "timeout", "cancel"):
+    def test_terminal_refuses_a_directory_replaced_during_approval(self):
+        directory = self.root / "workdir"
+        directory.mkdir()
+        arguments = {"command": "printf touched > marker.txt", "workdir": "workdir"}
+        process, tty = self.interactive(tool="terminal", arguments=arguments)
+        self.wait_for_prompt(process, tty)
+        original = directory.rename(self.root / "original")
+        directory.mkdir()
+        os.write(tty, b"y\n")
+        _, error = self.finish_terminal(process, tty)
+        self.assertEqual(process.returncode, 0, error)
+        result, _ = self.last_tool_result()
+        self.assertIn("directory changed", result["error"])
+        self.assertFalse((directory / "marker.txt").exists())
+        self.assertFalse((original / "marker.txt").exists())
+
+    def test_terminal_finishes_child_group_on_exit_timeout_and_cancellation(self):
+        for mode in ("finish", "timeout", "cancel", "owner_cancel"):
             with self.subTest(mode=mode):
-                if mode == "cancel":
+                if mode == "owner_cancel":
                     self.start_owner()
                 pid_file = self.root / "child.pid"
                 pid_file.unlink(missing_ok=True)
@@ -357,21 +402,22 @@ class FileToolTest(unittest.TestCase):
                             break
                     time.sleep(0.02)
                 self.assertTrue(child.isdigit(), "shell did not report the child process ID")
-                if mode == "cancel":
+                cancelled = mode in ("cancel", "owner_cancel")
+                if cancelled:
                     process.send_signal(signal.SIGINT)
-                _, error = process.communicate(timeout=8)
-                self.assertEqual(process.returncode, 130 if mode == "cancel" else 0, error)
+                _, error = self.finish_terminal(process, tty)
+                self.assertEqual(process.returncode, 130 if cancelled else 0, error)
                 if mode == "timeout":
                     result, _ = self.last_tool_result()
                     self.assertEqual(result["status"], "timeout")
-                status = Path(f"/proc/{child}/stat")
                 deadline = time.monotonic() + 4
                 while time.monotonic() < deadline:
-                    try:
-                        if status.read_text().rsplit(")", 1)[1].strip().startswith("Z "):
-                            break
-                    except FileNotFoundError:
+                    status = subprocess.run(
+                        ["ps", "-o", "stat=", "-p", child], capture_output=True, text=True, check=False,
+                    )
+                    if status.returncode == 1 or status.stdout.lstrip().startswith("Z"):
                         break
+                    self.assertEqual(status.returncode, 0, status.stderr)
                     time.sleep(0.02)
                 else:
                     self.fail(f"child {child} remained active")

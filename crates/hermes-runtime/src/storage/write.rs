@@ -28,10 +28,7 @@ impl<'a> SessionWriter<'a> {
     pub fn prepare(profile: &'a Path) -> Result<Self, StorageError> {
         let path = profile.join("state.db");
         if database_exists(&path)? {
-            let connection = Connection::open_with_flags(
-                path,
-                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-            )?;
+            let connection = open_database(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             verify_write_schema(&connection)?;
         }
         Ok(Self {
@@ -140,11 +137,26 @@ fn database_exists(path: &Path) -> Result<bool, StorageError> {
     }
 }
 
-pub(super) fn open_write(path: &Path) -> rusqlite::Result<Connection> {
-    let connection = Connection::open_with_flags(
+fn open_database(path: &Path, flags: OpenFlags) -> Result<Connection, StorageError> {
+    // SQLite's Unix NOFOLLOW also rejects directory aliases such as macOS /var.
+    // Resolve the directory and leave the database filename for SQLite to check.
+    #[cfg(unix)]
+    let resolved = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .canonicalize()?
+        .join(path.file_name().ok_or(StorageError::InvalidDatabaseFile)?);
+    #[cfg(unix)]
+    let path = resolved.as_path();
+    Ok(Connection::open_with_flags(
         path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    )?;
+        flags | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?)
+}
+
+pub(super) fn open_write(path: &Path) -> Result<Connection, StorageError> {
+    let connection = open_database(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     connection.pragma_update(None, "foreign_keys", true)?;
     Ok(connection)
 }

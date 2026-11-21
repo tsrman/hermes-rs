@@ -2,15 +2,17 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::Duration;
 
 use ring::digest::{digest, SHA256};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) mod directory;
 #[cfg(target_os = "linux")]
-pub(crate) mod linux;
+mod linux;
 mod search;
 
 pub(crate) use search::{search_schema, SEARCH_FILES};
@@ -414,7 +416,7 @@ pub(crate) fn approval_error(decision: ApprovalDecision) -> Value {
     json!({"status": status, "error": error})
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) async fn request_approval<A, F>(
     request: ApprovalRequest,
     approve: &mut A,

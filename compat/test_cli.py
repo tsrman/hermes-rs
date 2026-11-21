@@ -74,6 +74,29 @@ class CliTest(unittest.TestCase):
         with urlopen(self.base + "/requests", timeout=5) as response:
             return result, json.load(response)
 
+    @unittest.skipUnless(os.name == "posix", "requires Unix symbolic links")
+    def test_saves_and_resumes_through_a_profile_directory_alias(self):
+        actual = self.workdir / "actual profile"
+        actual.mkdir()
+        (self.workdir / "hermes").symlink_to(actual, target_is_directory=True)
+        saved, _ = self.chat_with_profile(args=("--save-session",))
+        self.assertEqual(saved.returncode, 0, saved.stderr)
+        session = saved.stderr.splitlines()[-1].removeprefix("Session: ")
+        self.assertTrue((actual / "state.db").is_file())
+
+        resumed, _ = self.chat_with_profile(args=("--resume", session), query="Continue via alias")
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertIn(f"Session: {session}", resumed.stderr)
+
+        database = actual / "state.db"
+        retained = database.rename(actual / "retained.db")
+        before = retained.read_bytes()
+        database.symlink_to(retained)
+        refused, _ = self.chat_with_profile(args=("--resume", session))
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("state.db must be a regular file", refused.stderr)
+        self.assertEqual(retained.read_bytes(), before)
+
     def write_skill(self, directory, name, description, body, fields=""):
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "SKILL.md").write_text(
