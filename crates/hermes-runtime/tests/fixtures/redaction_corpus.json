@@ -646,6 +646,126 @@
    "input": "curl -u user:abcdefghijklmnop1234567890 https://x.test",
    "force": true,
    "output": "curl -u user:abcdefghijklmnop1234567890 https://x.test"
+  },
+  {
+   "input": "tool --password TOKEN",
+   "force": true,
+   "output": "tool --password TOKEN"
+  },
+  {
+   "input": "tool --token xxx",
+   "force": true,
+   "output": "tool --token xxx"
+  },
+  {
+   "input": "run --api-key sk-or-v1-xxx",
+   "force": true,
+   "output": "run --api-key sk-or-v1-xxx"
+  },
+  {
+   "input": "tool --passphrase correcthorsebatterystaple",
+   "force": true,
+   "output": "tool --passphrase correc...aple"
+  },
+  {
+   "input": "gcloud --credentials ~/.config/gcloud/creds.json",
+   "force": true,
+   "output": "gcloud --credentials ~/.config/gcloud/creds.json"
+  },
+  {
+   "input": "tool --password /etc/pw/Zq8x4kLm2PvN7wRt9sAb",
+   "force": true,
+   "output": "tool --password /etc/p...9sAb"
+  },
+  {
+   "input": "tool --bearer=abc-def-ghi-jkl-mnop-qrst",
+   "force": true,
+   "output": "tool --bearer=abc-de...qrst"
+  },
+  {
+   "input": "tool --token \"a b c d\" --next",
+   "force": true,
+   "output": "tool --token *** --next"
+  },
+  {
+   "input": "tool --password='x y z' end",
+   "force": true,
+   "output": "tool --password=*** end"
+  },
+  {
+   "input": "tool --client-secret Zq8x4kLm2PvN7wRt",
+   "force": true,
+   "output": "tool --client-secret ***"
+  },
+  {
+   "input": "tool --tokens abcdefgh1234",
+   "force": true,
+   "output": "tool --tokens ***"
+  },
+  {
+   "input": "tool -token abcdefghijkl1234",
+   "force": true,
+   "output": "tool -token ***"
+  },
+  {
+   "input": "tool --secret --verbose",
+   "force": true,
+   "output": "tool --secret --verbose"
+  },
+  {
+   "input": "docker login -p mypasswordisverylong1 registry.test",
+   "force": true,
+   "output": "docker login -p mypass...ong1 registry.test"
+  },
+  {
+   "input": "podman login --username u -p Zq8x4kLm2PvN7wRt",
+   "force": true,
+   "output": "podman login --username u -p ***"
+  },
+  {
+   "input": "tool --password \"unterminated value here\nnext line",
+   "force": true,
+   "output": "tool --password unterm...here\nnext line"
+  },
+  {
+   "input": "tool --password ***",
+   "force": true,
+   "output": "tool --password ***"
+  },
+  {
+   "input": "tool --token Digest",
+   "force": true,
+   "output": "tool --token ***"
+  },
+  {
+   "input": "tool --pass db_name",
+   "force": true,
+   "output": "tool --pass db_name"
+  },
+  {
+   "input": "tool --token correctHorseBatteryStaple",
+   "force": true,
+   "output": "tool --token correc...aple"
+  },
+  {
+   "input": "tool --api-key=<your-key>",
+   "force": true,
+   "output": "tool --api-key=<your-key>"
+  },
+  {
+   "input": "tool --secret %SECRET%",
+   "force": true,
+   "output": "tool --secret %SECRET%"
+  },
+  {
+   "input": "tool --access-key AKIDEXAMPLE12345",
+   "force": true,
+   "output": "tool --access-key ***"
+  },
+  {
+   "input": "tool -password=abc",
+   "force": true,
+   "output": "tool -password=***"
   }
  ],
  "url": [
@@ -720,6 +840,56 @@
    "input": "password is a word in prose",
    "force": true,
    "output": "password is a word in prose"
+  },
+  {
+   "input": "AccountKey = abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "AccountKey = abcdef...7890"
+  },
+  {
+   "input": "this.accountKey = x",
+   "force": true,
+   "output": "this.accountKey = x"
+  },
+  {
+   "input": "SharedAccessSignature=sv=2020-08-04&ss=b&sig=abcdefghijklmnop1234567890&se=2030",
+   "force": true,
+   "output": "SharedAccessSignature=sv=202...7890&se=2030"
+  },
+  {
+   "input": "x;SharedAccessKey=abcdefghijklmnop1234567890;y",
+   "force": true,
+   "output": "x;SharedAccessKey=abcdef...7890;y"
+  },
+  {
+   "input": "'AccountKey=abcdefghijklmnop1234567890'",
+   "force": true,
+   "output": "'AccountKey=abcdef...7890'"
+  },
+  {
+   "input": "AccountKey=short",
+   "force": true,
+   "output": "AccountKey=***"
+  },
+  {
+   "input": "url?AccountKey=Zq8x4kLm2PvN7wRt9s&x=1",
+   "force": true,
+   "output": "url?AccountKey=Zq8x4k...Rt9s&x=1"
+  },
+  {
+   "input": "Server=tcp:db,1433;Pwd=Zq8x4kLm2PvN7wRt;",
+   "force": true,
+   "output": "Server=tcp:db,1433;Pwd=***;"
+  },
+  {
+   "input": "Data Source=x;Password=<pw>;",
+   "force": true,
+   "output": "Data Source=x;Password=***;"
+  },
+  {
+   "input": "Host=h;Username=u;Password=a b",
+   "force": true,
+   "output": "Host=h;Username=u;Password=***"
   }
  ],
  "header_credential": [

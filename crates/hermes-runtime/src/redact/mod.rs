@@ -6,7 +6,9 @@
 //! complete redactor and must not be wired into a safety boundary until `PENDING` is empty.
 
 mod assignments;
+mod cli;
 mod fields;
+mod kv_connstr;
 mod mask;
 mod prefix;
 mod private_keys;
@@ -15,12 +17,14 @@ mod tokens;
 pub use mask::{mask_secret, mask_token};
 
 /// The passes of the reference's `redact_credential_shapes` that this module applies, in order.
-pub const PORTED: [&str; 13] = [
+pub const PORTED: [&str; 15] = [
     "private_key",
     "prefix",
     "env_assignment",
     "json_field",
     "python_repr",
+    "cli_flag",
+    "connection_string",
     "auth_header",
     "telegram",
     "db_connstr",
@@ -41,9 +45,11 @@ pub fn redact_sensitive_text(text: &str) -> String {
     let text = prefix::redact(&text);
     let text = assignments::redact_env_assignments(&text);
     let text = fields::redact_json_fields(&text);
+    let text = cli::redact_cli_secrets(&text);
     let text = tokens::redact_auth_headers(&text);
     let text = tokens::redact_telegram(&text);
     let text = tokens::redact_db_urls(&text);
+    let text = kv_connstr::redact_kv_connection_strings(&text);
     let text = tokens::redact_webhooks(&text);
     let text = tokens::redact_jwt(&text);
     let text = tokens::redact_webapp_links(&text);

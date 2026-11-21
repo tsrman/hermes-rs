@@ -191,6 +191,16 @@ pub(super) fn is_qualified_key_name(key: &str) -> bool {
         .any(|word| KEY_SECRET_QUALIFIERS.contains(&word.as_str()) || word == "access")
 }
 
+/// A password-class key, such as `password` or `pw`, at a word boundary.
+pub(super) fn password_key(key: &str) -> bool {
+    has_word_bounded_keyword(key, &PASSWORD_KEY) || has_password_keyword(key)
+}
+
+/// A 16 or more character segment that mixes lowercase, uppercase and digits with no dot.
+pub(super) fn opaque_path_segment(segment: &str) -> bool {
+    OPAQUE_PATH_SEGMENT.is_match(segment).unwrap_or(false)
+}
+
 /// The shared gate of the assignment passes: should this key and value be masked?
 pub(super) fn should_redact_assignment(key: &str, value: &str, check_keyword: bool) -> bool {
     // A programmatic lookup names a variable; it is not a leaked value.

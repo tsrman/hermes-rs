@@ -1,15 +1,7 @@
 {
   "auth_header": [],
-  "cli_flag": [
-    "tool --password abcdefghijklmnop1234567890",
-    "tool --token=abcdefghijklmnop1234567890",
-    "docker login -u bob -p abcdefghijklmnop1234567890",
-    "--secret 'abcdefghijklmnop1234567890'"
-  ],
+  "cli_flag": [],
   "connection_string": [
-    "Server=db;User Id=sa;Password=abcdefghijklmnop1234567890;",
-    "host=localhost user=app password=abcdefghijklmnop1234567890 dbname=x",
-    "DefaultEndpointsProtocol=https;AccountName=a;AccountKey=abcdefghijklmnop1234567890==;EndpointSuffix=core.windows.net",
     "Password=changeme"
   ],
   "env_assignment": [
