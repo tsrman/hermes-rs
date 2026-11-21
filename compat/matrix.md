@@ -14,7 +14,7 @@ P0 относится к первому CLI-релизу, P3 — к заключ
 | P0 | Локальный владелец сессий CLI | `gateway/session_authority.py`, `persistence/sqlite/` | Локальный процесс, отмена, restart и `--resume` | Проверен на Unix-сокете |
 | P0 | OpenAI-compatible | `hermes_cli/runtime_provider.py`, `agent/` | SSE, tool calls, таймаут, retry, fallback и проверка TLS | Системные корни TLS и проверка имени хоста подтверждены на Linux, включая резервный маршрут |
 | P0 | Релизные сборки CLI Linux x86_64 | Rust CLI и Python-эталон | Debian GNU, Alpine musl, живой HTTPS и замеры на loopback | [Сборки и замеры проверены](#релизная-проверка-и-замеры-cli) |
-| P2 | Anthropic, Codex и остальные провайдеры | `providers/`, `agent/anthropic_adapter.py` | Фикстуры запросов, streaming, OAuth и live smoke | Не проверено |
+| P2 | Anthropic, Codex и остальные провайдеры | `providers/`, `agent/anthropic_adapter.py` | Фикстуры запросов, streaming, OAuth и live smoke | Anthropic Messages по API-ключу проверен на имитаторе SSE (текст, tool use, retry 529, обрыв). Live smoke, OAuth и Codex не проверены |
 | P2 | MCP, browser, web, voice и среды исполнения | `tools/mcp_tool.py`, `tools/environments/`, `tools/` | Контракты протоколов, отмена, очистка процессов | Не проверено |
 | P2 | Навыки и плагины | `skills/`, `agent/skill_utils.py`, `tools/skills_tool.py`, `plugins/` | Discovery, lifecycle hooks, Python API и изоляция | Сверены индекс Markdown-навыков и чтение `SKILL.md` |
 | P2 | Локальный cron, Kanban, делегирование и batch | `cron/`, `tools/delegate_tool.py`, `batch_runner.py` | Миграция, таймзоны, рестарт и вывод результатов | Не проверено |

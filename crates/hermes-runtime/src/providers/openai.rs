@@ -3,45 +3,10 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use hermes_core::sse::{SseDecoder, SseError};
+use hermes_core::sse::SseDecoder;
 use serde_json::{Map, Value};
 
-#[derive(Debug)]
-pub enum ProviderError {
-    InvalidRequest,
-    Http(reqwest::Error),
-    HttpStatus(u16),
-    InvalidEvent,
-    InvalidSse(SseError),
-    IncompleteStream,
-}
-
-impl ProviderError {
-    pub(crate) fn allows_fallback(&self) -> bool {
-        match self {
-            Self::Http(error) => {
-                error.is_connect() || error.is_timeout() || error.is_request() || error.is_body()
-            }
-            Self::HttpStatus(status) => matches!(status, 401..=404 | 429 | 500..=599),
-            Self::IncompleteStream | Self::InvalidSse(SseError::IncompleteEvent) => true,
-            _ => false,
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct ToolCall {
-    pub id: String,
-    pub name: String,
-    pub arguments: String,
-}
-
-#[derive(Debug, Default)]
-pub struct Completion {
-    pub content: String,
-    pub finish_reason: Option<String>,
-    pub tool_calls: Vec<ToolCall>,
-}
+pub use super::{Completion, ProviderError, ToolCall};
 
 pub struct OpenAiProvider {
     client: reqwest::Client,
@@ -52,29 +17,9 @@ pub struct OpenAiProvider {
 
 impl OpenAiProvider {
     pub fn new(base_url: &str, api_key: &str, timeout: Duration) -> Result<Self, ProviderError> {
-        let mut endpoint =
-            reqwest::Url::parse(base_url).map_err(|_| ProviderError::InvalidRequest)?;
-        if !matches!(endpoint.scheme(), "http" | "https")
-            || endpoint.query().is_some()
-            || endpoint.fragment().is_some()
-        {
-            return Err(ProviderError::InvalidRequest);
-        }
-        endpoint.set_path(&format!(
-            "{}/chat/completions",
-            endpoint.path().trim_end_matches('/')
-        ));
-        let client = reqwest::Client::builder()
-            .use_rustls_tls()
-            // Keep OS trust as the only source even if another dependency enables bundled roots.
-            .tls_built_in_root_certs(false)
-            .tls_built_in_native_certs(true)
-            .timeout(timeout)
-            .build()
-            .map_err(ProviderError::Http)?;
         Ok(Self {
-            client,
-            endpoint: endpoint.to_string(),
+            client: build_client(timeout)?,
+            endpoint: endpoint_url(base_url, "/chat/completions")?,
             api_key: api_key.to_owned(),
             max_attempts: 3,
         })
@@ -89,48 +34,20 @@ impl OpenAiProvider {
         &self,
         request: &Map<String, Value>,
     ) -> Result<reqwest::Response, ProviderError> {
-        let mut attempt = 1;
-        loop {
-            let last_attempt = attempt == self.max_attempts;
-            let backoff = (2_u64 << (attempt - 1).min(5)).min(60);
-            let mut builder = self.client.post(&self.endpoint).json(request);
-            if !self.api_key.is_empty() {
-                builder = builder.bearer_auth(&self.api_key);
-            }
-            let delay = match builder.send().await {
-                Ok(response) => {
-                    let status = response.status().as_u16();
-                    let delay = response
-                        .headers()
-                        .get(reqwest::header::RETRY_AFTER)
-                        .and_then(|value| value.to_str().ok())
-                        .and_then(|value| value.trim().parse::<u64>().ok())
-                        .map_or(backoff, |seconds| seconds.min(600));
-                    if response.status().is_success() {
-                        return Ok(response);
-                    }
-                    let retryable = !last_attempt
-                        && match status {
-                            429 => is_transient_rate_limit(response).await?,
-                            500 | 502 | 503 | 504 => true,
-                            _ => false,
-                        };
-                    if !retryable {
-                        return Err(ProviderError::HttpStatus(status));
-                    }
-                    delay
+        open_stream(
+            &self.client,
+            &self.endpoint,
+            request,
+            self.max_attempts,
+            |builder| {
+                if self.api_key.is_empty() {
+                    builder
+                } else {
+                    builder.bearer_auth(&self.api_key)
                 }
-                Err(error)
-                    if !last_attempt
-                        && (error.is_connect() || error.is_timeout() || error.is_request()) =>
-                {
-                    backoff
-                }
-                Err(error) => return Err(ProviderError::Http(error.without_url())),
-            };
-            attempt += 1;
-            tokio::time::sleep(Duration::from_secs(delay)).await;
-        }
+            },
+        )
+        .await
     }
 
     pub async fn complete<F>(
@@ -224,7 +141,84 @@ impl OpenAiProvider {
     }
 }
 
-async fn is_transient_rate_limit(mut response: reqwest::Response) -> Result<bool, ProviderError> {
+/// POST a streaming request with retry on transient failures.
+pub(super) async fn open_stream(
+    client: &reqwest::Client,
+    endpoint: &str,
+    request: &Map<String, Value>,
+    max_attempts: u32,
+    authorize: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+) -> Result<reqwest::Response, ProviderError> {
+    let mut attempt = 1;
+    loop {
+        let last_attempt = attempt == max_attempts;
+        let backoff = (2_u64 << (attempt - 1).min(5)).min(60);
+        let builder = authorize(client.post(endpoint).json(request));
+        let delay = match builder.send().await {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                let delay = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.trim().parse::<u64>().ok())
+                    .map_or(backoff, |seconds| seconds.min(600));
+                if response.status().is_success() {
+                    return Ok(response);
+                }
+                let retryable = !last_attempt
+                    && match status {
+                        429 => is_transient_rate_limit(response).await?,
+                        500 | 502 | 503 | 504 | 529 => true,
+                        _ => false,
+                    };
+                if !retryable {
+                    return Err(ProviderError::HttpStatus(status));
+                }
+                delay
+            }
+            Err(error)
+                if !last_attempt
+                    && (error.is_connect() || error.is_timeout() || error.is_request()) =>
+            {
+                backoff
+            }
+            Err(error) => return Err(ProviderError::Http(error.without_url())),
+        };
+        attempt += 1;
+        tokio::time::sleep(Duration::from_secs(delay)).await;
+    }
+}
+
+pub(super) fn build_client(timeout: Duration) -> Result<reqwest::Client, ProviderError> {
+    reqwest::Client::builder()
+        .use_rustls_tls()
+        // Keep OS trust as the only source even if another dependency enables bundled roots.
+        .tls_built_in_root_certs(false)
+        .tls_built_in_native_certs(true)
+        .timeout(timeout)
+        .build()
+        .map_err(ProviderError::Http)
+}
+
+pub(super) fn endpoint_url(base_url: &str, suffix: &str) -> Result<String, ProviderError> {
+    let mut endpoint = reqwest::Url::parse(base_url).map_err(|_| ProviderError::InvalidRequest)?;
+    if !matches!(endpoint.scheme(), "http" | "https")
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+    {
+        return Err(ProviderError::InvalidRequest);
+    }
+    endpoint.set_path(&format!(
+        "{}{suffix}",
+        endpoint.path().trim_end_matches('/')
+    ));
+    Ok(endpoint.to_string())
+}
+
+pub(super) async fn is_transient_rate_limit(
+    mut response: reqwest::Response,
+) -> Result<bool, ProviderError> {
     const MAX_ERROR_BYTES: usize = 65_536;
     let has_reset_header = ["retry-after", "x-ratelimit-reset"].iter().any(|name| {
         response

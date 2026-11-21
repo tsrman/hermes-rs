@@ -40,6 +40,8 @@ pub struct ChatSettings {
     pub terminal_local: bool,
     openai_api_key: Option<String>,
     openai_base_url: Option<String>,
+    anthropic_api_key: Option<String>,
+    anthropic_base_url: Option<String>,
 }
 
 pub struct FallbackSettings {
@@ -65,31 +67,71 @@ impl Default for ChatSettings {
             terminal_local: true,
             openai_api_key: None,
             openai_base_url: None,
+            anthropic_api_key: None,
+            anthropic_base_url: None,
         }
     }
 }
 
 impl ChatSettings {
     pub fn openai_key_for(&self, base_url: &str) -> Option<String> {
-        let key = std::env::var("OPENAI_API_KEY")
-            .ok()
-            .or_else(|| self.openai_api_key.clone())?;
-        let paired = std::env::var("OPENAI_BASE_URL")
-            .ok()
-            .or_else(|| self.openai_base_url.clone());
-        let url = reqwest::Url::parse(base_url).ok()?;
-        let host = url.host_str()?;
-        let allowed_host = ["openai.com", "openai.azure.com"].iter().any(|domain| {
-            host == *domain
-                || host
-                    .strip_suffix(domain)
-                    .is_some_and(|prefix| prefix.ends_with('.'))
-        });
-        let paired = paired.is_some_and(|value| {
-            value.trim().trim_end_matches('/') == base_url.trim().trim_end_matches('/')
-        });
-        (allowed_host || paired).then_some(key)
+        scoped_key(
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            self.openai_api_key.as_ref(),
+            self.openai_base_url.as_ref(),
+            &["openai.com", "openai.azure.com"],
+            base_url,
+        )
     }
+
+    pub fn anthropic_key_for(&self, base_url: &str) -> Option<String> {
+        scoped_key(
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            self.anthropic_api_key.as_ref(),
+            self.anthropic_base_url.as_ref(),
+            &["anthropic.com"],
+            base_url,
+        )
+    }
+
+    /// The vendor key allowed for `base_url`, chosen by provider name.
+    pub fn vendor_key_for(&self, provider: &str, base_url: &str) -> Option<String> {
+        match provider {
+            "openai" => self.openai_key_for(base_url),
+            "anthropic" => self.anthropic_key_for(base_url),
+            // Custom endpoints keep using an OpenAI key paired with their URL.
+            _ => self.openai_key_for(base_url),
+        }
+    }
+}
+
+/// A vendor key is sent only to the vendor's own hosts or to the URL it was paired with.
+fn scoped_key(
+    key_var: &str,
+    url_var: &str,
+    profile_key: Option<&String>,
+    profile_url: Option<&String>,
+    domains: &[&str],
+    base_url: &str,
+) -> Option<String> {
+    let key = std::env::var(key_var)
+        .ok()
+        .or_else(|| profile_key.cloned())?;
+    let paired = std::env::var(url_var).ok().or_else(|| profile_url.cloned());
+    let url = reqwest::Url::parse(base_url).ok()?;
+    let host = url.host_str()?;
+    let allowed_host = domains.iter().any(|domain| {
+        host == *domain
+            || host
+                .strip_suffix(domain)
+                .is_some_and(|prefix| prefix.ends_with('.'))
+    });
+    let paired = paired.is_some_and(|value| {
+        value.trim().trim_end_matches('/') == base_url.trim().trim_end_matches('/')
+    });
+    (allowed_host || paired).then_some(key)
 }
 
 pub fn profile_home(profile: Option<&str>) -> Result<Option<PathBuf>, String> {
@@ -202,6 +244,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
             settings.provider = match model.get("provider").and_then(serde_yaml::Value::as_str) {
                 None | Some("" | "auto" | "custom") => "custom",
                 Some("openai") => "openai",
+                Some("anthropic") => "anthropic",
                 Some(provider) => return Err(format!("provider '{provider}' is not supported")),
             };
             settings.model = model
@@ -212,10 +255,8 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
                 .get("base_url")
                 .and_then(serde_yaml::Value::as_str)
                 .map(str::to_owned);
-            if settings.base_url.as_deref().is_none_or(str::is_empty)
-                && settings.provider == "openai"
-            {
-                settings.base_url = Some("https://api.openai.com/v1".to_owned());
+            if settings.base_url.as_deref().is_none_or(str::is_empty) {
+                settings.base_url = default_base_url(settings.provider).map(str::to_owned);
             }
         } else if !model.is_null() {
             return Err("invalid model settings in config.yaml".into());
@@ -251,6 +292,8 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.api_key = secrets.get("HERMES_API_KEY").cloned();
     settings.openai_api_key = secrets.get("OPENAI_API_KEY").cloned();
     settings.openai_base_url = secrets.get("OPENAI_BASE_URL").cloned();
+    settings.anthropic_api_key = secrets.get("ANTHROPIC_API_KEY").cloned();
+    settings.anthropic_base_url = secrets.get("ANTHROPIC_BASE_URL").cloned();
     settings.terminal_local = match &config["terminal"]["backend"] {
         serde_yaml::Value::Null => terminal_env.as_deref().map_or_else(
             || {
@@ -293,14 +336,19 @@ fn fallback_settings(
     let provider = match field("provider")? {
         "custom" => "custom",
         "openai" => "openai",
+        "anthropic" => "anthropic",
         _ => return None,
     };
-    if field("api_mode").is_some_and(|mode| mode != "chat_completions") {
+    let expected_mode = if provider == "anthropic" {
+        "anthropic_messages"
+    } else {
+        "chat_completions"
+    };
+    if field("api_mode").is_some_and(|mode| mode != expected_mode) {
         return None;
     }
     let model = field("model")?;
-    let base_url =
-        field("base_url").or((provider == "openai").then_some("https://api.openai.com/v1"))?;
+    let base_url = field("base_url").or(default_base_url(provider))?;
     let api_key = if let Some(key) = field("api_key") {
         Some(key.to_owned())
     } else if let Some(name) = field("key_env") {
@@ -310,10 +358,10 @@ fn fallback_settings(
                 .or_else(|| secrets.get(name).cloned())
                 .filter(|key| !key.trim().is_empty())?,
         )
-    } else if provider == "openai" {
+    } else if provider != "custom" {
         Some(
             settings
-                .openai_key_for(base_url)
+                .vendor_key_for(provider, base_url)
                 .filter(|key| !key.trim().is_empty())?,
         )
     } else {
@@ -325,4 +373,12 @@ fn fallback_settings(
         base_url: base_url.to_owned(),
         api_key,
     })
+}
+
+fn default_base_url(provider: &str) -> Option<&'static str> {
+    match provider {
+        "openai" => Some("https://api.openai.com/v1"),
+        "anthropic" => Some("https://api.anthropic.com/v1"),
+        _ => None,
+    }
 }

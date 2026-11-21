@@ -7,7 +7,7 @@ use std::time::Duration;
 use clap::Args;
 use hermes_runtime::config::{load_chat_settings, CompactionSettings};
 use hermes_runtime::prompt::PromptSettings;
-use hermes_runtime::providers::openai::OpenAiProvider;
+use hermes_runtime::providers::{AnthropicProvider, OpenAiProvider, Provider};
 use hermes_runtime::storage::SessionWriter;
 use hermes_runtime::turn::{
     run_turn, ApprovalDecision, ApprovalRequest, CompactionOutcome, ModelRoute, TurnEvent,
@@ -73,14 +73,28 @@ impl Route {
         let provider_name = match self.provider.as_str() {
             "custom" => "custom",
             "openai" => "openai",
+            "anthropic" => "anthropic",
             _ => return Err("unsupported provider".into()),
+        };
+        let timeout = Duration::from_secs(120);
+        let setup = |error| format!("provider setup failed: {error:?}");
+        let provider = if provider_name == "anthropic" {
+            Provider::Anthropic(
+                AnthropicProvider::new(&self.base_url, &self.api_key, timeout)
+                    .map_err(setup)?
+                    .with_max_attempts(attempts),
+            )
+        } else {
+            Provider::OpenAi(
+                OpenAiProvider::new(&self.base_url, &self.api_key, timeout)
+                    .map_err(setup)?
+                    .with_max_attempts(attempts),
+            )
         };
         Ok(ModelRoute {
             model,
             provider_name,
-            provider: OpenAiProvider::new(&self.base_url, &self.api_key, Duration::from_secs(120))
-                .map_err(|error| format!("provider setup failed: {error:?}"))?
-                .with_max_attempts(attempts),
+            provider,
         })
     }
 }
@@ -112,11 +126,11 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
         .or_else(|| settings.base_url.clone())
         .filter(|value| !value.is_empty())
         .ok_or("model base URL is required")?;
-    let openai_api_key = settings.openai_key_for(&base_url);
+    let vendor_api_key = settings.vendor_key_for(settings.provider, &base_url);
     let api_key = args
         .api_key
         .or(settings.api_key)
-        .or(openai_api_key)
+        .or(vendor_api_key)
         .filter(|value| !value.is_empty())
         .ok_or("API key is required")?;
     Ok(ChatRequest {

@@ -11,7 +11,7 @@ use crate::file_tools::{
     patch_schema, search_schema, write_schema, FileWorkspace, PATCH, SEARCH_FILES, WRITE_FILE,
 };
 use crate::prompt::{load_cli_context, PromptSettings};
-use crate::providers::openai::{OpenAiProvider, ProviderError};
+use crate::providers::{Provider, ProviderError};
 use crate::skills::{SkillCatalog, SKILLS_LIST, SKILL_VIEW};
 use crate::terminal::{self, TERMINAL};
 
@@ -156,7 +156,7 @@ impl TurnHistory {
 }
 
 pub struct ModelRoute {
-    pub provider: OpenAiProvider,
+    pub provider: Provider,
     pub provider_name: &'static str,
     pub model: String,
 }
