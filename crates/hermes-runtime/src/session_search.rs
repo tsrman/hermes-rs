@@ -131,7 +131,7 @@ fn py_repr(text: &str) -> String {
 
 // ---- time ----
 
-fn host_zone() -> Tz {
+pub(crate) fn host_zone() -> Tz {
     std::env::var("TZ")
         .ok()
         .and_then(|name| name.trim_start_matches(':').parse().ok())
@@ -275,7 +275,7 @@ static ANSI_ESCAPE: LazyLock<Regex> = LazyLock::new(|| {
     .expect("valid pattern")
 });
 
-fn strip_ansi(text: &str) -> String {
+pub(crate) fn strip_ansi(text: &str) -> String {
     ANSI_ESCAPE.replace_all(text, "").into_owned()
 }
 

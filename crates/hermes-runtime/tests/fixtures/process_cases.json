@@ -1,0 +1,1002 @@
+[
+ {
+  "name": "quick_exit",
+  "owner": "t0",
+  "steps": [
+   {
+    "spawn": "exec sh -c 'echo hello; echo err >&2; exit 3'"
+   },
+   {
+    "call": {
+     "action": "wait",
+     "session_id": "$0",
+     "timeout": 5
+    },
+    "caller": null,
+    "result": {
+     "status": "exited",
+     "command": "exec sh -c 'echo hello; echo err >&2; exit 3'",
+     "exit_code": 3,
+     "completion_reason": "exited",
+     "termination_source": "",
+     "output": "hello\nerr\n"
+    }
+   },
+   {
+    "call": {
+     "action": "poll",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'echo hello; echo err >&2; exit 3'",
+     "status": "exited",
+     "pid": 0,
+     "uptime_seconds": 0,
+     "output_preview": "hello\nerr\n",
+     "exit_code": 3,
+     "completion_reason": "exited",
+     "termination_source": ""
+    }
+   },
+   {
+    "call": {
+     "action": "log",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'echo hello; echo err >&2; exit 3'",
+     "status": "exited",
+     "output": "hello\nerr",
+     "total_lines": 2,
+     "showing": "2 lines"
+    }
+   },
+   {
+    "call": {
+     "action": "list"
+    },
+    "caller": null,
+    "result": {
+     "processes": [
+      {
+       "session_id": "<S0>",
+       "command": "exec sh -c 'echo hello; echo err >&2; exit 3'",
+       "cwd": "<cwd>",
+       "pid": 0,
+       "owner_task_id": "t0",
+       "started_at": "<t>",
+       "uptime_seconds": 0,
+       "status": "exited",
+       "output_preview": "hello\nerr\n",
+       "exit_code": 3,
+       "exited_at": 0.0,
+       "completion_reason": "exited"
+      }
+     ]
+    }
+   },
+   {
+    "call": {
+     "action": "write",
+     "session_id": "$0",
+     "data": "x"
+    },
+    "caller": null,
+    "result": {
+     "status": "already_exited",
+     "error": "Process has already finished. It ran without stdin (the PTY library (ptyprocess/pywinpty) is not installed), so if it read stdin, it got end-of-file at once. Pass input non-interactively instead (arguments, a here-doc, or `printf ... | cmd`)."
+    }
+   },
+   {
+    "call": {
+     "action": "submit",
+     "session_id": "$0",
+     "data": "x"
+    },
+    "caller": null,
+    "result": {
+     "status": "already_exited",
+     "error": "Process has already finished. It ran without stdin (the PTY library (ptyprocess/pywinpty) is not installed), so if it read stdin, it got end-of-file at once. Pass input non-interactively instead (arguments, a here-doc, or `printf ... | cmd`)."
+    }
+   },
+   {
+    "call": {
+     "action": "close",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "status": "already_exited",
+     "error": "Process has already finished. It ran without stdin (the PTY library (ptyprocess/pywinpty) is not installed), so if it read stdin, it got end-of-file at once. Pass input non-interactively instead (arguments, a here-doc, or `printf ... | cmd`)."
+    }
+   },
+   {
+    "call": {
+     "action": "kill",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "status": "already_exited",
+     "command": "exec sh -c 'echo hello; echo err >&2; exit 3'",
+     "exit_code": 3,
+     "completion_reason": "exited",
+     "termination_source": "",
+     "output": "hello\nerr\n"
+    }
+   }
+  ]
+ },
+ {
+  "name": "running_process",
+  "owner": "t1",
+  "steps": [
+   {
+    "spawn": "exec sleep 30"
+   },
+   {
+    "call": {
+     "action": "poll",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sleep 30",
+     "status": "running",
+     "pid": 0,
+     "uptime_seconds": 0,
+     "output_preview": ""
+    }
+   },
+   {
+    "call": {
+     "action": "write",
+     "session_id": "$0",
+     "data": "x"
+    },
+    "caller": null,
+    "result": {
+     "status": "error",
+     "error": "This process has no stdin: the PTY library (ptyprocess/pywinpty) is not installed. Relaunching with pty=true would not help. Pass input non-interactively instead (arguments, a here-doc, or `printf ... | cmd`)."
+    }
+   },
+   {
+    "call": {
+     "action": "submit",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "status": "error",
+     "error": "This process has no stdin: the PTY library (ptyprocess/pywinpty) is not installed. Relaunching with pty=true would not help. Pass input non-interactively instead (arguments, a here-doc, or `printf ... | cmd`)."
+    }
+   },
+   {
+    "call": {
+     "action": "close",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "status": "error",
+     "error": "This process has no stdin: the PTY library (ptyprocess/pywinpty) is not installed. Relaunching with pty=true would not help. Pass input non-interactively instead (arguments, a here-doc, or `printf ... | cmd`)."
+    }
+   },
+   {
+    "call": {
+     "action": "wait",
+     "session_id": "$0",
+     "timeout": 1
+    },
+    "caller": null,
+    "result": {
+     "status": "timeout",
+     "command": "exec sleep 30",
+     "output": "",
+     "process_running": true,
+     "timeout_note": "Wait window of 1s elapsed — the process is still running. This is not an error. Uptime: <n>s. Poll again later or use terminal(background=true, notify_on_complete=true) next time for automatic notification."
+    }
+   },
+   {
+    "call": {
+     "action": "list"
+    },
+    "caller": null,
+    "result": {
+     "processes": [
+      {
+       "session_id": "<S0>",
+       "command": "exec sleep 30",
+       "cwd": "<cwd>",
+       "pid": 0,
+       "owner_task_id": "t1",
+       "started_at": "<t>",
+       "uptime_seconds": 0,
+       "status": "running",
+       "output_preview": ""
+      }
+     ]
+    }
+   },
+   {
+    "call": {
+     "action": "kill",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "status": "killed",
+     "session_id": "<S0>",
+     "completion_reason": "killed",
+     "termination_source": "process.kill",
+     "output": ""
+    }
+   },
+   {
+    "call": {
+     "action": "poll",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sleep 30",
+     "status": "exited",
+     "pid": 0,
+     "uptime_seconds": 0,
+     "output_preview": "",
+     "exit_code": -15,
+     "completion_reason": "killed",
+     "termination_source": "process.kill"
+    }
+   },
+   {
+    "call": {
+     "action": "kill",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "status": "already_exited",
+     "command": "exec sleep 30",
+     "exit_code": -15,
+     "completion_reason": "killed",
+     "termination_source": "process.kill",
+     "output": ""
+    }
+   },
+   {
+    "call": {
+     "action": "list"
+    },
+    "caller": null,
+    "result": {
+     "processes": [
+      {
+       "session_id": "<S0>",
+       "command": "exec sleep 30",
+       "cwd": "<cwd>",
+       "pid": 0,
+       "owner_task_id": "t1",
+       "started_at": "<t>",
+       "uptime_seconds": 0,
+       "status": "exited",
+       "output_preview": "",
+       "exit_code": -15,
+       "exited_at": 0.0,
+       "completion_reason": "killed"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "paging",
+  "owner": "t2",
+  "steps": [
+   {
+    "spawn": "exec sh -c 'i=0; while [ $i -lt 300 ]; do echo \"line $i\"; i=$((i+1)); done'"
+   },
+   {
+    "call": {
+     "action": "wait",
+     "session_id": "$0",
+     "timeout": 10
+    },
+    "caller": null,
+    "result": {
+     "status": "exited",
+     "command": "exec sh -c 'i=0; while [ $i -lt 300 ]; do echo \"line $i\"; i=$((i+1)); done'",
+     "exit_code": 0,
+     "completion_reason": "exited",
+     "termination_source": "",
+     "output": "line 75\nline 76\nline 77\nline 78\nline 79\nline 80\nline 81\nline 82\nline 83\nline 84\nline 85\nline 86\nline 87\nline 88\nline 89\nline 90\nline 91\nline 92\nline 93\nline 94\nline 95\nline 96\nline 97\nline 98\nline 99\nline 100\nline 101\nline 102\nline 103\nline 104\nline 105\nline 106\nline 107\nline 108\nline 109\nline 110\nline 111\nline 112\nline 113\nline 114\nline 115\nline 116\nline 117\nline 118\nline 119\nline 120\nline 121\nline 122\nline 123\nline 124\nline 125\nline 126\nline 127\nline 128\nline 129\nline 130\nline 131\nline 132\nline 133\nline 134\nline 135\nline 136\nline 137\nline 138\nline 139\nline 140\nline 141\nline 142\nline 143\nline 144\nline 145\nline 146\nline 147\nline 148\nline 149\nline 150\nline 151\nline 152\nline 153\nline 154\nline 155\nline 156\nline 157\nline 158\nline 159\nline 160\nline 161\nline 162\nline 163\nline 164\nline 165\nline 166\nline 167\nline 168\nline 169\nline 170\nline 171\nline 172\nline 173\nline 174\nline 175\nline 176\nline 177\nline 178\nline 179\nline 180\nline 181\nline 182\nline 183\nline 184\nline 185\nline 186\nline 187\nline 188\nline 189\nline 190\nline 191\nline 192\nline 193\nline 194\nline 195\nline 196\nline 197\nline 198\nline 199\nline 200\nline 201\nline 202\nline 203\nline 204\nline 205\nline 206\nline 207\nline 208\nline 209\nline 210\nline 211\nline 212\nline 213\nline 214\nline 215\nline 216\nline 217\nline 218\nline 219\nline 220\nline 221\nline 222\nline 223\nline 224\nline 225\nline 226\nline 227\nline 228\nline 229\nline 230\nline 231\nline 232\nline 233\nline 234\nline 235\nline 236\nline 237\nline 238\nline 239\nline 240\nline 241\nline 242\nline 243\nline 244\nline 245\nline 246\nline 247\nline 248\nline 249\nline 250\nline 251\nline 252\nline 253\nline 254\nline 255\nline 256\nline 257\nline 258\nline 259\nline 260\nline 261\nline 262\nline 263\nline 264\nline 265\nline 266\nline 267\nline 268\nline 269\nline 270\nline 271\nline 272\nline 273\nline 274\nline 275\nline 276\nline 277\nline 278\nline 279\nline 280\nline 281\nline 282\nline 283\nline 284\nline 285\nline 286\nline 287\nline 288\nline 289\nline 290\nline 291\nline 292\nline 293\nline 294\nline 295\nline 296\nline 297\nline 298\nline 299\n",
+     "output_cut": 590
+    }
+   },
+   {
+    "call": {
+     "action": "log",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'i=0; while [ $i -lt 300 ]; do echo \"line $i\"; i=$((i+1)); done'",
+     "status": "exited",
+     "output": "line 100\nline 101\nline 102\nline 103\nline 104\nline 105\nline 106\nline 107\nline 108\nline 109\nline 110\nline 111\nline 112\nline 113\nline 114\nline 115\nline 116\nline 117\nline 118\nline 119\nline 120\nline 121\nline 122\nline 123\nline 124\nline 125\nline 126\nline 127\nline 128\nline 129\nline 130\nline 131\nline 132\nline 133\nline 134\nline 135\nline 136\nline 137\nline 138\nline 139\nline 140\nline 141\nline 142\nline 143\nline 144\nline 145\nline 146\nline 147\nline 148\nline 149\nline 150\nline 151\nline 152\nline 153\nline 154\nline 155\nline 156\nline 157\nline 158\nline 159\nline 160\nline 161\nline 162\nline 163\nline 164\nline 165\nline 166\nline 167\nline 168\nline 169\nline 170\nline 171\nline 172\nline 173\nline 174\nline 175\nline 176\nline 177\nline 178\nline 179\nline 180\nline 181\nline 182\nline 183\nline 184\nline 185\nline 186\nline 187\nline 188\nline 189\nline 190\nline 191\nline 192\nline 193\nline 194\nline 195\nline 196\nline 197\nline 198\nline 199\nline 200\nline 201\nline 202\nline 203\nline 204\nline 205\nline 206\nline 207\nline 208\nline 209\nline 210\nline 211\nline 212\nline 213\nline 214\nline 215\nline 216\nline 217\nline 218\nline 219\nline 220\nline 221\nline 222\nline 223\nline 224\nline 225\nline 226\nline 227\nline 228\nline 229\nline 230\nline 231\nline 232\nline 233\nline 234\nline 235\nline 236\nline 237\nline 238\nline 239\nline 240\nline 241\nline 242\nline 243\nline 244\nline 245\nline 246\nline 247\nline 248\nline 249\nline 250\nline 251\nline 252\nline 253\nline 254\nline 255\nline 256\nline 257\nline 258\nline 259\nline 260\nline 261\nline 262\nline 263\nline 264\nline 265\nline 266\nline 267\nline 268\nline 269\nline 270\nline 271\nline 272\nline 273\nline 274\nline 275\nline 276\nline 277\nline 278\nline 279\nline 280\nline 281\nline 282\nline 283\nline 284\nline 285\nline 286\nline 287\nline 288\nline 289\nline 290\nline 291\nline 292\nline 293\nline 294\nline 295\nline 296\nline 297\nline 298\nline 299",
+     "total_lines": 300,
+     "showing": "200 lines"
+    }
+   },
+   {
+    "call": {
+     "action": "log",
+     "session_id": "$0",
+     "offset": 0,
+     "limit": 5
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'i=0; while [ $i -lt 300 ]; do echo \"line $i\"; i=$((i+1)); done'",
+     "status": "exited",
+     "output": "line 0\nline 1\nline 2\nline 3\nline 4",
+     "total_lines": 300,
+     "showing": "5 lines"
+    }
+   },
+   {
+    "call": {
+     "action": "log",
+     "session_id": "$0",
+     "offset": 295,
+     "limit": 50
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'i=0; while [ $i -lt 300 ]; do echo \"line $i\"; i=$((i+1)); done'",
+     "status": "exited",
+     "output": "line 295\nline 296\nline 297\nline 298\nline 299",
+     "total_lines": 300,
+     "showing": "5 lines"
+    }
+   },
+   {
+    "call": {
+     "action": "log",
+     "session_id": "$0",
+     "offset": -3,
+     "limit": 10
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'i=0; while [ $i -lt 300 ]; do echo \"line $i\"; i=$((i+1)); done'",
+     "status": "exited",
+     "output": "",
+     "total_lines": 300,
+     "showing": "0 lines"
+    }
+   },
+   {
+    "call": {
+     "action": "log",
+     "session_id": "$0",
+     "offset": 1000,
+     "limit": 5
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'i=0; while [ $i -lt 300 ]; do echo \"line $i\"; i=$((i+1)); done'",
+     "status": "exited",
+     "output": "",
+     "total_lines": 300,
+     "showing": "0 lines"
+    }
+   },
+   {
+    "call": {
+     "action": "log",
+     "session_id": "$0",
+     "limit": 0
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'i=0; while [ $i -lt 300 ]; do echo \"line $i\"; i=$((i+1)); done'",
+     "status": "exited",
+     "output": "",
+     "total_lines": 300,
+     "showing": "0 lines"
+    }
+   },
+   {
+    "call": {
+     "action": "log",
+     "session_id": "$0",
+     "limit": 2
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'i=0; while [ $i -lt 300 ]; do echo \"line $i\"; i=$((i+1)); done'",
+     "status": "exited",
+     "output": "line 298\nline 299",
+     "total_lines": 300,
+     "showing": "2 lines"
+    }
+   },
+   {
+    "call": {
+     "action": "poll",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'i=0; while [ $i -lt 300 ]; do echo \"line $i\"; i=$((i+1)); done'",
+     "status": "exited",
+     "pid": 0,
+     "uptime_seconds": 0,
+     "output_preview": "\nline 189\nline 190\nline 191\nline 192\nline 193\nline 194\nline 195\nline 196\nline 197\nline 198\nline 199\nline 200\nline 201\nline 202\nline 203\nline 204\nline 205\nline 206\nline 207\nline 208\nline 209\nline 210\nline 211\nline 212\nline 213\nline 214\nline 215\nline 216\nline 217\nline 218\nline 219\nline 220\nline 221\nline 222\nline 223\nline 224\nline 225\nline 226\nline 227\nline 228\nline 229\nline 230\nline 231\nline 232\nline 233\nline 234\nline 235\nline 236\nline 237\nline 238\nline 239\nline 240\nline 241\nline 242\nline 243\nline 244\nline 245\nline 246\nline 247\nline 248\nline 249\nline 250\nline 251\nline 252\nline 253\nline 254\nline 255\nline 256\nline 257\nline 258\nline 259\nline 260\nline 261\nline 262\nline 263\nline 264\nline 265\nline 266\nline 267\nline 268\nline 269\nline 270\nline 271\nline 272\nline 273\nline 274\nline 275\nline 276\nline 277\nline 278\nline 279\nline 280\nline 281\nline 282\nline 283\nline 284\nline 285\nline 286\nline 287\nline 288\nline 289\nline 290\nline 291\nline 292\nline 293\nline 294\nline 295\nline 296\nline 297\nline 298\nline 299\n",
+     "exit_code": 0,
+     "completion_reason": "exited",
+     "termination_source": ""
+    }
+   }
+  ]
+ },
+ {
+  "name": "long_output_is_tailed",
+  "owner": "t3",
+  "steps": [
+   {
+    "spawn": "exec sh -c 'i=0; while [ $i -lt 400 ]; do echo \"row $i xxxxxxxxxxxxxxxxxxxx\"; i=$((i+1)); done'"
+   },
+   {
+    "call": {
+     "action": "wait",
+     "session_id": "$0",
+     "timeout": 10
+    },
+    "caller": null,
+    "result": {
+     "status": "exited",
+     "command": "exec sh -c 'i=0; while [ $i -lt 400 ]; do echo \"row $i xxxxxxxxxxxxxxxxxxxx\"; i=$((i+1)); done'",
+     "exit_code": 0,
+     "completion_reason": "exited",
+     "termination_source": "",
+     "output": "ow 331 xxxxxxxxxxxxxxxxxxxx\nrow 332 xxxxxxxxxxxxxxxxxxxx\nrow 333 xxxxxxxxxxxxxxxxxxxx\nrow 334 xxxxxxxxxxxxxxxxxxxx\nrow 335 xxxxxxxxxxxxxxxxxxxx\nrow 336 xxxxxxxxxxxxxxxxxxxx\nrow 337 xxxxxxxxxxxxxxxxxxxx\nrow 338 xxxxxxxxxxxxxxxxxxxx\nrow 339 xxxxxxxxxxxxxxxxxxxx\nrow 340 xxxxxxxxxxxxxxxxxxxx\nrow 341 xxxxxxxxxxxxxxxxxxxx\nrow 342 xxxxxxxxxxxxxxxxxxxx\nrow 343 xxxxxxxxxxxxxxxxxxxx\nrow 344 xxxxxxxxxxxxxxxxxxxx\nrow 345 xxxxxxxxxxxxxxxxxxxx\nrow 346 xxxxxxxxxxxxxxxxxxxx\nrow 347 xxxxxxxxxxxxxxxxxxxx\nrow 348 xxxxxxxxxxxxxxxxxxxx\nrow 349 xxxxxxxxxxxxxxxxxxxx\nrow 350 xxxxxxxxxxxxxxxxxxxx\nrow 351 xxxxxxxxxxxxxxxxxxxx\nrow 352 xxxxxxxxxxxxxxxxxxxx\nrow 353 xxxxxxxxxxxxxxxxxxxx\nrow 354 xxxxxxxxxxxxxxxxxxxx\nrow 355 xxxxxxxxxxxxxxxxxxxx\nrow 356 xxxxxxxxxxxxxxxxxxxx\nrow 357 xxxxxxxxxxxxxxxxxxxx\nrow 358 xxxxxxxxxxxxxxxxxxxx\nrow 359 xxxxxxxxxxxxxxxxxxxx\nrow 360 xxxxxxxxxxxxxxxxxxxx\nrow 361 xxxxxxxxxxxxxxxxxxxx\nrow 362 xxxxxxxxxxxxxxxxxxxx\nrow 363 xxxxxxxxxxxxxxxxxxxx\nrow 364 xxxxxxxxxxxxxxxxxxxx\nrow 365 xxxxxxxxxxxxxxxxxxxx\nrow 366 xxxxxxxxxxxxxxxxxxxx\nrow 367 xxxxxxxxxxxxxxxxxxxx\nrow 368 xxxxxxxxxxxxxxxxxxxx\nrow 369 xxxxxxxxxxxxxxxxxxxx\nrow 370 xxxxxxxxxxxxxxxxxxxx\nrow 371 xxxxxxxxxxxxxxxxxxxx\nrow 372 xxxxxxxxxxxxxxxxxxxx\nrow 373 xxxxxxxxxxxxxxxxxxxx\nrow 374 xxxxxxxxxxxxxxxxxxxx\nrow 375 xxxxxxxxxxxxxxxxxxxx\nrow 376 xxxxxxxxxxxxxxxxxxxx\nrow 377 xxxxxxxxxxxxxxxxxxxx\nrow 378 xxxxxxxxxxxxxxxxxxxx\nrow 379 xxxxxxxxxxxxxxxxxxxx\nrow 380 xxxxxxxxxxxxxxxxxxxx\nrow 381 xxxxxxxxxxxxxxxxxxxx\nrow 382 xxxxxxxxxxxxxxxxxxxx\nrow 383 xxxxxxxxxxxxxxxxxxxx\nrow 384 xxxxxxxxxxxxxxxxxxxx\nrow 385 xxxxxxxxxxxxxxxxxxxx\nrow 386 xxxxxxxxxxxxxxxxxxxx\nrow 387 xxxxxxxxxxxxxxxxxxxx\nrow 388 xxxxxxxxxxxxxxxxxxxx\nrow 389 xxxxxxxxxxxxxxxxxxxx\nrow 390 xxxxxxxxxxxxxxxxxxxx\nrow 391 xxxxxxxxxxxxxxxxxxxx\nrow 392 xxxxxxxxxxxxxxxxxxxx\nrow 393 xxxxxxxxxxxxxxxxxxxx\nrow 394 xxxxxxxxxxxxxxxxxxxx\nrow 395 xxxxxxxxxxxxxxxxxxxx\nrow 396 xxxxxxxxxxxxxxxxxxxx\nrow 397 xxxxxxxxxxxxxxxxxxxx\nrow 398 xxxxxxxxxxxxxxxxxxxx\nrow 399 xxxxxxxxxxxxxxxxxxxx\n",
+     "output_cut": 9490
+    }
+   },
+   {
+    "call": {
+     "action": "poll",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'i=0; while [ $i -lt 400 ]; do echo \"row $i xxxxxxxxxxxxxxxxxxxx\"; i=$((i+1)); done'",
+     "status": "exited",
+     "pid": 0,
+     "uptime_seconds": 0,
+     "output_preview": "xxxxxxxxxxxxx\nrow 366 xxxxxxxxxxxxxxxxxxxx\nrow 367 xxxxxxxxxxxxxxxxxxxx\nrow 368 xxxxxxxxxxxxxxxxxxxx\nrow 369 xxxxxxxxxxxxxxxxxxxx\nrow 370 xxxxxxxxxxxxxxxxxxxx\nrow 371 xxxxxxxxxxxxxxxxxxxx\nrow 372 xxxxxxxxxxxxxxxxxxxx\nrow 373 xxxxxxxxxxxxxxxxxxxx\nrow 374 xxxxxxxxxxxxxxxxxxxx\nrow 375 xxxxxxxxxxxxxxxxxxxx\nrow 376 xxxxxxxxxxxxxxxxxxxx\nrow 377 xxxxxxxxxxxxxxxxxxxx\nrow 378 xxxxxxxxxxxxxxxxxxxx\nrow 379 xxxxxxxxxxxxxxxxxxxx\nrow 380 xxxxxxxxxxxxxxxxxxxx\nrow 381 xxxxxxxxxxxxxxxxxxxx\nrow 382 xxxxxxxxxxxxxxxxxxxx\nrow 383 xxxxxxxxxxxxxxxxxxxx\nrow 384 xxxxxxxxxxxxxxxxxxxx\nrow 385 xxxxxxxxxxxxxxxxxxxx\nrow 386 xxxxxxxxxxxxxxxxxxxx\nrow 387 xxxxxxxxxxxxxxxxxxxx\nrow 388 xxxxxxxxxxxxxxxxxxxx\nrow 389 xxxxxxxxxxxxxxxxxxxx\nrow 390 xxxxxxxxxxxxxxxxxxxx\nrow 391 xxxxxxxxxxxxxxxxxxxx\nrow 392 xxxxxxxxxxxxxxxxxxxx\nrow 393 xxxxxxxxxxxxxxxxxxxx\nrow 394 xxxxxxxxxxxxxxxxxxxx\nrow 395 xxxxxxxxxxxxxxxxxxxx\nrow 396 xxxxxxxxxxxxxxxxxxxx\nrow 397 xxxxxxxxxxxxxxxxxxxx\nrow 398 xxxxxxxxxxxxxxxxxxxx\nrow 399 xxxxxxxxxxxxxxxxxxxx\n",
+     "exit_code": 0,
+     "completion_reason": "exited",
+     "termination_source": ""
+    }
+   },
+   {
+    "call": {
+     "action": "kill",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "status": "already_exited",
+     "command": "exec sh -c 'i=0; while [ $i -lt 400 ]; do echo \"row $i xxxxxxxxxxxxxxxxxxxx\"; i=$((i+1)); done'",
+     "exit_code": 0,
+     "completion_reason": "exited",
+     "termination_source": "",
+     "output": "ow 331 xxxxxxxxxxxxxxxxxxxx\nrow 332 xxxxxxxxxxxxxxxxxxxx\nrow 333 xxxxxxxxxxxxxxxxxxxx\nrow 334 xxxxxxxxxxxxxxxxxxxx\nrow 335 xxxxxxxxxxxxxxxxxxxx\nrow 336 xxxxxxxxxxxxxxxxxxxx\nrow 337 xxxxxxxxxxxxxxxxxxxx\nrow 338 xxxxxxxxxxxxxxxxxxxx\nrow 339 xxxxxxxxxxxxxxxxxxxx\nrow 340 xxxxxxxxxxxxxxxxxxxx\nrow 341 xxxxxxxxxxxxxxxxxxxx\nrow 342 xxxxxxxxxxxxxxxxxxxx\nrow 343 xxxxxxxxxxxxxxxxxxxx\nrow 344 xxxxxxxxxxxxxxxxxxxx\nrow 345 xxxxxxxxxxxxxxxxxxxx\nrow 346 xxxxxxxxxxxxxxxxxxxx\nrow 347 xxxxxxxxxxxxxxxxxxxx\nrow 348 xxxxxxxxxxxxxxxxxxxx\nrow 349 xxxxxxxxxxxxxxxxxxxx\nrow 350 xxxxxxxxxxxxxxxxxxxx\nrow 351 xxxxxxxxxxxxxxxxxxxx\nrow 352 xxxxxxxxxxxxxxxxxxxx\nrow 353 xxxxxxxxxxxxxxxxxxxx\nrow 354 xxxxxxxxxxxxxxxxxxxx\nrow 355 xxxxxxxxxxxxxxxxxxxx\nrow 356 xxxxxxxxxxxxxxxxxxxx\nrow 357 xxxxxxxxxxxxxxxxxxxx\nrow 358 xxxxxxxxxxxxxxxxxxxx\nrow 359 xxxxxxxxxxxxxxxxxxxx\nrow 360 xxxxxxxxxxxxxxxxxxxx\nrow 361 xxxxxxxxxxxxxxxxxxxx\nrow 362 xxxxxxxxxxxxxxxxxxxx\nrow 363 xxxxxxxxxxxxxxxxxxxx\nrow 364 xxxxxxxxxxxxxxxxxxxx\nrow 365 xxxxxxxxxxxxxxxxxxxx\nrow 366 xxxxxxxxxxxxxxxxxxxx\nrow 367 xxxxxxxxxxxxxxxxxxxx\nrow 368 xxxxxxxxxxxxxxxxxxxx\nrow 369 xxxxxxxxxxxxxxxxxxxx\nrow 370 xxxxxxxxxxxxxxxxxxxx\nrow 371 xxxxxxxxxxxxxxxxxxxx\nrow 372 xxxxxxxxxxxxxxxxxxxx\nrow 373 xxxxxxxxxxxxxxxxxxxx\nrow 374 xxxxxxxxxxxxxxxxxxxx\nrow 375 xxxxxxxxxxxxxxxxxxxx\nrow 376 xxxxxxxxxxxxxxxxxxxx\nrow 377 xxxxxxxxxxxxxxxxxxxx\nrow 378 xxxxxxxxxxxxxxxxxxxx\nrow 379 xxxxxxxxxxxxxxxxxxxx\nrow 380 xxxxxxxxxxxxxxxxxxxx\nrow 381 xxxxxxxxxxxxxxxxxxxx\nrow 382 xxxxxxxxxxxxxxxxxxxx\nrow 383 xxxxxxxxxxxxxxxxxxxx\nrow 384 xxxxxxxxxxxxxxxxxxxx\nrow 385 xxxxxxxxxxxxxxxxxxxx\nrow 386 xxxxxxxxxxxxxxxxxxxx\nrow 387 xxxxxxxxxxxxxxxxxxxx\nrow 388 xxxxxxxxxxxxxxxxxxxx\nrow 389 xxxxxxxxxxxxxxxxxxxx\nrow 390 xxxxxxxxxxxxxxxxxxxx\nrow 391 xxxxxxxxxxxxxxxxxxxx\nrow 392 xxxxxxxxxxxxxxxxxxxx\nrow 393 xxxxxxxxxxxxxxxxxxxx\nrow 394 xxxxxxxxxxxxxxxxxxxx\nrow 395 xxxxxxxxxxxxxxxxxxxx\nrow 396 xxxxxxxxxxxxxxxxxxxx\nrow 397 xxxxxxxxxxxxxxxxxxxx\nrow 398 xxxxxxxxxxxxxxxxxxxx\nrow 399 xxxxxxxxxxxxxxxxxxxx\n",
+     "output_cut": 9490
+    }
+   }
+  ]
+ },
+ {
+  "name": "text_handling",
+  "owner": "t4",
+  "steps": [
+   {
+    "spawn": "exec sh -c 'printf \"\\033[31mred\\033[0m caf\\303\\251 \\342\\202\\254\\n\"; echo Authorization: Bearer abcdefghijklmnop12345678'"
+   },
+   {
+    "call": {
+     "action": "wait",
+     "session_id": "$0",
+     "timeout": 10
+    },
+    "caller": null,
+    "result": {
+     "status": "exited",
+     "command": "exec sh -c 'printf \"\\033[31mred\\033[0m caf\\303\\251 \\342\\202\\254\\n\"; echo Authorization: Bearer abcdef...5678'",
+     "exit_code": 0,
+     "completion_reason": "exited",
+     "termination_source": "",
+     "output": "red café €\nAuthorization: Bearer abcdef...5678\n"
+    }
+   },
+   {
+    "call": {
+     "action": "poll",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'printf \"\\033[31mred\\033[0m caf\\303\\251 \\342\\202\\254\\n\"; echo Authorization: Bearer abcdef...5678'",
+     "status": "exited",
+     "pid": 0,
+     "uptime_seconds": 0,
+     "output_preview": "red café €\nAuthorization: Bearer abcdef...5678\n",
+     "exit_code": 0,
+     "completion_reason": "exited",
+     "termination_source": ""
+    }
+   },
+   {
+    "call": {
+     "action": "log",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'printf \"\\033[31mred\\033[0m caf\\303\\251 \\342\\202\\254\\n\"; echo Authorization: Bearer abcdef...5678'",
+     "status": "exited",
+     "output": "red café €\nAuthorization: Bearer abcdef...5678",
+     "total_lines": 2,
+     "showing": "2 lines"
+    }
+   },
+   {
+    "call": {
+     "action": "list"
+    },
+    "caller": null,
+    "result": {
+     "processes": [
+      {
+       "session_id": "<S0>",
+       "command": "exec sh -c 'printf \"\\033[31mred\\033[0m caf\\303\\251 \\342\\202\\254\\n\"; echo Authorization: Bearer abcdef...5678'",
+       "cwd": "<cwd>",
+       "pid": 0,
+       "owner_task_id": "t4",
+       "started_at": "<t>",
+       "uptime_seconds": 0,
+       "status": "exited",
+       "output_preview": "\u001b[31mred\u001b[0m café €\nAuthorization: Bearer abcdef...5678\n",
+       "exit_code": 0,
+       "exited_at": 0.0,
+       "completion_reason": "exited"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "line_separators",
+  "owner": "t5",
+  "steps": [
+   {
+    "spawn": "exec sh -c 'printf \"a\\rb\\nc\\f d\\n\\nlast\"'"
+   },
+   {
+    "call": {
+     "action": "wait",
+     "session_id": "$0",
+     "timeout": 10
+    },
+    "caller": null,
+    "result": {
+     "status": "exited",
+     "command": "exec sh -c 'printf \"a\\rb\\nc\\f d\\n\\nlast\"'",
+     "exit_code": 0,
+     "completion_reason": "exited",
+     "termination_source": "",
+     "output": "a\rb\nc\f d\n\nlast"
+    }
+   },
+   {
+    "call": {
+     "action": "log",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'printf \"a\\rb\\nc\\f d\\n\\nlast\"'",
+     "status": "exited",
+     "output": "a\nb\nc\n d\n\nlast",
+     "total_lines": 6,
+     "showing": "6 lines"
+    }
+   },
+   {
+    "call": {
+     "action": "log",
+     "session_id": "$0",
+     "offset": 1,
+     "limit": 2
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'printf \"a\\rb\\nc\\f d\\n\\nlast\"'",
+     "status": "exited",
+     "output": "b\nc",
+     "total_lines": 6,
+     "showing": "2 lines"
+    }
+   }
+  ]
+ },
+ {
+  "name": "signal_exit",
+  "owner": "t6",
+  "steps": [
+   {
+    "spawn": "exec sh -c 'kill -9 $$'"
+   },
+   {
+    "call": {
+     "action": "wait",
+     "session_id": "$0",
+     "timeout": 10
+    },
+    "caller": null,
+    "result": {
+     "status": "exited",
+     "command": "exec sh -c 'kill -9 $$'",
+     "exit_code": -9,
+     "completion_reason": "exited",
+     "termination_source": "",
+     "output": ""
+    }
+   },
+   {
+    "call": {
+     "action": "poll",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'kill -9 $$'",
+     "status": "exited",
+     "pid": 0,
+     "uptime_seconds": 0,
+     "output_preview": "",
+     "exit_code": -9,
+     "completion_reason": "exited",
+     "termination_source": ""
+    }
+   }
+  ]
+ },
+ {
+  "name": "ownership_and_prefixes",
+  "owner": "t7",
+  "steps": [
+   {
+    "spawn": "exec sh -c 'echo mine'"
+   },
+   {
+    "call": {
+     "action": "wait",
+     "session_id": "$0",
+     "timeout": 10
+    },
+    "caller": null,
+    "result": {
+     "status": "exited",
+     "command": "exec sh -c 'echo mine'",
+     "exit_code": 0,
+     "completion_reason": "exited",
+     "termination_source": "",
+     "output": "mine\n"
+    }
+   },
+   {
+    "call": {
+     "action": "poll",
+     "session_id": "$0"
+    },
+    "caller": "other",
+    "result": {
+     "status": "not_found",
+     "error": "No process with ID <S0>"
+    }
+   },
+   {
+    "call": {
+     "action": "list"
+    },
+    "caller": "other",
+    "result": {
+     "processes": []
+    }
+   },
+   {
+    "call": {
+     "action": "poll",
+     "session_id": "$0~4"
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'echo mine'",
+     "status": "exited",
+     "pid": 0,
+     "uptime_seconds": 0,
+     "output_preview": "mine\n",
+     "exit_code": 0,
+     "completion_reason": "exited",
+     "termination_source": ""
+    }
+   },
+   {
+    "call": {
+     "action": "poll",
+     "session_id": "$0~p6"
+    },
+    "caller": null,
+    "result": {
+     "session_id": "<S0>",
+     "command": "exec sh -c 'echo mine'",
+     "status": "exited",
+     "pid": 0,
+     "uptime_seconds": 0,
+     "output_preview": "mine\n",
+     "exit_code": 0,
+     "completion_reason": "exited",
+     "termination_source": ""
+    }
+   },
+   {
+    "call": {
+     "action": "poll",
+     "session_id": "$0~3"
+    },
+    "caller": null,
+    "result": {
+     "status": "not_found",
+     "error": "No process with ID <P3>"
+    }
+   },
+   {
+    "call": {
+     "action": "poll",
+     "session_id": "proc_zzzzzzzz"
+    },
+    "caller": null,
+    "result": {
+     "status": "not_found",
+     "error": "No process with ID proc_zzzzzzzz"
+    }
+   },
+   {
+    "call": {
+     "action": "poll",
+     "session_id": "nope"
+    },
+    "caller": null,
+    "result": {
+     "status": "not_found",
+     "error": "No process with ID nope"
+    }
+   },
+   {
+    "call": {
+     "action": "poll",
+     "session_id": 12345
+    },
+    "caller": null,
+    "result": {
+     "status": "not_found",
+     "error": "No process with ID 12345"
+    }
+   }
+  ]
+ },
+ {
+  "name": "wait_limits",
+  "owner": "t8",
+  "steps": [
+   {
+    "spawn": "exec sh -c 'echo quick'"
+   },
+   {
+    "call": {
+     "action": "wait",
+     "session_id": "$0",
+     "timeout": 999
+    },
+    "caller": null,
+    "result": {
+     "status": "exited",
+     "command": "exec sh -c 'echo quick'",
+     "exit_code": 0,
+     "completion_reason": "exited",
+     "termination_source": "",
+     "output": "quick\n",
+     "timeout_note": "Requested wait of 999s was clamped to configured limit of 180s"
+    }
+   },
+   {
+    "call": {
+     "action": "wait",
+     "session_id": "$0",
+     "timeout": 0
+    },
+    "caller": null,
+    "result": {
+     "status": "error",
+     "error": "timeout must be positive (got 0)"
+    }
+   },
+   {
+    "call": {
+     "action": "wait",
+     "session_id": "$0",
+     "timeout": -4
+    },
+    "caller": null,
+    "result": {
+     "status": "error",
+     "error": "timeout must be positive (got -4)"
+    }
+   },
+   {
+    "call": {
+     "action": "wait",
+     "session_id": "$0"
+    },
+    "caller": null,
+    "result": {
+     "status": "exited",
+     "command": "exec sh -c 'echo quick'",
+     "exit_code": 0,
+     "completion_reason": "exited",
+     "termination_source": "",
+     "output": "quick\n"
+    }
+   },
+   {
+    "spawn": "exec sleep 30"
+   },
+   {
+    "call": {
+     "action": "wait",
+     "session_id": "$1",
+     "timeout": 1
+    },
+    "caller": null,
+    "result": {
+     "status": "timeout",
+     "command": "exec sleep 30",
+     "output": "",
+     "process_running": true,
+     "timeout_note": "Wait window of 1s elapsed — the process is still running. This is not an error. Uptime: <n>s. Poll again later or use terminal(background=true, notify_on_complete=true) next time for automatic notification."
+    }
+   },
+   {
+    "call": {
+     "action": "kill",
+     "session_id": "$1"
+    },
+    "caller": null,
+    "result": {
+     "status": "killed",
+     "session_id": "<S1>",
+     "completion_reason": "killed",
+     "termination_source": "process.kill",
+     "output": ""
+    }
+   }
+  ]
+ },
+ {
+  "name": "argument_errors",
+  "owner": "t9",
+  "steps": [
+   {
+    "call": {
+     "action": "poll"
+    },
+    "caller": null,
+    "result": {
+     "error": "session_id is required for poll"
+    }
+   },
+   {
+    "call": {
+     "action": "wait"
+    },
+    "caller": null,
+    "result": {
+     "error": "session_id is required for wait"
+    }
+   },
+   {
+    "call": {
+     "action": "kill",
+     "session_id": ""
+    },
+    "caller": null,
+    "result": {
+     "error": "session_id is required for kill"
+    }
+   },
+   {
+    "call": {
+     "action": "handoff"
+    },
+    "caller": null,
+    "result": {
+     "error": "session_id is required for handoff"
+    }
+   },
+   {
+    "call": {
+     "action": "handoff",
+     "session_id": "proc_abcdef123456",
+     "data": "x"
+    },
+    "caller": null,
+    "result": {
+     "error": "handoff is only available to a running subagent with a live parent; you are not one."
+    }
+   },
+   {
+    "call": {
+     "action": "explode",
+     "session_id": "x"
+    },
+    "caller": null,
+    "result": {
+     "error": "Unknown process action: explode. Use: list, poll, log, wait, kill, write, submit, close, handoff"
+    }
+   },
+   {
+    "call": {},
+    "caller": null,
+    "result": {
+     "error": "Unknown process action: . Use: list, poll, log, wait, kill, write, submit, close, handoff"
+    }
+   },
+   {
+    "call": {
+     "action": "list"
+    },
+    "caller": null,
+    "result": {
+     "processes": []
+    }
+   }
+  ]
+ }
+]

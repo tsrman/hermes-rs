@@ -60,7 +60,10 @@ enum ConfigCommand {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    match run().await {
+    let outcome = run().await;
+    // Background processes belong to this run; none is left behind.
+    hermes_runtime::process::kill_all();
+    match outcome {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
             eprintln!("{error}");

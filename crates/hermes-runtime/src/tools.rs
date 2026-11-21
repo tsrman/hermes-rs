@@ -17,6 +17,7 @@ use crate::file_tools::{
     patch_schema, search_schema, write_schema, FileWorkspace, PATCH, SEARCH_FILES, WRITE_FILE,
 };
 use crate::memory_tool::{self, MemorySettings, MemoryTurn, MEMORY};
+use crate::process::{self, PROCESS_MANAGE};
 use crate::session_search::{self, Recall, SESSION_SEARCH};
 use crate::skills::{SkillCatalog, SKILLS_LIST, SKILL_VIEW};
 use crate::terminal::{self, TERMINAL};
@@ -143,7 +144,23 @@ fn terminal_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFutur
             });
         }
         let timeout = cx.options.approval_timeout_secs;
-        terminal::execute(cx.files, args, timeout, &mut cx.approve).await
+        let background = (cx.options.tools.allows(PROCESS_MANAGE)
+            && !cx.options.tools.is_deferred(PROCESS_MANAGE))
+        .then(|| cx.options.session_id.unwrap_or("default"));
+        terminal::execute(cx.files, args, timeout, background, &mut cx.approve).await
+    })
+}
+
+/// `process_manage` manages what `terminal(background=true)` starts, so it is offered with the
+/// terminal unless the tool-search bridge hides it.
+fn process_manage_offered(env: &ToolEnv) -> bool {
+    env.terminal && env.policy.allows(PROCESS_MANAGE) && !env.policy.is_deferred(PROCESS_MANAGE)
+}
+
+fn process_manage_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
+    Box::pin(async move {
+        let caller = cx.options.session_id.unwrap_or("default");
+        process::call(caller, args).await
     })
 }
 
@@ -299,6 +316,11 @@ static TOOLS: &[ToolDef] = &[
         call: patch_call,
     },
     ToolDef {
+        name: PROCESS_MANAGE,
+        offered: |env| process_manage_offered(env).then(process::schema),
+        call: process_manage_call,
+    },
+    ToolDef {
         name: READ_FILE,
         offered: |_| Some(read_file_schema()),
         call: read_file_call,
@@ -336,7 +358,10 @@ static TOOLS: &[ToolDef] = &[
     },
     ToolDef {
         name: TERMINAL,
-        offered: |env| env.terminal.then(terminal::schema),
+        offered: |env| {
+            env.terminal
+                .then(|| terminal::schema(process_manage_offered(env)))
+        },
         call: terminal_call,
     },
     ToolDef {
@@ -493,6 +518,7 @@ mod tests {
                 "clarify",
                 "memory",
                 "patch",
+                "process_manage",
                 "read_file",
                 "search_files",
                 "session_search",
@@ -513,6 +539,35 @@ mod tests {
         );
         assert!(find("terminal", &env.policy).is_none());
         assert!(find("read_file", &env.policy).is_some());
+    }
+
+    #[test]
+    fn background_commands_need_process_manage_to_be_offered() {
+        let terminal_schema = |env: &ToolEnv| -> Value {
+            offered_schemas(env)
+                .into_iter()
+                .find(|schema| schema["function"]["name"] == TERMINAL)
+                .expect("terminal is offered")
+        };
+        let mut env = ToolEnv {
+            terminal: true,
+            ..ToolEnv::default()
+        };
+        let schema = terminal_schema(&env);
+        assert!(schema["function"]["parameters"]["properties"]
+            .get("background")
+            .is_some());
+        // The default configuration hides process_manage behind the tool-search bridge.
+        env.policy = ToolPolicy::from_config(&serde_yaml::Value::Null);
+        let schema = terminal_schema(&env);
+        assert!(schema["function"]["parameters"]["properties"]
+            .get("background")
+            .is_none());
+        let names: Vec<String> = offered_schemas(&env)
+            .iter()
+            .map(|s| s["function"]["name"].as_str().unwrap().to_owned())
+            .collect();
+        assert!(!names.contains(&PROCESS_MANAGE.to_owned()));
     }
 
     #[test]
