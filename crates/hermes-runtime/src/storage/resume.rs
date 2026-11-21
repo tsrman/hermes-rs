@@ -81,6 +81,10 @@ impl ResumeState {
         })
     }
 
+    pub(super) fn id(&self) -> &str {
+        &self.id
+    }
+
     pub(super) fn model(&self) -> Option<&str> {
         self.revision.model.as_deref()
     }

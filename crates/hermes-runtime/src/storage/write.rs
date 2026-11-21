@@ -44,6 +44,11 @@ impl<'a> SessionWriter<'a> {
         Ok(writer)
     }
 
+    /// The session being resumed; a new session has no id until its first turn is saved.
+    pub fn session_id(&self) -> Option<&str> {
+        self.resume.as_ref().map(ResumeState::id)
+    }
+
     pub fn saved_model(&self) -> Option<&str> {
         self.resume.as_ref().and_then(ResumeState::model)
     }

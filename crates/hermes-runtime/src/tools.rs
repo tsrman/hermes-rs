@@ -16,6 +16,7 @@ use crate::file_tools::{
     patch_schema, search_schema, write_schema, FileWorkspace, PATCH, SEARCH_FILES, WRITE_FILE,
 };
 use crate::memory_tool::{self, MemorySettings, MemoryTurn, MEMORY};
+use crate::session_search::{self, Recall, SESSION_SEARCH};
 use crate::skills::{SkillCatalog, SKILLS_LIST, SKILL_VIEW};
 use crate::terminal::{self, TERMINAL};
 use crate::todo_tool::{self, TodoStore, TODO_LIST};
@@ -159,6 +160,20 @@ fn todo_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a
     Box::pin(async move { todo_tool::call(cx.todo, args) })
 }
 
+fn session_search_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
+    Box::pin(async move {
+        let Some(home) = cx.options.profile else {
+            return json!({"error": format!("Unknown tool: {SESSION_SEARCH}")});
+        };
+        let recall = Recall {
+            home,
+            session_id: cx.options.session_id,
+        };
+        let args = args.to_owned();
+        tokio::task::block_in_place(|| session_search::call(&recall, &args))
+    })
+}
+
 fn memory_available(env: &ToolEnv) -> Option<&MemorySettings> {
     env.memory
         .as_ref()
@@ -267,6 +282,14 @@ static TOOLS: &[ToolDef] = &[
         name: SEARCH_FILES,
         offered: |_| Some(search_schema()),
         call: search_files_call,
+    },
+    ToolDef {
+        name: SESSION_SEARCH,
+        offered: |env| {
+            (env.has_profile && !env.policy.is_deferred(SESSION_SEARCH))
+                .then(session_search::schema)
+        },
+        call: session_search_call,
     },
     ToolDef {
         name: SKILL_VIEW,
@@ -427,6 +450,7 @@ mod tests {
                 "memory",
                 "read_file",
                 "search_files",
+                "session_search",
                 "todo_list"
             ]
         );
@@ -445,6 +469,7 @@ mod tests {
                 "patch",
                 "read_file",
                 "search_files",
+                "session_search",
                 "skill_view",
                 "skills_list",
                 "terminal",

@@ -262,6 +262,7 @@ where
         tools: &request.tools,
         root,
         profile: home,
+        session_id: writer.as_ref().and_then(SessionWriter::session_id),
         max_turns: request.max_turns,
         approval_timeout_secs: request.approval_timeout_secs,
         terminal_local: request.terminal_local,

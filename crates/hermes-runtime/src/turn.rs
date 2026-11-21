@@ -223,6 +223,8 @@ pub struct TurnOptions<'a> {
     pub memory: Option<&'a MemorySettings>,
     pub root: &'a Path,
     pub profile: Option<&'a Path>,
+    /// The saved session this turn continues, which `session_search` leaves out of recall.
+    pub session_id: Option<&'a str>,
     pub max_turns: u32,
     pub approval_timeout_secs: Option<u32>,
     pub terminal_local: bool,

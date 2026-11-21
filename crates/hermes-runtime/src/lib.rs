@@ -10,6 +10,7 @@ pub mod profile;
 pub mod prompt;
 pub mod providers;
 pub mod redact;
+mod session_search;
 mod skills;
 pub mod storage;
 mod terminal;
