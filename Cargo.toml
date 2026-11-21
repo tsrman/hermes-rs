@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/hermes-core", "crates/hermes-runtime", "crates/hermes-cli"]
+resolver = "2"
