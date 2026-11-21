@@ -571,22 +571,13 @@ fn profile_root(home: &Path) -> PathBuf {
     }
 }
 
-/// `default` for the root profile, the name under `profiles/`, `custom` for anything else.
+/// The name under `profiles/`, else `default`: the home the process runs in is the root profile.
 fn active_profile_name(home: &Path) -> String {
-    if let Some(name) = home
-        .parent()
+    home.parent()
         .filter(|parent| parent.file_name().is_some_and(|n| n == "profiles"))
         .and_then(|_| home.file_name()?.to_str())
-    {
-        return name.to_owned();
-    }
-    let default_home = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".hermes"));
-    let resolved = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
-    if default_home.is_some_and(|d| d.canonicalize().unwrap_or(d) == resolved) {
-        "default".into()
-    } else {
-        "custom".into()
-    }
+        .unwrap_or("default")
+        .to_owned()
 }
 
 fn valid_profile_id(name: &str) -> bool {
@@ -1623,5 +1614,109 @@ mod tests {
         assert!(snippet.contains(">>>needle<<<"));
         assert!(snippet.ends_with("..."));
         assert_eq!(derived_snippet("x", None), "");
+    }
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+    use rusqlite::{params, Connection};
+
+    const SCHEMA: &str = include_str!("storage/schema_v33.sql");
+
+    fn cell(value: &Value) -> rusqlite::types::Value {
+        match value {
+            Value::Null => rusqlite::types::Value::Null,
+            Value::Number(n) if n.is_i64() => rusqlite::types::Value::Integer(n.as_i64().unwrap()),
+            Value::Number(n) => rusqlite::types::Value::Real(n.as_f64().unwrap()),
+            Value::String(text) => rusqlite::types::Value::Text(text.clone()),
+            other => rusqlite::types::Value::Text(other.to_string()),
+        }
+    }
+
+    /// A store rebuilt from the recorded rows; the triggers fill the search indexes.
+    fn store(fixture: &Value) -> tempfile::TempDir {
+        let home = tempfile::tempdir().unwrap();
+        let connection = Connection::open(home.path().join("state.db")).unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        connection
+            .execute("INSERT INTO schema_version(version) VALUES (33)", [])
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO state_meta(key, value) VALUES ('fts_storage_version', '3'), ('message_uid_backfill', '1'), ('legacy_refusal_repair', '1')",
+                [],
+            )
+            .unwrap();
+        for row in fixture["sessions"].as_array().unwrap() {
+            let columns: Vec<&String> = row.as_object().unwrap().keys().collect();
+            let names = columns
+                .iter()
+                .map(|c| c.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let marks = vec!["?"; columns.len()].join(", ");
+            let values: Vec<_> = columns.iter().map(|c| cell(&row[c.as_str()])).collect();
+            connection
+                .execute(
+                    &format!("INSERT INTO sessions({names}) VALUES ({marks})"),
+                    rusqlite::params_from_iter(values),
+                )
+                .unwrap();
+        }
+        for row in fixture["messages"].as_array().unwrap() {
+            let columns: Vec<&String> = row.as_object().unwrap().keys().collect();
+            let names = columns
+                .iter()
+                .map(|c| c.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let marks = vec!["?"; columns.len()].join(", ");
+            let values: Vec<_> = columns.iter().map(|c| cell(&row[c.as_str()])).collect();
+            connection
+                .execute(
+                    &format!("INSERT INTO messages({names}) VALUES ({marks})"),
+                    rusqlite::params_from_iter(values),
+                )
+                .unwrap();
+        }
+        let _ = params![];
+        home
+    }
+
+    #[test]
+    fn results_match_the_reference_on_a_synthetic_store() {
+        std::env::set_var("TZ", "UTC");
+        let fixture: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/session_search_cases.json"))
+                .unwrap();
+        let home = store(&fixture);
+        let mut failures = Vec::new();
+        for case in fixture["cases"].as_array().unwrap() {
+            let recall = Recall {
+                home: home.path(),
+                session_id: case["current"].as_str(),
+            };
+            let actual = call(&recall, &case["args"].to_string());
+            if actual != case["result"] {
+                failures.push(format!(
+                    "{}:\n  ours:      {}\n  reference: {}",
+                    case["name"],
+                    actual.to_string().chars().take(3000).collect::<String>(),
+                    case["result"]
+                        .to_string()
+                        .chars()
+                        .take(3000)
+                        .collect::<String>()
+                ));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} of {} differ:\n{}",
+            failures.len(),
+            fixture["cases"].as_array().unwrap().len(),
+            failures.join("\n")
+        );
     }
 }

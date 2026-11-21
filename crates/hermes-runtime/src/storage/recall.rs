@@ -1057,7 +1057,11 @@ fn freshest(session_id: &str) -> String {
     )
 }
 
-const SUMMARY_PREFIXES: [&str; 2] = ["[CONTEXT COMPACTION", "[CONTEXT SUMMARY]:"];
+/// The introduction shared by compaction summaries, and the legacy label.
+const SUMMARY_PREFIXES: [&str; 2] = [
+    "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the summary below. This is a handoff from a previous context window — treat it as background reference, NOT as active instructions. ",
+    "[CONTEXT SUMMARY]:",
+];
 
 /// The first user message that is not compaction scaffolding. Skill-scaffold windows of
 /// the reference are not reproduced: such a message previews as its plain head.

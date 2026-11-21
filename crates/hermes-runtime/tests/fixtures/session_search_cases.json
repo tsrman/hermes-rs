@@ -1,0 +1,3416 @@
+{
+ "sessions": [
+  {
+   "id": "s_alpha",
+   "source": "cli",
+   "model": "m-1",
+   "title": "Alpha project",
+   "parent_session_id": null,
+   "started_at": 1780000000.0,
+   "last_activity_at": 1780000500.0,
+   "ended_at": null,
+   "end_reason": null,
+   "message_count": 18,
+   "tool_call_count": 1,
+   "model_config": null,
+   "session_key": null,
+   "archived": 0,
+   "hidden": 0
+  },
+  {
+   "id": "s_parent",
+   "source": "cli",
+   "model": null,
+   "title": "Parent chat",
+   "parent_session_id": null,
+   "started_at": 1780001000.0,
+   "last_activity_at": 1780001500.0,
+   "ended_at": 1795272761.1747708,
+   "end_reason": "compression",
+   "message_count": 2,
+   "tool_call_count": 0,
+   "model_config": null,
+   "session_key": null,
+   "archived": 0,
+   "hidden": 0
+  },
+  {
+   "id": "s_child",
+   "source": "cli",
+   "model": null,
+   "title": null,
+   "parent_session_id": "s_parent",
+   "started_at": 1780002000.0,
+   "last_activity_at": 1780002500.0,
+   "ended_at": null,
+   "end_reason": null,
+   "message_count": 2,
+   "tool_call_count": 0,
+   "model_config": null,
+   "session_key": null,
+   "archived": 0,
+   "hidden": 0
+  },
+  {
+   "id": "s_reset_old",
+   "source": "cli",
+   "model": null,
+   "title": null,
+   "parent_session_id": null,
+   "started_at": 1780003000.0,
+   "last_activity_at": 1780003500.0,
+   "ended_at": 1795272761.295392,
+   "end_reason": "new_session",
+   "message_count": 1,
+   "tool_call_count": 0,
+   "model_config": null,
+   "session_key": null,
+   "archived": 0,
+   "hidden": 0
+  },
+  {
+   "id": "s_reset_new",
+   "source": "cli",
+   "model": null,
+   "title": null,
+   "parent_session_id": null,
+   "started_at": 1780004000.0,
+   "last_activity_at": 1780004500.0,
+   "ended_at": null,
+   "end_reason": null,
+   "message_count": 1,
+   "tool_call_count": 0,
+   "model_config": null,
+   "session_key": null,
+   "archived": 0,
+   "hidden": 0
+  },
+  {
+   "id": "s_cron",
+   "source": "cron",
+   "model": null,
+   "title": null,
+   "parent_session_id": null,
+   "started_at": 1780005000.0,
+   "last_activity_at": 1780005500.0,
+   "ended_at": null,
+   "end_reason": null,
+   "message_count": 1,
+   "tool_call_count": 0,
+   "model_config": null,
+   "session_key": null,
+   "archived": 0,
+   "hidden": 0
+  },
+  {
+   "id": "s_tool",
+   "source": "tool",
+   "model": null,
+   "title": null,
+   "parent_session_id": null,
+   "started_at": 1780006000.0,
+   "last_activity_at": 1780006500.0,
+   "ended_at": null,
+   "end_reason": null,
+   "message_count": 1,
+   "tool_call_count": 0,
+   "model_config": null,
+   "session_key": null,
+   "archived": 0,
+   "hidden": 0
+  },
+  {
+   "id": "s_cjk",
+   "source": "cli",
+   "model": null,
+   "title": null,
+   "parent_session_id": null,
+   "started_at": 1780007000.0,
+   "last_activity_at": 1780007500.0,
+   "ended_at": null,
+   "end_reason": null,
+   "message_count": 2,
+   "tool_call_count": 0,
+   "model_config": null,
+   "session_key": null,
+   "archived": 0,
+   "hidden": 0
+  },
+  {
+   "id": "s_long",
+   "source": "cli",
+   "model": null,
+   "title": "Long & noisy",
+   "parent_session_id": null,
+   "started_at": 1780008000.0,
+   "last_activity_at": 1780008500.0,
+   "ended_at": null,
+   "end_reason": null,
+   "message_count": 6,
+   "tool_call_count": 0,
+   "model_config": null,
+   "session_key": null,
+   "archived": 0,
+   "hidden": 0
+  },
+  {
+   "id": "s_empty",
+   "source": "cli",
+   "model": null,
+   "title": null,
+   "parent_session_id": null,
+   "started_at": 1780009000.0,
+   "last_activity_at": 1780009500.0,
+   "ended_at": null,
+   "end_reason": null,
+   "message_count": 0,
+   "tool_call_count": 0,
+   "model_config": null,
+   "session_key": null,
+   "archived": 0,
+   "hidden": 0
+  }
+ ],
+ "messages": [
+  {
+   "id": 1,
+   "session_id": "s_alpha",
+   "role": "user",
+   "content": "how do we run the kubernetes rollout? deploy with password=hunter2hunter2xyz and https://example.test/cb?access_token=abcdefgh12345&page=2",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000000.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 2,
+   "session_id": "s_alpha",
+   "role": "assistant",
+   "content": "Use kubectl rollout status for the kubernetes deployment.",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000010.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 3,
+   "session_id": "s_alpha",
+   "role": "tool",
+   "content": "kubernetes output line",
+   "tool_calls": null,
+   "tool_name": "terminal",
+   "tool_call_id": null,
+   "timestamp": 1780000020.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 4,
+   "session_id": "s_alpha",
+   "role": "assistant",
+   "content": "",
+   "tool_calls": "[{\"id\": \"c1\", \"type\": \"function\", \"function\": {\"name\": \"terminal\", \"arguments\": \"{\\\"command\\\": \\\"curl -H 'Authorization: Bearer abcdefghijklmnop12345678' x\\\"}\"}}]",
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000030.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 5,
+   "session_id": "s_alpha",
+   "role": "user",
+   "content": "filler turn 0 about rollouts",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000040.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 6,
+   "session_id": "s_alpha",
+   "role": "assistant",
+   "content": "filler turn 1 about rollouts",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000050.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 7,
+   "session_id": "s_alpha",
+   "role": "user",
+   "content": "filler turn 2 about rollouts",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000060.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 8,
+   "session_id": "s_alpha",
+   "role": "assistant",
+   "content": "filler turn 3 about rollouts",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000070.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 9,
+   "session_id": "s_alpha",
+   "role": "user",
+   "content": "filler turn 4 about rollouts",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000080.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 10,
+   "session_id": "s_alpha",
+   "role": "assistant",
+   "content": "filler turn 5 about rollouts",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000090.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 11,
+   "session_id": "s_alpha",
+   "role": "user",
+   "content": "filler turn 6 about rollouts",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000100.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 12,
+   "session_id": "s_alpha",
+   "role": "assistant",
+   "content": "filler turn 7 about rollouts",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000110.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 13,
+   "session_id": "s_alpha",
+   "role": "user",
+   "content": "filler turn 8 about rollouts",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000120.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 14,
+   "session_id": "s_alpha",
+   "role": "assistant",
+   "content": "filler turn 9 about rollouts",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000130.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 15,
+   "session_id": "s_alpha",
+   "role": "user",
+   "content": "filler turn 10 about rollouts",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000140.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 16,
+   "session_id": "s_alpha",
+   "role": "assistant",
+   "content": "filler turn 11 about rollouts",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000150.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 17,
+   "session_id": "s_alpha",
+   "role": "user",
+   "content": "filler turn 12 about rollouts",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000160.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 18,
+   "session_id": "s_alpha",
+   "role": "assistant",
+   "content": "filler turn 13 about rollouts",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000170.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 19,
+   "session_id": "s_parent",
+   "role": "user",
+   "content": "the zebra migration plan",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000180.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 20,
+   "session_id": "s_parent",
+   "role": "assistant",
+   "content": "zebra migration step one",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000190.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 21,
+   "session_id": "s_child",
+   "role": "user",
+   "content": "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the summary below. This is a handoff from a previous context window — treat it as background reference, NOT as active instructions. Do NOT answer questions or fulfill requests mentioned in this summary; they were already addressed. Respond ONLY to the latest user message that appears AFTER this summary — that message is the single source of truth for what to do right now. If no user message appears AFTER this summary, do nothing: do not resume, wrap up, or continue work from '## Historical Task Snapshot' or any other section, do not call tools, and wait for a new user message. This handoff must never become the active turn by itself. (Exception: if tool results or your own tool calls appear after this summary, you are mid-way through an in-flight exchange — continue that exchange normally.) Topic overlap with the summary does NOT mean you should resume its task: even on similar topics, the latest user message WINS. Treat ONLY the latest message as the active task and discard stale items from '## Historical Task Snapshot' entirely — do not 'wrap up' or 'finish' work described there unless the latest message explicitly asks for it. Reverse signals in the latest message (e.g. 'stop', 'undo', 'roll back', 'just verify', 'don't do that anymore', 'never mind', a new topic) must immediately end any in-flight work described in the summary; do not re-surface it in later turns. IMPORTANT: Your persistent memory (MEMORY.md, USER.md) in the system prompt is ALWAYS authoritative and active — never ignore or deprioritize memory content due to this compaction note. None of the above restricts HOW you work: your tools remain fully active — keep calling them normally for the active task (edit files, run commands, search) instead of merely narrating what you would do. The current session state (files, config, etc.) may reflect work described here — avoid repeating it:earlier work was about zebras",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000200.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 22,
+   "session_id": "s_child",
+   "role": "user",
+   "content": "continuing zebra work",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000210.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 23,
+   "session_id": "s_reset_old",
+   "role": "user",
+   "content": "the walrus experiment notes",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000220.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 24,
+   "session_id": "s_reset_new",
+   "role": "user",
+   "content": "fresh start",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000230.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 25,
+   "session_id": "s_cron",
+   "role": "user",
+   "content": "kubernetes cron report",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000240.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 26,
+   "session_id": "s_tool",
+   "role": "user",
+   "content": "kubernetes tool integration",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000250.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 27,
+   "session_id": "s_cjk",
+   "role": "user",
+   "content": "我们去广西桂林漓江旅游",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000260.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 28,
+   "session_id": "s_cjk",
+   "role": "assistant",
+   "content": "好的 修改youer服务端",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000270.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 29,
+   "session_id": "s_long",
+   "role": "user",
+   "content": "long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content  marker-long",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000280.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 30,
+   "session_id": "s_long",
+   "role": "assistant",
+   "content": "\u001b[31mred\u001b[0m output marker-long",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000290.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 31,
+   "session_id": "s_long",
+   "role": "user",
+   "content": "\u0000json:[{\"type\": \"text\", \"text\": \"multimodal marker-long\"}, {\"type\": \"image_url\", \"image_url\": {\"url\": \"data:image/png;base64,QUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJD\"}}]",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000300.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 32,
+   "session_id": "s_long",
+   "role": "user",
+   "content": "hidden scaffold marker-long",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000310.0,
+   "active": 1,
+   "compacted": 0,
+   "display_kind": "hidden"
+  },
+  {
+   "id": 33,
+   "session_id": "s_long",
+   "role": "user",
+   "content": "rewound marker-long",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000320.0,
+   "active": 0,
+   "compacted": 0,
+   "display_kind": null
+  },
+  {
+   "id": 34,
+   "session_id": "s_long",
+   "role": "user",
+   "content": "archived marker-long",
+   "tool_calls": null,
+   "tool_name": null,
+   "tool_call_id": null,
+   "timestamp": 1780000330.0,
+   "active": 0,
+   "compacted": 1,
+   "display_kind": null
+  }
+ ],
+ "cases": [
+  {
+   "name": "discover_basic",
+   "args": {
+    "query": "kubernetes"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "kubernetes",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_alpha",
+      "when": "May 28, 2026 at 08:26 PM",
+      "source": "cli",
+      "model": "m-1",
+      "title": "Alpha project",
+      "matched_role": "assistant",
+      "match_message_id": 2,
+      "snippet": "Use kubectl rollout status for the >>>kubernetes<<< deployment.",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 1,
+        "role": "user",
+        "content": "how do we run the kubernetes rollout? deploy with password=hunter2hunter2xyz and https://example.test/cb?access_token=***&page=2",
+        "timestamp": 1780000000.0
+       },
+       {
+        "id": 2,
+        "role": "assistant",
+        "content": "Use kubectl rollout status for the kubernetes deployment.",
+        "timestamp": 1780000010.0,
+        "anchor": true
+       },
+       {
+        "id": 4,
+        "role": "assistant",
+        "content": "",
+        "timestamp": 1780000030.0,
+        "tool_calls": [
+         {
+          "id": "c1",
+          "type": "function",
+          "function": {
+           "name": "terminal",
+           "arguments": "{\"command\": \"curl -H 'Authorization: Bearer abcdef...5678' x\"}"
+          }
+         }
+        ]
+       },
+       {
+        "id": 5,
+        "role": "user",
+        "content": "filler turn 0 about rollouts",
+        "timestamp": 1780000040.0
+       },
+       {
+        "id": 6,
+        "role": "assistant",
+        "content": "filler turn 1 about rollouts",
+        "timestamp": 1780000050.0
+       },
+       {
+        "id": 7,
+        "role": "user",
+        "content": "filler turn 2 about rollouts",
+        "timestamp": 1780000060.0
+       }
+      ],
+      "bookend_end": [
+       {
+        "id": 16,
+        "role": "assistant",
+        "content": "filler turn 11 about rollouts",
+        "timestamp": 1780000150.0
+       },
+       {
+        "id": 17,
+        "role": "user",
+        "content": "filler turn 12 about rollouts",
+        "timestamp": 1780000160.0
+       },
+       {
+        "id": 18,
+        "role": "assistant",
+        "content": "filler turn 13 about rollouts",
+        "timestamp": 1780000170.0
+       }
+      ],
+      "messages_before": 1,
+      "messages_after": 5,
+      "detail": "full",
+      "link": "@session:default/s_alpha"
+     },
+     {
+      "session_id": "s_cron",
+      "when": "May 28, 2026 at 09:50 PM",
+      "source": "cron",
+      "model": "unknown",
+      "title": null,
+      "matched_role": "user",
+      "match_message_id": 25,
+      "snippet": ">>>kubernetes<<< cron report",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 25,
+        "role": "user",
+        "content": "kubernetes cron report",
+        "timestamp": 1780000240.0,
+        "anchor": true
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 0,
+      "messages_after": 0,
+      "detail": "compact",
+      "link": "@session:default/s_cron"
+     }
+    ],
+    "count": 2,
+    "sessions_searched": 2,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_full",
+   "args": {
+    "query": "kubernetes",
+    "detail": "full",
+    "limit": 5
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "kubernetes",
+    "detail": "full",
+    "results": [
+     {
+      "session_id": "s_alpha",
+      "when": "May 28, 2026 at 08:26 PM",
+      "source": "cli",
+      "model": "m-1",
+      "title": "Alpha project",
+      "matched_role": "assistant",
+      "match_message_id": 2,
+      "snippet": "Use kubectl rollout status for the >>>kubernetes<<< deployment.",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 1,
+        "role": "user",
+        "content": "how do we run the kubernetes rollout? deploy with password=hunter2hunter2xyz and https://example.test/cb?access_token=***&page=2",
+        "timestamp": 1780000000.0
+       },
+       {
+        "id": 2,
+        "role": "assistant",
+        "content": "Use kubectl rollout status for the kubernetes deployment.",
+        "timestamp": 1780000010.0,
+        "anchor": true
+       },
+       {
+        "id": 4,
+        "role": "assistant",
+        "content": "",
+        "timestamp": 1780000030.0,
+        "tool_calls": [
+         {
+          "id": "c1",
+          "type": "function",
+          "function": {
+           "name": "terminal",
+           "arguments": "{\"command\": \"curl -H 'Authorization: Bearer abcdef...5678' x\"}"
+          }
+         }
+        ]
+       },
+       {
+        "id": 5,
+        "role": "user",
+        "content": "filler turn 0 about rollouts",
+        "timestamp": 1780000040.0
+       },
+       {
+        "id": 6,
+        "role": "assistant",
+        "content": "filler turn 1 about rollouts",
+        "timestamp": 1780000050.0
+       },
+       {
+        "id": 7,
+        "role": "user",
+        "content": "filler turn 2 about rollouts",
+        "timestamp": 1780000060.0
+       }
+      ],
+      "bookend_end": [
+       {
+        "id": 16,
+        "role": "assistant",
+        "content": "filler turn 11 about rollouts",
+        "timestamp": 1780000150.0
+       },
+       {
+        "id": 17,
+        "role": "user",
+        "content": "filler turn 12 about rollouts",
+        "timestamp": 1780000160.0
+       },
+       {
+        "id": 18,
+        "role": "assistant",
+        "content": "filler turn 13 about rollouts",
+        "timestamp": 1780000170.0
+       }
+      ],
+      "messages_before": 1,
+      "messages_after": 5,
+      "detail": "full",
+      "link": "@session:default/s_alpha"
+     },
+     {
+      "session_id": "s_cron",
+      "when": "May 28, 2026 at 09:50 PM",
+      "source": "cron",
+      "model": "unknown",
+      "title": null,
+      "matched_role": "user",
+      "match_message_id": 25,
+      "snippet": ">>>kubernetes<<< cron report",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 25,
+        "role": "user",
+        "content": "kubernetes cron report",
+        "timestamp": 1780000240.0,
+        "anchor": true
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 0,
+      "messages_after": 0,
+      "detail": "full",
+      "link": "@session:default/s_cron"
+     }
+    ],
+    "count": 2,
+    "sessions_searched": 2,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_phrase",
+   "args": {
+    "query": "\"rollout status\""
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "\"rollout status\"",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_alpha",
+      "when": "May 28, 2026 at 08:26 PM",
+      "source": "cli",
+      "model": "m-1",
+      "title": "Alpha project",
+      "matched_role": "assistant",
+      "match_message_id": 2,
+      "snippet": "Use kubectl >>>rollout status<<< for the kubernetes deployment.",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 1,
+        "role": "user",
+        "content": "how do we run the kubernetes rollout? deploy with password=hunter2hunter2xyz and https://example.test/cb?access_token=***&page=2",
+        "timestamp": 1780000000.0
+       },
+       {
+        "id": 2,
+        "role": "assistant",
+        "content": "Use kubectl rollout status for the kubernetes deployment.",
+        "timestamp": 1780000010.0,
+        "anchor": true
+       },
+       {
+        "id": 4,
+        "role": "assistant",
+        "content": "",
+        "timestamp": 1780000030.0,
+        "tool_calls": [
+         {
+          "id": "c1",
+          "type": "function",
+          "function": {
+           "name": "terminal",
+           "arguments": "{\"command\": \"curl -H 'Authorization: Bearer abcdef...5678' x\"}"
+          }
+         }
+        ]
+       },
+       {
+        "id": 5,
+        "role": "user",
+        "content": "filler turn 0 about rollouts",
+        "timestamp": 1780000040.0
+       },
+       {
+        "id": 6,
+        "role": "assistant",
+        "content": "filler turn 1 about rollouts",
+        "timestamp": 1780000050.0
+       },
+       {
+        "id": 7,
+        "role": "user",
+        "content": "filler turn 2 about rollouts",
+        "timestamp": 1780000060.0
+       }
+      ],
+      "bookend_end": [
+       {
+        "id": 16,
+        "role": "assistant",
+        "content": "filler turn 11 about rollouts",
+        "timestamp": 1780000150.0
+       },
+       {
+        "id": 17,
+        "role": "user",
+        "content": "filler turn 12 about rollouts",
+        "timestamp": 1780000160.0
+       },
+       {
+        "id": 18,
+        "role": "assistant",
+        "content": "filler turn 13 about rollouts",
+        "timestamp": 1780000170.0
+       }
+      ],
+      "messages_before": 1,
+      "messages_after": 5,
+      "detail": "full",
+      "link": "@session:default/s_alpha"
+     }
+    ],
+    "count": 1,
+    "sessions_searched": 1,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_or_relaxed",
+   "args": {
+    "query": "kubernetes banana"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "kubernetes banana",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_alpha",
+      "when": "May 28, 2026 at 08:26 PM",
+      "source": "cli",
+      "model": "m-1",
+      "title": "Alpha project",
+      "matched_role": "assistant",
+      "match_message_id": 2,
+      "snippet": "Use kubectl rollout status for the >>>kubernetes<<< deployment.",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 1,
+        "role": "user",
+        "content": "how do we run the kubernetes rollout? deploy with password=hunter2hunter2xyz and https://example.test/cb?access_token=***&page=2",
+        "timestamp": 1780000000.0
+       },
+       {
+        "id": 2,
+        "role": "assistant",
+        "content": "Use kubectl rollout status for the kubernetes deployment.",
+        "timestamp": 1780000010.0,
+        "anchor": true
+       },
+       {
+        "id": 4,
+        "role": "assistant",
+        "content": "",
+        "timestamp": 1780000030.0,
+        "tool_calls": [
+         {
+          "id": "c1",
+          "type": "function",
+          "function": {
+           "name": "terminal",
+           "arguments": "{\"command\": \"curl -H 'Authorization: Bearer abcdef...5678' x\"}"
+          }
+         }
+        ]
+       },
+       {
+        "id": 5,
+        "role": "user",
+        "content": "filler turn 0 about rollouts",
+        "timestamp": 1780000040.0
+       },
+       {
+        "id": 6,
+        "role": "assistant",
+        "content": "filler turn 1 about rollouts",
+        "timestamp": 1780000050.0
+       },
+       {
+        "id": 7,
+        "role": "user",
+        "content": "filler turn 2 about rollouts",
+        "timestamp": 1780000060.0
+       }
+      ],
+      "bookend_end": [
+       {
+        "id": 16,
+        "role": "assistant",
+        "content": "filler turn 11 about rollouts",
+        "timestamp": 1780000150.0
+       },
+       {
+        "id": 17,
+        "role": "user",
+        "content": "filler turn 12 about rollouts",
+        "timestamp": 1780000160.0
+       },
+       {
+        "id": 18,
+        "role": "assistant",
+        "content": "filler turn 13 about rollouts",
+        "timestamp": 1780000170.0
+       }
+      ],
+      "messages_before": 1,
+      "messages_after": 5,
+      "detail": "full",
+      "link": "@session:default/s_alpha"
+     },
+     {
+      "session_id": "s_cron",
+      "when": "May 28, 2026 at 09:50 PM",
+      "source": "cron",
+      "model": "unknown",
+      "title": null,
+      "matched_role": "user",
+      "match_message_id": 25,
+      "snippet": ">>>kubernetes<<< cron report",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 25,
+        "role": "user",
+        "content": "kubernetes cron report",
+        "timestamp": 1780000240.0,
+        "anchor": true
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 0,
+      "messages_after": 0,
+      "detail": "compact",
+      "link": "@session:default/s_cron"
+     }
+    ],
+    "count": 2,
+    "sessions_searched": 2,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_not",
+   "args": {
+    "query": "kubernetes NOT cron"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "kubernetes NOT cron",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_alpha",
+      "when": "May 28, 2026 at 08:26 PM",
+      "source": "cli",
+      "model": "m-1",
+      "title": "Alpha project",
+      "matched_role": "assistant",
+      "match_message_id": 2,
+      "snippet": "Use kubectl rollout status for the >>>kubernetes<<< deployment.",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 1,
+        "role": "user",
+        "content": "how do we run the kubernetes rollout? deploy with password=hunter2hunter2xyz and https://example.test/cb?access_token=***&page=2",
+        "timestamp": 1780000000.0
+       },
+       {
+        "id": 2,
+        "role": "assistant",
+        "content": "Use kubectl rollout status for the kubernetes deployment.",
+        "timestamp": 1780000010.0,
+        "anchor": true
+       },
+       {
+        "id": 4,
+        "role": "assistant",
+        "content": "",
+        "timestamp": 1780000030.0,
+        "tool_calls": [
+         {
+          "id": "c1",
+          "type": "function",
+          "function": {
+           "name": "terminal",
+           "arguments": "{\"command\": \"curl -H 'Authorization: Bearer abcdef...5678' x\"}"
+          }
+         }
+        ]
+       },
+       {
+        "id": 5,
+        "role": "user",
+        "content": "filler turn 0 about rollouts",
+        "timestamp": 1780000040.0
+       },
+       {
+        "id": 6,
+        "role": "assistant",
+        "content": "filler turn 1 about rollouts",
+        "timestamp": 1780000050.0
+       },
+       {
+        "id": 7,
+        "role": "user",
+        "content": "filler turn 2 about rollouts",
+        "timestamp": 1780000060.0
+       }
+      ],
+      "bookend_end": [
+       {
+        "id": 16,
+        "role": "assistant",
+        "content": "filler turn 11 about rollouts",
+        "timestamp": 1780000150.0
+       },
+       {
+        "id": 17,
+        "role": "user",
+        "content": "filler turn 12 about rollouts",
+        "timestamp": 1780000160.0
+       },
+       {
+        "id": 18,
+        "role": "assistant",
+        "content": "filler turn 13 about rollouts",
+        "timestamp": 1780000170.0
+       }
+      ],
+      "messages_before": 1,
+      "messages_after": 5,
+      "detail": "full",
+      "link": "@session:default/s_alpha"
+     }
+    ],
+    "count": 1,
+    "sessions_searched": 1,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_prefix",
+   "args": {
+    "query": "kube*"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "kube*",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_alpha",
+      "when": "May 28, 2026 at 08:26 PM",
+      "source": "cli",
+      "model": "m-1",
+      "title": "Alpha project",
+      "matched_role": "assistant",
+      "match_message_id": 2,
+      "snippet": "Use >>>kubectl<<< rollout status for the >>>kubernetes<<< deployment.",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 1,
+        "role": "user",
+        "content": "how do we run the kubernetes rollout? deploy with password=hunter2hunter2xyz and https://example.test/cb?access_token=***&page=2",
+        "timestamp": 1780000000.0
+       },
+       {
+        "id": 2,
+        "role": "assistant",
+        "content": "Use kubectl rollout status for the kubernetes deployment.",
+        "timestamp": 1780000010.0,
+        "anchor": true
+       },
+       {
+        "id": 4,
+        "role": "assistant",
+        "content": "",
+        "timestamp": 1780000030.0,
+        "tool_calls": [
+         {
+          "id": "c1",
+          "type": "function",
+          "function": {
+           "name": "terminal",
+           "arguments": "{\"command\": \"curl -H 'Authorization: Bearer abcdef...5678' x\"}"
+          }
+         }
+        ]
+       },
+       {
+        "id": 5,
+        "role": "user",
+        "content": "filler turn 0 about rollouts",
+        "timestamp": 1780000040.0
+       },
+       {
+        "id": 6,
+        "role": "assistant",
+        "content": "filler turn 1 about rollouts",
+        "timestamp": 1780000050.0
+       },
+       {
+        "id": 7,
+        "role": "user",
+        "content": "filler turn 2 about rollouts",
+        "timestamp": 1780000060.0
+       }
+      ],
+      "bookend_end": [
+       {
+        "id": 16,
+        "role": "assistant",
+        "content": "filler turn 11 about rollouts",
+        "timestamp": 1780000150.0
+       },
+       {
+        "id": 17,
+        "role": "user",
+        "content": "filler turn 12 about rollouts",
+        "timestamp": 1780000160.0
+       },
+       {
+        "id": 18,
+        "role": "assistant",
+        "content": "filler turn 13 about rollouts",
+        "timestamp": 1780000170.0
+       }
+      ],
+      "messages_before": 1,
+      "messages_after": 5,
+      "detail": "full",
+      "link": "@session:default/s_alpha"
+     },
+     {
+      "session_id": "s_cron",
+      "when": "May 28, 2026 at 09:50 PM",
+      "source": "cron",
+      "model": "unknown",
+      "title": null,
+      "matched_role": "user",
+      "match_message_id": 25,
+      "snippet": ">>>kubernetes<<< cron report",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 25,
+        "role": "user",
+        "content": "kubernetes cron report",
+        "timestamp": 1780000240.0,
+        "anchor": true
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 0,
+      "messages_after": 0,
+      "detail": "compact",
+      "link": "@session:default/s_cron"
+     }
+    ],
+    "count": 2,
+    "sessions_searched": 2,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_hyphen",
+   "args": {
+    "query": "marker-long",
+    "limit": 5,
+    "role_filter": "user,assistant"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "marker-long",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_long",
+      "when": "May 28, 2026 at 10:40 PM",
+      "source": "cli",
+      "model": "unknown",
+      "title": "Long & noisy",
+      "matched_role": "user",
+      "match_message_id": 34,
+      "snippet": "archived >>>marker-long<<<",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 29,
+        "role": "user",
+        "content": "long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-cont…",
+        "timestamp": 1780000280.0,
+        "content_truncated": true,
+        "original_content_chars": 5212
+       },
+       {
+        "id": 30,
+        "role": "assistant",
+        "content": "red output marker-long",
+        "timestamp": 1780000290.0
+       },
+       {
+        "id": 31,
+        "role": "user",
+        "content": [
+         {
+          "type": "text",
+          "text": "multimodal marker-long"
+         },
+         {
+          "type": "image_url",
+          "image_url": {
+           "url": "[inline data omitted]"
+          }
+         }
+        ],
+        "timestamp": 1780000300.0
+       },
+       {
+        "id": 32,
+        "role": "user",
+        "content": "hidden scaffold marker-long",
+        "timestamp": 1780000310.0
+       },
+       {
+        "id": 33,
+        "role": "user",
+        "content": "rewound marker-long",
+        "timestamp": 1780000320.0
+       },
+       {
+        "id": 34,
+        "role": "user",
+        "content": "archived marker-long",
+        "timestamp": 1780000330.0,
+        "anchor": true
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 5,
+      "messages_after": 0,
+      "detail": "full",
+      "link": "@session:default/s_long"
+     }
+    ],
+    "count": 1,
+    "sessions_searched": 1,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_tool_role",
+   "args": {
+    "query": "kubernetes",
+    "role_filter": "tool"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "kubernetes",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_alpha",
+      "when": "May 28, 2026 at 08:26 PM",
+      "source": "cli",
+      "model": "m-1",
+      "title": "Alpha project",
+      "matched_role": "tool",
+      "match_message_id": 3,
+      "snippet": "kubernetes output line",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 1,
+        "role": "user",
+        "content": "how do we run the kubernetes rollout? deploy with password=hunter2hunter2xyz and https://example.test/cb?access_token=***&page=2",
+        "timestamp": 1780000000.0
+       },
+       {
+        "id": 2,
+        "role": "assistant",
+        "content": "Use kubectl rollout status for the kubernetes deployment.",
+        "timestamp": 1780000010.0
+       },
+       {
+        "id": 3,
+        "role": "tool",
+        "content": "kubernetes output line",
+        "timestamp": 1780000020.0,
+        "tool_name": "terminal",
+        "anchor": true
+       },
+       {
+        "id": 4,
+        "role": "assistant",
+        "content": "",
+        "timestamp": 1780000030.0,
+        "tool_calls": [
+         {
+          "id": "c1",
+          "type": "function",
+          "function": {
+           "name": "terminal",
+           "arguments": "{\"command\": \"curl -H 'Authorization: Bearer abcdef...5678' x\"}"
+          }
+         }
+        ]
+       },
+       {
+        "id": 5,
+        "role": "user",
+        "content": "filler turn 0 about rollouts",
+        "timestamp": 1780000040.0
+       },
+       {
+        "id": 6,
+        "role": "assistant",
+        "content": "filler turn 1 about rollouts",
+        "timestamp": 1780000050.0
+       },
+       {
+        "id": 7,
+        "role": "user",
+        "content": "filler turn 2 about rollouts",
+        "timestamp": 1780000060.0
+       },
+       {
+        "id": 8,
+        "role": "assistant",
+        "content": "filler turn 3 about rollouts",
+        "timestamp": 1780000070.0
+       }
+      ],
+      "bookend_end": [
+       {
+        "id": 16,
+        "role": "assistant",
+        "content": "filler turn 11 about rollouts",
+        "timestamp": 1780000150.0
+       },
+       {
+        "id": 17,
+        "role": "user",
+        "content": "filler turn 12 about rollouts",
+        "timestamp": 1780000160.0
+       },
+       {
+        "id": 18,
+        "role": "assistant",
+        "content": "filler turn 13 about rollouts",
+        "timestamp": 1780000170.0
+       }
+      ],
+      "messages_before": 2,
+      "messages_after": 5,
+      "detail": "full",
+      "link": "@session:default/s_alpha"
+     }
+    ],
+    "count": 1,
+    "sessions_searched": 1,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_special",
+   "args": {
+    "query": "TODO: (fix) \"unbalanced"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "TODO: (fix) \"unbalanced",
+    "detail": "adaptive",
+    "results": [],
+    "count": 0,
+    "message": "No matching sessions found. FTS5 ANDs all terms by default — broaden with OR (`alpha OR beta`), exact-match with quoted phrases, exclude with NOT, or prefix-match with `deploy*`."
+   }
+  },
+  {
+   "name": "discover_none",
+   "args": {
+    "query": "nonexistentterm"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "nonexistentterm",
+    "detail": "adaptive",
+    "results": [],
+    "count": 0,
+    "message": "No matching sessions found. FTS5 ANDs all terms by default — broaden with OR (`alpha OR beta`), exact-match with quoted phrases, exclude with NOT, or prefix-match with `deploy*`."
+   }
+  },
+  {
+   "name": "discover_cjk",
+   "args": {
+    "query": "广西桂林"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "广西桂林",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_cjk",
+      "when": "May 28, 2026 at 10:23 PM",
+      "source": "cli",
+      "model": "unknown",
+      "title": null,
+      "matched_role": "user",
+      "match_message_id": 27,
+      "snippet": "我们去>>>广西桂林<<<漓江旅游",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 27,
+        "role": "user",
+        "content": "我们去广西桂林漓江旅游",
+        "timestamp": 1780000260.0,
+        "anchor": true
+       },
+       {
+        "id": 28,
+        "role": "assistant",
+        "content": "好的 修改youer服务端",
+        "timestamp": 1780000270.0
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 0,
+      "messages_after": 1,
+      "detail": "full",
+      "link": "@session:default/s_cjk"
+     }
+    ],
+    "count": 1,
+    "sessions_searched": 1,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_cjk_short",
+   "args": {
+    "query": "漓江"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "漓江",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_cjk",
+      "when": "May 28, 2026 at 10:23 PM",
+      "source": "cli",
+      "model": "unknown",
+      "title": null,
+      "matched_role": "user",
+      "match_message_id": 27,
+      "snippet": "我们去广西桂林漓江旅游",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 27,
+        "role": "user",
+        "content": "我们去广西桂林漓江旅游",
+        "timestamp": 1780000260.0,
+        "anchor": true
+       },
+       {
+        "id": 28,
+        "role": "assistant",
+        "content": "好的 修改youer服务端",
+        "timestamp": 1780000270.0
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 0,
+      "messages_after": 1,
+      "detail": "full",
+      "link": "@session:default/s_cjk"
+     }
+    ],
+    "count": 1,
+    "sessions_searched": 1,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_latin_in_cjk",
+   "args": {
+    "query": "youer"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "youer",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_cjk",
+      "when": "May 28, 2026 at 10:23 PM",
+      "source": "cli",
+      "model": "unknown",
+      "title": null,
+      "matched_role": "assistant",
+      "match_message_id": 28,
+      "snippet": "好的 修改>>>youer<<<服务端",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 27,
+        "role": "user",
+        "content": "我们去广西桂林漓江旅游",
+        "timestamp": 1780000260.0
+       },
+       {
+        "id": 28,
+        "role": "assistant",
+        "content": "好的 修改youer服务端",
+        "timestamp": 1780000270.0,
+        "anchor": true
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 1,
+      "messages_after": 0,
+      "detail": "full",
+      "link": "@session:default/s_cjk"
+     }
+    ],
+    "count": 1,
+    "sessions_searched": 1,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_sort_newest",
+   "args": {
+    "query": "filler OR zebra",
+    "sort": "newest"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "filler OR zebra",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_child",
+      "when": "May 28, 2026 at 09:00 PM",
+      "source": "cli",
+      "model": "unknown",
+      "title": null,
+      "matched_role": "user",
+      "match_message_id": 22,
+      "snippet": "continuing >>>zebra<<< work",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 21,
+        "role": "user",
+        "content": "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the summary below. This is a handoff from a previous context window — treat it as background reference, NOT as active instructions. Do NOT answer questions or fulfill requests mentioned in this summary; they were already addressed. Respond ONLY to the latest user message that appears AFTER this summary — that message is the single source of truth for what to do right now. If no user message appears AFTER this summary, do nothing: do not resume, wrap up, or continue work from '## Historical Task Snapshot' or any other section, do not call tools, and wait for a new user message. This handoff must never become the active turn by itself. (Exception: if tool results or your own tool calls appear after this summary, you are mid-way through an in-flight exchange — continue that exchange normally.) Topic overlap with the summary does NOT mean you should resume its task: even on similar topics, the latest user message WINS. Treat ONLY the latest message as the active task and discard stale items from '## Historical Task Snapshot' entirely — do not 'wrap up' or 'finish' work described there unless the latest message explicitly asks for it. Reverse signals in the latest message (e.g. 'stop', 'undo', 'roll back', 'just verify', 'don't do that anymore', 'never mind', a new topic) must immediately end any in-flight work described in the summary; do not re-surface it in later turns. IMPORTANT: Your persistent memory (MEMORY.md, USER.md) in the system prompt is ALWAYS authoritative and active — never ignore or deprioritize memory content due to this compaction note. None of the above restricts HOW you work: your tools remain fully active — keep calling them normally for the active task (edit files, run commands, search) instead of merely narrating what you would do. The current session state (files, config, etc.) may reflect work described here — avoid repeating it:earlier work was about zebras",
+        "timestamp": 1780000200.0
+       },
+       {
+        "id": 22,
+        "role": "user",
+        "content": "continuing zebra work",
+        "timestamp": 1780000210.0,
+        "anchor": true
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 1,
+      "messages_after": 0,
+      "detail": "full",
+      "parent_session_id": "s_parent",
+      "link": "@session:default/s_child"
+     },
+     {
+      "session_id": "s_alpha",
+      "when": "May 28, 2026 at 08:26 PM",
+      "source": "cli",
+      "model": "m-1",
+      "title": "Alpha project",
+      "matched_role": "assistant",
+      "match_message_id": 18,
+      "snippet": ">>>filler<<< turn 13 about rollouts",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 18,
+        "role": "assistant",
+        "content": "filler turn 13 about rollouts",
+        "timestamp": 1780000170.0,
+        "anchor": true
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 5,
+      "messages_after": 0,
+      "detail": "compact",
+      "link": "@session:default/s_alpha"
+     }
+    ],
+    "count": 2,
+    "sessions_searched": 2,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_sort_oldest",
+   "args": {
+    "query": "filler OR zebra",
+    "sort": "oldest"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "filler OR zebra",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_alpha",
+      "when": "May 28, 2026 at 08:26 PM",
+      "source": "cli",
+      "model": "m-1",
+      "title": "Alpha project",
+      "matched_role": "user",
+      "match_message_id": 5,
+      "snippet": ">>>filler<<< turn 0 about rollouts",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 1,
+        "role": "user",
+        "content": "how do we run the kubernetes rollout? deploy with password=hunter2hunter2xyz and https://example.test/cb?access_token=***&page=2",
+        "timestamp": 1780000000.0
+       },
+       {
+        "id": 2,
+        "role": "assistant",
+        "content": "Use kubectl rollout status for the kubernetes deployment.",
+        "timestamp": 1780000010.0
+       },
+       {
+        "id": 4,
+        "role": "assistant",
+        "content": "",
+        "timestamp": 1780000030.0,
+        "tool_calls": [
+         {
+          "id": "c1",
+          "type": "function",
+          "function": {
+           "name": "terminal",
+           "arguments": "{\"command\": \"curl -H 'Authorization: Bearer abcdef...5678' x\"}"
+          }
+         }
+        ]
+       },
+       {
+        "id": 5,
+        "role": "user",
+        "content": "filler turn 0 about rollouts",
+        "timestamp": 1780000040.0,
+        "anchor": true
+       },
+       {
+        "id": 6,
+        "role": "assistant",
+        "content": "filler turn 1 about rollouts",
+        "timestamp": 1780000050.0
+       },
+       {
+        "id": 7,
+        "role": "user",
+        "content": "filler turn 2 about rollouts",
+        "timestamp": 1780000060.0
+       },
+       {
+        "id": 8,
+        "role": "assistant",
+        "content": "filler turn 3 about rollouts",
+        "timestamp": 1780000070.0
+       },
+       {
+        "id": 9,
+        "role": "user",
+        "content": "filler turn 4 about rollouts",
+        "timestamp": 1780000080.0
+       },
+       {
+        "id": 10,
+        "role": "assistant",
+        "content": "filler turn 5 about rollouts",
+        "timestamp": 1780000090.0
+       }
+      ],
+      "bookend_end": [
+       {
+        "id": 16,
+        "role": "assistant",
+        "content": "filler turn 11 about rollouts",
+        "timestamp": 1780000150.0
+       },
+       {
+        "id": 17,
+        "role": "user",
+        "content": "filler turn 12 about rollouts",
+        "timestamp": 1780000160.0
+       },
+       {
+        "id": 18,
+        "role": "assistant",
+        "content": "filler turn 13 about rollouts",
+        "timestamp": 1780000170.0
+       }
+      ],
+      "messages_before": 4,
+      "messages_after": 5,
+      "detail": "full",
+      "link": "@session:default/s_alpha"
+     },
+     {
+      "session_id": "s_parent",
+      "when": "May 28, 2026 at 08:43 PM",
+      "source": "cli",
+      "model": "unknown",
+      "title": "Parent chat",
+      "matched_role": "user",
+      "match_message_id": 19,
+      "snippet": "the >>>zebra<<< migration plan",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 19,
+        "role": "user",
+        "content": "the zebra migration plan",
+        "timestamp": 1780000180.0,
+        "anchor": true
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 0,
+      "messages_after": 1,
+      "detail": "compact",
+      "link": "@session:default/s_parent"
+     }
+    ],
+    "count": 2,
+    "sessions_searched": 2,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_title",
+   "args": {
+    "query": "Alpha project"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "Alpha project",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_alpha",
+      "when": "May 28, 2026 at 08:26 PM",
+      "source": "cli",
+      "model": "m-1",
+      "title": "Alpha project",
+      "matched_role": "session_title",
+      "match_message_id": 1,
+      "snippet": "Session title matched: Alpha project",
+      "bookend_start": [
+       {
+        "id": 1,
+        "role": "user",
+        "content": "how do we run the kubernetes rollout? deploy with password=hunter2hunter2xyz and https://example.test/cb?access_token=***&page=2",
+        "timestamp": 1780000000.0
+       },
+       {
+        "id": 2,
+        "role": "assistant",
+        "content": "Use kubectl rollout status for the kubernetes deployment.",
+        "timestamp": 1780000010.0
+       },
+       {
+        "id": 3,
+        "role": "tool",
+        "content": "kubernetes output line",
+        "timestamp": 1780000020.0,
+        "tool_name": "terminal"
+       }
+      ],
+      "messages": [
+       {
+        "id": 1,
+        "role": "user",
+        "content": "how do we run the kubernetes rollout? deploy with password=hunter2hunter2xyz and https://example.test/cb?access_token=***&page=2",
+        "timestamp": 1780000000.0,
+        "anchor": true
+       },
+       {
+        "id": 2,
+        "role": "assistant",
+        "content": "Use kubectl rollout status for the kubernetes deployment.",
+        "timestamp": 1780000010.0
+       },
+       {
+        "id": 4,
+        "role": "assistant",
+        "content": "",
+        "timestamp": 1780000030.0,
+        "tool_calls": [
+         {
+          "id": "c1",
+          "type": "function",
+          "function": {
+           "name": "terminal",
+           "arguments": "{\"command\": \"curl -H 'Authorization: Bearer abcdef...5678' x\"}"
+          }
+         }
+        ]
+       },
+       {
+        "id": 5,
+        "role": "user",
+        "content": "filler turn 0 about rollouts",
+        "timestamp": 1780000040.0
+       },
+       {
+        "id": 6,
+        "role": "assistant",
+        "content": "filler turn 1 about rollouts",
+        "timestamp": 1780000050.0
+       }
+      ],
+      "bookend_end": [
+       {
+        "id": 16,
+        "role": "assistant",
+        "content": "filler turn 11 about rollouts",
+        "timestamp": 1780000150.0
+       },
+       {
+        "id": 17,
+        "role": "user",
+        "content": "filler turn 12 about rollouts",
+        "timestamp": 1780000160.0
+       },
+       {
+        "id": 18,
+        "role": "assistant",
+        "content": "filler turn 13 about rollouts",
+        "timestamp": 1780000170.0
+       }
+      ],
+      "messages_before": 0,
+      "messages_after": 5,
+      "detail": "full",
+      "link": "@session:default/s_alpha"
+     }
+    ],
+    "count": 1,
+    "sessions_searched": 1,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_title_quoted",
+   "args": {
+    "query": "`Parent chat`"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "`Parent chat`",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_parent",
+      "when": "May 28, 2026 at 08:43 PM",
+      "source": "cli",
+      "model": "unknown",
+      "title": "Parent chat",
+      "matched_role": "session_title",
+      "match_message_id": 19,
+      "snippet": "Session title matched: Parent chat",
+      "bookend_start": [
+       {
+        "id": 19,
+        "role": "user",
+        "content": "the zebra migration plan",
+        "timestamp": 1780000180.0
+       },
+       {
+        "id": 20,
+        "role": "assistant",
+        "content": "zebra migration step one",
+        "timestamp": 1780000190.0
+       }
+      ],
+      "messages": [
+       {
+        "id": 19,
+        "role": "user",
+        "content": "the zebra migration plan",
+        "timestamp": 1780000180.0,
+        "anchor": true
+       },
+       {
+        "id": 20,
+        "role": "assistant",
+        "content": "zebra migration step one",
+        "timestamp": 1780000190.0
+       }
+      ],
+      "bookend_end": [
+       {
+        "id": 19,
+        "role": "user",
+        "content": "the zebra migration plan",
+        "timestamp": 1780000180.0
+       },
+       {
+        "id": 20,
+        "role": "assistant",
+        "content": "zebra migration step one",
+        "timestamp": 1780000190.0
+       }
+      ],
+      "messages_before": 0,
+      "messages_after": 1,
+      "detail": "full",
+      "link": "@session:default/s_parent"
+     }
+    ],
+    "count": 1,
+    "sessions_searched": 1,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_after",
+   "args": {
+    "query": "kubernetes OR zebra OR walrus",
+    "after": "2026-05-29"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "kubernetes OR zebra OR walrus",
+    "detail": "adaptive",
+    "results": [],
+    "count": 0,
+    "message": "No matching sessions found. FTS5 ANDs all terms by default — broaden with OR (`alpha OR beta`), exact-match with quoted phrases, exclude with NOT, or prefix-match with `deploy*`."
+   }
+  },
+  {
+   "name": "discover_before",
+   "args": {
+    "query": "kubernetes OR zebra OR walrus",
+    "before": "2026-05-29T00:00:00Z"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "kubernetes OR zebra OR walrus",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_reset_old",
+      "when": "May 28, 2026 at 09:16 PM",
+      "source": "cli",
+      "model": "unknown",
+      "title": null,
+      "matched_role": "user",
+      "match_message_id": 23,
+      "snippet": "the >>>walrus<<< experiment notes",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 23,
+        "role": "user",
+        "content": "the walrus experiment notes",
+        "timestamp": 1780000220.0,
+        "anchor": true
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 0,
+      "messages_after": 0,
+      "detail": "full",
+      "link": "@session:default/s_reset_old"
+     },
+     {
+      "session_id": "s_child",
+      "when": "May 28, 2026 at 09:00 PM",
+      "source": "cli",
+      "model": "unknown",
+      "title": null,
+      "matched_role": "user",
+      "match_message_id": 22,
+      "snippet": "continuing >>>zebra<<< work",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 22,
+        "role": "user",
+        "content": "continuing zebra work",
+        "timestamp": 1780000210.0,
+        "anchor": true
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 1,
+      "messages_after": 0,
+      "detail": "compact",
+      "parent_session_id": "s_parent",
+      "link": "@session:default/s_child"
+     },
+     {
+      "session_id": "s_alpha",
+      "when": "May 28, 2026 at 08:26 PM",
+      "source": "cli",
+      "model": "m-1",
+      "title": "Alpha project",
+      "matched_role": "assistant",
+      "match_message_id": 2,
+      "snippet": "Use kubectl rollout status for the >>>kubernetes<<< deployment.",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 2,
+        "role": "assistant",
+        "content": "Use kubectl rollout status for the kubernetes deployment.",
+        "timestamp": 1780000010.0,
+        "anchor": true
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 1,
+      "messages_after": 5,
+      "detail": "compact",
+      "link": "@session:default/s_alpha"
+     }
+    ],
+    "count": 3,
+    "sessions_searched": 3,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_bad_bound",
+   "args": {
+    "query": "kubernetes",
+    "after": "soon"
+   },
+   "current": null,
+   "result": {
+    "error": "invalid time bound: 'soon' (expected ISO date/datetime like 2026-07-01, or a relative duration like 7d, 24h, 2w)",
+    "success": false
+   }
+  },
+  {
+   "name": "discover_exclude",
+   "args": {
+    "query": "kubernetes",
+    "exclude_session_ids": [
+     "s_alpha"
+    ]
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "kubernetes",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_cron",
+      "when": "May 28, 2026 at 09:50 PM",
+      "source": "cron",
+      "model": "unknown",
+      "title": null,
+      "matched_role": "user",
+      "match_message_id": 25,
+      "snippet": ">>>kubernetes<<< cron report",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 25,
+        "role": "user",
+        "content": "kubernetes cron report",
+        "timestamp": 1780000240.0,
+        "anchor": true
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 0,
+      "messages_after": 0,
+      "detail": "full",
+      "link": "@session:default/s_cron"
+     }
+    ],
+    "count": 1,
+    "sessions_searched": 1,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_current_lineage",
+   "args": {
+    "query": "zebra"
+   },
+   "current": "s_child",
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "zebra",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_parent",
+      "when": "May 28, 2026 at 08:43 PM",
+      "source": "cli",
+      "model": "unknown",
+      "title": "Parent chat",
+      "matched_role": "user",
+      "match_message_id": 19,
+      "snippet": "the >>>zebra<<< migration plan",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 19,
+        "role": "user",
+        "content": "the zebra migration plan",
+        "timestamp": 1780000180.0,
+        "anchor": true
+       },
+       {
+        "id": 20,
+        "role": "assistant",
+        "content": "zebra migration step one",
+        "timestamp": 1780000190.0
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 0,
+      "messages_after": 1,
+      "detail": "full",
+      "link": "@session:default/s_parent"
+     }
+    ],
+    "count": 1,
+    "sessions_searched": 1,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_current_same",
+   "args": {
+    "query": "kubernetes"
+   },
+   "current": "s_alpha",
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "kubernetes",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_cron",
+      "when": "May 28, 2026 at 09:50 PM",
+      "source": "cron",
+      "model": "unknown",
+      "title": null,
+      "matched_role": "user",
+      "match_message_id": 25,
+      "snippet": ">>>kubernetes<<< cron report",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 25,
+        "role": "user",
+        "content": "kubernetes cron report",
+        "timestamp": 1780000240.0,
+        "anchor": true
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 0,
+      "messages_after": 0,
+      "detail": "full",
+      "link": "@session:default/s_cron"
+     }
+    ],
+    "count": 1,
+    "sessions_searched": 1,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "discover_reset_predecessor",
+   "args": {
+    "query": "walrus"
+   },
+   "current": "s_reset_new",
+   "result": {
+    "success": true,
+    "mode": "discover",
+    "query": "walrus",
+    "detail": "adaptive",
+    "results": [
+     {
+      "session_id": "s_reset_old",
+      "when": "May 28, 2026 at 09:16 PM",
+      "source": "cli",
+      "model": "unknown",
+      "title": null,
+      "matched_role": "user",
+      "match_message_id": 23,
+      "snippet": "the >>>walrus<<< experiment notes",
+      "bookend_start": [],
+      "messages": [
+       {
+        "id": 23,
+        "role": "user",
+        "content": "the walrus experiment notes",
+        "timestamp": 1780000220.0,
+        "anchor": true
+       }
+      ],
+      "bookend_end": [],
+      "messages_before": 0,
+      "messages_after": 0,
+      "detail": "full",
+      "link": "@session:default/s_reset_old"
+     }
+    ],
+    "count": 1,
+    "sessions_searched": 1,
+    "link_hint": "When referring the user to a session, write its `link` value verbatim inline mid-sentence (it renders as a titled link) — never as markdown, in backticks, on its own line, or next to the title/id/date. To read more around a compact result, scroll: session_search(session_id=..., around_message_id=match_message_id)."
+   }
+  },
+  {
+   "name": "scroll_basic",
+   "args": {
+    "session_id": "s_alpha",
+    "around_message_id": 5,
+    "window": 2
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "scroll",
+    "session_id": "s_alpha",
+    "around_message_id": 5,
+    "session_meta": {
+     "when": "May 28, 2026 at 08:26 PM",
+     "source": "cli",
+     "model": "m-1",
+     "title": "Alpha project"
+    },
+    "window": 2,
+    "messages": [
+     {
+      "id": 3,
+      "role": "tool",
+      "content": "kubernetes output line",
+      "timestamp": 1780000020.0,
+      "tool_name": "terminal"
+     },
+     {
+      "id": 4,
+      "role": "assistant",
+      "content": "",
+      "timestamp": 1780000030.0,
+      "tool_calls": [
+       {
+        "id": "c1",
+        "type": "function",
+        "function": {
+         "name": "terminal",
+         "arguments": "{\"command\": \"curl -H 'Authorization: Bearer abcdefghijklmnop12345678' x\"}"
+        }
+       }
+      ]
+     },
+     {
+      "id": 5,
+      "role": "user",
+      "content": "filler turn 0 about rollouts",
+      "timestamp": 1780000040.0,
+      "anchor": true
+     },
+     {
+      "id": 6,
+      "role": "assistant",
+      "content": "filler turn 1 about rollouts",
+      "timestamp": 1780000050.0
+     },
+     {
+      "id": 7,
+      "role": "user",
+      "content": "filler turn 2 about rollouts",
+      "timestamp": 1780000060.0
+     }
+    ],
+    "messages_before": 2,
+    "messages_after": 2,
+    "hint": "Scroll forward: re-call with around_message_id = the LAST message's id; backward: the FIRST message's id (the boundary message repeats as an orientation marker). messages_before/messages_after < window means you've hit that end of the session."
+   }
+  },
+  {
+   "name": "scroll_edge",
+   "args": {
+    "session_id": "s_alpha",
+    "around_message_id": 1,
+    "window": 3
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "scroll",
+    "session_id": "s_alpha",
+    "around_message_id": 1,
+    "session_meta": {
+     "when": "May 28, 2026 at 08:26 PM",
+     "source": "cli",
+     "model": "m-1",
+     "title": "Alpha project"
+    },
+    "window": 3,
+    "messages": [
+     {
+      "id": 1,
+      "role": "user",
+      "content": "how do we run the kubernetes rollout? deploy with password=hunter2hunter2xyz and https://example.test/cb?access_token=abcdefgh12345&page=2",
+      "timestamp": 1780000000.0,
+      "anchor": true
+     },
+     {
+      "id": 2,
+      "role": "assistant",
+      "content": "Use kubectl rollout status for the kubernetes deployment.",
+      "timestamp": 1780000010.0
+     },
+     {
+      "id": 3,
+      "role": "tool",
+      "content": "kubernetes output line",
+      "timestamp": 1780000020.0,
+      "tool_name": "terminal"
+     },
+     {
+      "id": 4,
+      "role": "assistant",
+      "content": "",
+      "timestamp": 1780000030.0,
+      "tool_calls": [
+       {
+        "id": "c1",
+        "type": "function",
+        "function": {
+         "name": "terminal",
+         "arguments": "{\"command\": \"curl -H 'Authorization: Bearer abcdefghijklmnop12345678' x\"}"
+        }
+       }
+      ]
+     }
+    ],
+    "messages_before": 0,
+    "messages_after": 3,
+    "hint": "Scroll forward: re-call with around_message_id = the LAST message's id; backward: the FIRST message's id (the boundary message repeats as an orientation marker). messages_before/messages_after < window means you've hit that end of the session."
+   }
+  },
+  {
+   "name": "scroll_clamped",
+   "args": {
+    "session_id": "s_alpha",
+    "around_message_id": 8,
+    "window": 99
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "scroll",
+    "session_id": "s_alpha",
+    "around_message_id": 8,
+    "session_meta": {
+     "when": "May 28, 2026 at 08:26 PM",
+     "source": "cli",
+     "model": "m-1",
+     "title": "Alpha project"
+    },
+    "window": 20,
+    "messages": [
+     {
+      "id": 1,
+      "role": "user",
+      "content": "how do we run the kubernetes rollout? deploy with password=hunter2hunter2xyz and https://example.test/cb?access_token=abcdefgh12345&page=2",
+      "timestamp": 1780000000.0
+     },
+     {
+      "id": 2,
+      "role": "assistant",
+      "content": "Use kubectl rollout status for the kubernetes deployment.",
+      "timestamp": 1780000010.0
+     },
+     {
+      "id": 3,
+      "role": "tool",
+      "content": "kubernetes output line",
+      "timestamp": 1780000020.0,
+      "tool_name": "terminal"
+     },
+     {
+      "id": 4,
+      "role": "assistant",
+      "content": "",
+      "timestamp": 1780000030.0,
+      "tool_calls": [
+       {
+        "id": "c1",
+        "type": "function",
+        "function": {
+         "name": "terminal",
+         "arguments": "{\"command\": \"curl -H 'Authorization: Bearer abcdefghijklmnop12345678' x\"}"
+        }
+       }
+      ]
+     },
+     {
+      "id": 5,
+      "role": "user",
+      "content": "filler turn 0 about rollouts",
+      "timestamp": 1780000040.0
+     },
+     {
+      "id": 6,
+      "role": "assistant",
+      "content": "filler turn 1 about rollouts",
+      "timestamp": 1780000050.0
+     },
+     {
+      "id": 7,
+      "role": "user",
+      "content": "filler turn 2 about rollouts",
+      "timestamp": 1780000060.0
+     },
+     {
+      "id": 8,
+      "role": "assistant",
+      "content": "filler turn 3 about rollouts",
+      "timestamp": 1780000070.0,
+      "anchor": true
+     },
+     {
+      "id": 9,
+      "role": "user",
+      "content": "filler turn 4 about rollouts",
+      "timestamp": 1780000080.0
+     },
+     {
+      "id": 10,
+      "role": "assistant",
+      "content": "filler turn 5 about rollouts",
+      "timestamp": 1780000090.0
+     },
+     {
+      "id": 11,
+      "role": "user",
+      "content": "filler turn 6 about rollouts",
+      "timestamp": 1780000100.0
+     },
+     {
+      "id": 12,
+      "role": "assistant",
+      "content": "filler turn 7 about rollouts",
+      "timestamp": 1780000110.0
+     },
+     {
+      "id": 13,
+      "role": "user",
+      "content": "filler turn 8 about rollouts",
+      "timestamp": 1780000120.0
+     },
+     {
+      "id": 14,
+      "role": "assistant",
+      "content": "filler turn 9 about rollouts",
+      "timestamp": 1780000130.0
+     },
+     {
+      "id": 15,
+      "role": "user",
+      "content": "filler turn 10 about rollouts",
+      "timestamp": 1780000140.0
+     },
+     {
+      "id": 16,
+      "role": "assistant",
+      "content": "filler turn 11 about rollouts",
+      "timestamp": 1780000150.0
+     },
+     {
+      "id": 17,
+      "role": "user",
+      "content": "filler turn 12 about rollouts",
+      "timestamp": 1780000160.0
+     },
+     {
+      "id": 18,
+      "role": "assistant",
+      "content": "filler turn 13 about rollouts",
+      "timestamp": 1780000170.0
+     }
+    ],
+    "messages_before": 7,
+    "messages_after": 10,
+    "hint": "Scroll forward: re-call with around_message_id = the LAST message's id; backward: the FIRST message's id (the boundary message repeats as an orientation marker). messages_before/messages_after < window means you've hit that end of the session."
+   }
+  },
+  {
+   "name": "scroll_bad_anchor",
+   "args": {
+    "session_id": "s_alpha",
+    "around_message_id": "x"
+   },
+   "current": null,
+   "result": {
+    "error": "scroll requires integer around_message_id",
+    "success": false
+   }
+  },
+  {
+   "name": "scroll_foreign_anchor",
+   "args": {
+    "session_id": "s_alpha",
+    "around_message_id": 999
+   },
+   "current": null,
+   "result": {
+    "error": "around_message_id 999 not in session_id s_alpha",
+    "success": false
+   }
+  },
+  {
+   "name": "scroll_current_lineage",
+   "args": {
+    "session_id": "s_child",
+    "around_message_id": 20
+   },
+   "current": "s_child",
+   "result": {
+    "success": true,
+    "mode": "scroll",
+    "session_id": "s_parent",
+    "around_message_id": 20,
+    "session_meta": {
+     "when": "May 28, 2026 at 08:43 PM",
+     "source": "cli",
+     "model": null,
+     "title": "Parent chat"
+    },
+    "window": 5,
+    "messages": [
+     {
+      "id": 19,
+      "role": "user",
+      "content": "the zebra migration plan",
+      "timestamp": 1780000180.0
+     },
+     {
+      "id": 20,
+      "role": "assistant",
+      "content": "zebra migration step one",
+      "timestamp": 1780000190.0,
+      "anchor": true
+     }
+    ],
+    "messages_before": 1,
+    "messages_after": 0,
+    "hint": "Scroll forward: re-call with around_message_id = the LAST message's id; backward: the FIRST message's id (the boundary message repeats as an orientation marker). messages_before/messages_after < window means you've hit that end of the session.",
+    "warning": "around_message_id 20 lives in s_parent (child of s_child); rebound transparently"
+   }
+  },
+  {
+   "name": "scroll_rebind",
+   "args": {
+    "session_id": "s_parent",
+    "around_message_id": 20
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "scroll",
+    "session_id": "s_parent",
+    "around_message_id": 20,
+    "session_meta": {
+     "when": "May 28, 2026 at 08:43 PM",
+     "source": "cli",
+     "model": null,
+     "title": "Parent chat"
+    },
+    "window": 5,
+    "messages": [
+     {
+      "id": 19,
+      "role": "user",
+      "content": "the zebra migration plan",
+      "timestamp": 1780000180.0
+     },
+     {
+      "id": 20,
+      "role": "assistant",
+      "content": "zebra migration step one",
+      "timestamp": 1780000190.0,
+      "anchor": true
+     }
+    ],
+    "messages_before": 1,
+    "messages_after": 0,
+    "hint": "Scroll forward: re-call with around_message_id = the LAST message's id; backward: the FIRST message's id (the boundary message repeats as an orientation marker). messages_before/messages_after < window means you've hit that end of the session."
+   }
+  },
+  {
+   "name": "scroll_unknown_session",
+   "args": {
+    "session_id": "nope",
+    "around_message_id": 1
+   },
+   "current": null,
+   "result": {
+    "error": "session_id not found: nope",
+    "success": false
+   }
+  },
+  {
+   "name": "read_short",
+   "args": {
+    "session_id": "s_parent"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "read",
+    "session_id": "s_parent",
+    "link": "@session:default/s_parent",
+    "session_meta": {
+     "when": "May 28, 2026 at 08:43 PM",
+     "source": "cli",
+     "model": null,
+     "title": "Parent chat"
+    },
+    "message_count": 2,
+    "truncated": false,
+    "messages": [
+     {
+      "id": 19,
+      "role": "user",
+      "content": "the zebra migration plan",
+      "timestamp": 1780000180.0
+     },
+     {
+      "id": 20,
+      "role": "assistant",
+      "content": "zebra migration step one",
+      "timestamp": 1780000190.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "read_truncated",
+   "args": {
+    "session_id": "s_alpha"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "read",
+    "session_id": "s_alpha",
+    "link": "@session:default/s_alpha",
+    "session_meta": {
+     "when": "May 28, 2026 at 08:26 PM",
+     "source": "cli",
+     "model": "m-1",
+     "title": "Alpha project"
+    },
+    "message_count": 18,
+    "truncated": false,
+    "messages": [
+     {
+      "id": 1,
+      "role": "user",
+      "content": "how do we run the kubernetes rollout? deploy with password=hunter2hunter2xyz and https://example.test/cb?access_token=abcdefgh12345&page=2",
+      "timestamp": 1780000000.0
+     },
+     {
+      "id": 2,
+      "role": "assistant",
+      "content": "Use kubectl rollout status for the kubernetes deployment.",
+      "timestamp": 1780000010.0
+     },
+     {
+      "id": 3,
+      "role": "tool",
+      "content": "kubernetes output line",
+      "timestamp": 1780000020.0,
+      "tool_name": "terminal"
+     },
+     {
+      "id": 4,
+      "role": "assistant",
+      "content": "",
+      "timestamp": 1780000030.0,
+      "tool_calls": [
+       {
+        "id": "c1",
+        "type": "function",
+        "function": {
+         "name": "terminal",
+         "arguments": "{\"command\": \"curl -H 'Authorization: Bearer abcdefghijklmnop12345678' x\"}"
+        }
+       }
+      ]
+     },
+     {
+      "id": 5,
+      "role": "user",
+      "content": "filler turn 0 about rollouts",
+      "timestamp": 1780000040.0
+     },
+     {
+      "id": 6,
+      "role": "assistant",
+      "content": "filler turn 1 about rollouts",
+      "timestamp": 1780000050.0
+     },
+     {
+      "id": 7,
+      "role": "user",
+      "content": "filler turn 2 about rollouts",
+      "timestamp": 1780000060.0
+     },
+     {
+      "id": 8,
+      "role": "assistant",
+      "content": "filler turn 3 about rollouts",
+      "timestamp": 1780000070.0
+     },
+     {
+      "id": 9,
+      "role": "user",
+      "content": "filler turn 4 about rollouts",
+      "timestamp": 1780000080.0
+     },
+     {
+      "id": 10,
+      "role": "assistant",
+      "content": "filler turn 5 about rollouts",
+      "timestamp": 1780000090.0
+     },
+     {
+      "id": 11,
+      "role": "user",
+      "content": "filler turn 6 about rollouts",
+      "timestamp": 1780000100.0
+     },
+     {
+      "id": 12,
+      "role": "assistant",
+      "content": "filler turn 7 about rollouts",
+      "timestamp": 1780000110.0
+     },
+     {
+      "id": 13,
+      "role": "user",
+      "content": "filler turn 8 about rollouts",
+      "timestamp": 1780000120.0
+     },
+     {
+      "id": 14,
+      "role": "assistant",
+      "content": "filler turn 9 about rollouts",
+      "timestamp": 1780000130.0
+     },
+     {
+      "id": 15,
+      "role": "user",
+      "content": "filler turn 10 about rollouts",
+      "timestamp": 1780000140.0
+     },
+     {
+      "id": 16,
+      "role": "assistant",
+      "content": "filler turn 11 about rollouts",
+      "timestamp": 1780000150.0
+     },
+     {
+      "id": 17,
+      "role": "user",
+      "content": "filler turn 12 about rollouts",
+      "timestamp": 1780000160.0
+     },
+     {
+      "id": 18,
+      "role": "assistant",
+      "content": "filler turn 13 about rollouts",
+      "timestamp": 1780000170.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "read_long_content",
+   "args": {
+    "session_id": "s_long"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "read",
+    "session_id": "s_long",
+    "link": "@session:default/s_long",
+    "session_meta": {
+     "when": "May 28, 2026 at 10:40 PM",
+     "source": "cli",
+     "model": null,
+     "title": "Long & noisy"
+    },
+    "message_count": 4,
+    "truncated": false,
+    "messages": [
+     {
+      "id": 29,
+      "role": "user",
+      "content": "long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-content long-conten…",
+      "timestamp": 1780000280.0,
+      "content_truncated": true,
+      "original_content_chars": 5212
+     },
+     {
+      "id": 30,
+      "role": "assistant",
+      "content": "red output marker-long",
+      "timestamp": 1780000290.0
+     },
+     {
+      "id": 31,
+      "role": "user",
+      "content": [
+       {
+        "type": "text",
+        "text": "multimodal marker-long"
+       },
+       {
+        "type": "image_url",
+        "image_url": {
+         "url": "data:image/png;base64,QUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJD"
+        }
+       }
+      ],
+      "timestamp": 1780000300.0
+     },
+     {
+      "id": 32,
+      "role": "user",
+      "content": "hidden scaffold marker-long",
+      "timestamp": 1780000310.0
+     }
+    ]
+   }
+  },
+  {
+   "name": "read_missing",
+   "args": {
+    "session_id": "nope"
+   },
+   "current": null,
+   "result": {
+    "error": "session_id not found in this profile: nope. If it belongs to another profile, pass profile=<name> (or the @session:<profile>/<id> link).",
+    "success": false
+   }
+  },
+  {
+   "name": "read_link_form",
+   "args": {
+    "session_id": "custom/s_parent"
+   },
+   "current": null,
+   "result": {
+    "error": "profile 'custom': profile 'custom' does not exist",
+    "success": false
+   }
+  },
+  {
+   "name": "read_empty",
+   "args": {
+    "session_id": "s_empty"
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "read",
+    "session_id": "s_empty",
+    "link": "@session:default/s_empty",
+    "session_meta": {
+     "when": "May 28, 2026 at 10:56 PM",
+     "source": "cli",
+     "model": null,
+     "title": ""
+    },
+    "message_count": 0,
+    "truncated": false,
+    "messages": []
+   }
+  },
+  {
+   "name": "browse",
+   "args": {},
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "browse",
+    "results": [
+     {
+      "session_id": "s_empty",
+      "link": "@session:default/s_empty",
+      "title": null,
+      "source": "cli",
+      "started_at": 1780009000.0,
+      "last_active": 1780009500.0,
+      "message_count": 0,
+      "preview": ""
+     },
+     {
+      "session_id": "s_long",
+      "link": "@session:default/s_long",
+      "title": "Long & noisy",
+      "source": "cli",
+      "started_at": 1780008000.0,
+      "last_active": 1780008500.0,
+      "message_count": 6,
+      "preview": "long-content long-content long-content long-content ..."
+     },
+     {
+      "session_id": "s_cjk",
+      "link": "@session:default/s_cjk",
+      "title": null,
+      "source": "cli",
+      "started_at": 1780007000.0,
+      "last_active": 1780007500.0,
+      "message_count": 2,
+      "preview": "我们去广西桂林漓江旅游"
+     },
+     {
+      "session_id": "s_cron",
+      "link": "@session:default/s_cron",
+      "title": null,
+      "source": "cron",
+      "started_at": 1780005000.0,
+      "last_active": 1780005500.0,
+      "message_count": 1,
+      "preview": "kubernetes cron report"
+     },
+     {
+      "session_id": "s_reset_new",
+      "link": "@session:default/s_reset_new",
+      "title": null,
+      "source": "cli",
+      "started_at": 1780004000.0,
+      "last_active": 1780004500.0,
+      "message_count": 1,
+      "preview": "fresh start"
+     },
+     {
+      "session_id": "s_reset_old",
+      "link": "@session:default/s_reset_old",
+      "title": null,
+      "source": "cli",
+      "started_at": 1780003000.0,
+      "last_active": 1780003500.0,
+      "message_count": 1,
+      "preview": "the walrus experiment notes"
+     },
+     {
+      "session_id": "s_child",
+      "link": "@session:default/s_child",
+      "title": "Parent chat",
+      "source": "cli",
+      "started_at": 1780001000.0,
+      "last_active": 1780002500.0,
+      "message_count": 2,
+      "preview": "continuing zebra work"
+     },
+     {
+      "session_id": "s_alpha",
+      "link": "@session:default/s_alpha",
+      "title": "Alpha project",
+      "source": "cli",
+      "started_at": 1780000000.0,
+      "last_active": 1780000500.0,
+      "message_count": 18,
+      "preview": "how do we run the kubernetes rollout? deploy with ..."
+     }
+    ],
+    "count": 8,
+    "message": "Showing 8 most recent sessions. Pass a query= to search, or session_id+around_message_id to scroll."
+   }
+  },
+  {
+   "name": "browse_limit",
+   "args": {
+    "limit": 2
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "browse",
+    "results": [
+     {
+      "session_id": "s_empty",
+      "link": "@session:default/s_empty",
+      "title": null,
+      "source": "cli",
+      "started_at": 1780009000.0,
+      "last_active": 1780009500.0,
+      "message_count": 0,
+      "preview": ""
+     },
+     {
+      "session_id": "s_long",
+      "link": "@session:default/s_long",
+      "title": "Long & noisy",
+      "source": "cli",
+      "started_at": 1780008000.0,
+      "last_active": 1780008500.0,
+      "message_count": 6,
+      "preview": "long-content long-content long-content long-content ..."
+     }
+    ],
+    "count": 2,
+    "message": "Showing 2 most recent sessions. Pass a query= to search, or session_id+around_message_id to scroll."
+   }
+  },
+  {
+   "name": "browse_current",
+   "args": {},
+   "current": "s_child",
+   "result": {
+    "success": true,
+    "mode": "browse",
+    "results": [
+     {
+      "session_id": "s_empty",
+      "link": "@session:default/s_empty",
+      "title": null,
+      "source": "cli",
+      "started_at": 1780009000.0,
+      "last_active": 1780009500.0,
+      "message_count": 0,
+      "preview": ""
+     },
+     {
+      "session_id": "s_long",
+      "link": "@session:default/s_long",
+      "title": "Long & noisy",
+      "source": "cli",
+      "started_at": 1780008000.0,
+      "last_active": 1780008500.0,
+      "message_count": 6,
+      "preview": "long-content long-content long-content long-content ..."
+     },
+     {
+      "session_id": "s_cjk",
+      "link": "@session:default/s_cjk",
+      "title": null,
+      "source": "cli",
+      "started_at": 1780007000.0,
+      "last_active": 1780007500.0,
+      "message_count": 2,
+      "preview": "我们去广西桂林漓江旅游"
+     },
+     {
+      "session_id": "s_cron",
+      "link": "@session:default/s_cron",
+      "title": null,
+      "source": "cron",
+      "started_at": 1780005000.0,
+      "last_active": 1780005500.0,
+      "message_count": 1,
+      "preview": "kubernetes cron report"
+     },
+     {
+      "session_id": "s_reset_new",
+      "link": "@session:default/s_reset_new",
+      "title": null,
+      "source": "cli",
+      "started_at": 1780004000.0,
+      "last_active": 1780004500.0,
+      "message_count": 1,
+      "preview": "fresh start"
+     },
+     {
+      "session_id": "s_reset_old",
+      "link": "@session:default/s_reset_old",
+      "title": null,
+      "source": "cli",
+      "started_at": 1780003000.0,
+      "last_active": 1780003500.0,
+      "message_count": 1,
+      "preview": "the walrus experiment notes"
+     },
+     {
+      "session_id": "s_alpha",
+      "link": "@session:default/s_alpha",
+      "title": "Alpha project",
+      "source": "cli",
+      "started_at": 1780000000.0,
+      "last_active": 1780000500.0,
+      "message_count": 18,
+      "preview": "how do we run the kubernetes rollout? deploy with ..."
+     }
+    ],
+    "count": 7,
+    "message": "Showing 7 most recent sessions. Pass a query= to search, or session_id+around_message_id to scroll."
+   }
+  },
+  {
+   "name": "browse_blank_query",
+   "args": {
+    "query": "   "
+   },
+   "current": null,
+   "result": {
+    "success": true,
+    "mode": "browse",
+    "results": [
+     {
+      "session_id": "s_empty",
+      "link": "@session:default/s_empty",
+      "title": null,
+      "source": "cli",
+      "started_at": 1780009000.0,
+      "last_active": 1780009500.0,
+      "message_count": 0,
+      "preview": ""
+     },
+     {
+      "session_id": "s_long",
+      "link": "@session:default/s_long",
+      "title": "Long & noisy",
+      "source": "cli",
+      "started_at": 1780008000.0,
+      "last_active": 1780008500.0,
+      "message_count": 6,
+      "preview": "long-content long-content long-content long-content ..."
+     },
+     {
+      "session_id": "s_cjk",
+      "link": "@session:default/s_cjk",
+      "title": null,
+      "source": "cli",
+      "started_at": 1780007000.0,
+      "last_active": 1780007500.0,
+      "message_count": 2,
+      "preview": "我们去广西桂林漓江旅游"
+     },
+     {
+      "session_id": "s_cron",
+      "link": "@session:default/s_cron",
+      "title": null,
+      "source": "cron",
+      "started_at": 1780005000.0,
+      "last_active": 1780005500.0,
+      "message_count": 1,
+      "preview": "kubernetes cron report"
+     },
+     {
+      "session_id": "s_reset_new",
+      "link": "@session:default/s_reset_new",
+      "title": null,
+      "source": "cli",
+      "started_at": 1780004000.0,
+      "last_active": 1780004500.0,
+      "message_count": 1,
+      "preview": "fresh start"
+     },
+     {
+      "session_id": "s_reset_old",
+      "link": "@session:default/s_reset_old",
+      "title": null,
+      "source": "cli",
+      "started_at": 1780003000.0,
+      "last_active": 1780003500.0,
+      "message_count": 1,
+      "preview": "the walrus experiment notes"
+     },
+     {
+      "session_id": "s_child",
+      "link": "@session:default/s_child",
+      "title": "Parent chat",
+      "source": "cli",
+      "started_at": 1780001000.0,
+      "last_active": 1780002500.0,
+      "message_count": 2,
+      "preview": "continuing zebra work"
+     },
+     {
+      "session_id": "s_alpha",
+      "link": "@session:default/s_alpha",
+      "title": "Alpha project",
+      "source": "cli",
+      "started_at": 1780000000.0,
+      "last_active": 1780000500.0,
+      "message_count": 18,
+      "preview": "how do we run the kubernetes rollout? deploy with ..."
+     }
+    ],
+    "count": 8,
+    "message": "Showing 8 most recent sessions. Pass a query= to search, or session_id+around_message_id to scroll."
+   }
+  }
+ ]
+}

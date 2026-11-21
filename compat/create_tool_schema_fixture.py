@@ -21,7 +21,7 @@ PORTED = ["memory", "web_search", "web_extract", "todo_list", "session_search", 
 
 # Tools the Rust CLI implements; the cases only record these.
 RUST_TOOLS = {"read_file", "write_file", "patch", "search_files", "terminal", "skills_list", "clarify",
-              "skill_view", "web_search", "web_extract", "memory"}
+              "skill_view", "web_search", "web_extract", "memory", "session_search"}
 TOOLSET_CASES = {
     "default": {},
     "web_only": {"platform_toolsets": {"cli": ["web"]}},
