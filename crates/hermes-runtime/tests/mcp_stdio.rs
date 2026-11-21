@@ -12,6 +12,8 @@ fn config(name: &str, timeout_secs: u64) -> McpServerConfig {
         command: "python3".to_owned(),
         args: vec!["-I".to_owned(), script.to_string_lossy().into_owned()],
         env: BTreeMap::new(),
+        url: None,
+        headers: BTreeMap::new(),
         timeout_secs,
         connect_timeout_secs: 10,
     }

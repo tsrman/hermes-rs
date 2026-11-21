@@ -394,7 +394,7 @@ fn default_base_url(provider: &str) -> Option<&'static str> {
     }
 }
 
-/// Stdio servers from `mcp_servers`. Entries without `command` (URL servers) are not supported yet.
+/// Servers from `mcp_servers`: stdio (`command`) or Streamable HTTP (`url`).
 fn mcp_servers(
     config: &serde_yaml::Value,
     secrets: &HashMap<String, String>,
@@ -416,7 +416,31 @@ fn mcp_servers(
             ) {
                 return None;
             }
-            let command = expand(entry.get("command")?.as_str()?);
+            let url = entry
+                .get("url")
+                .and_then(serde_yaml::Value::as_str)
+                .map(&expand)
+                .filter(|url| !url.is_empty());
+            let command = match (
+                &url,
+                entry.get("command").and_then(serde_yaml::Value::as_str),
+            ) {
+                (_, Some(command)) => expand(command),
+                (Some(_), None) => String::new(),
+                (None, None) => return None,
+            };
+            let headers = entry
+                .get("headers")
+                .and_then(serde_yaml::Value::as_mapping)
+                .map(|headers| {
+                    headers
+                        .iter()
+                        .filter_map(|(key, value)| {
+                            Some((key.as_str()?.to_owned(), expand(value.as_str()?)))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             let args = entry
                 .get("args")
                 .and_then(serde_yaml::Value::as_sequence)
@@ -456,6 +480,8 @@ fn mcp_servers(
                 command,
                 args,
                 env,
+                url,
+                headers,
                 timeout_secs: seconds("timeout", 120),
                 connect_timeout_secs: seconds("connect_timeout", 60),
             })
@@ -501,12 +527,16 @@ mod mcp_tests {
     #[test]
     fn parses_stdio_servers_and_expands_profile_variables() {
         let config: serde_yaml::Value = serde_yaml::from_str(
-            "mcp_servers:\n  a:\n    command: run\n    args: ['--key=${TOKEN}', '${UNSET_VAR_X}']\n    env: {K: '${TOKEN}', N: 5}\n    timeout: 7\n  off:\n    command: x\n    enabled: false\n  remote:\n    url: https://example.test/mcp\n",
+            "mcp_servers:\n  a:\n    command: run\n    args: ['--key=${TOKEN}', '${UNSET_VAR_X}']\n    env: {K: '${TOKEN}', N: 5}\n    timeout: 7\n  off:\n    command: x\n    enabled: false\n  remote:\n    url: https://example.test/mcp\n    headers: {Authorization: 'Bearer ${TOKEN}', N: 1}\n  empty: {}\n",
         )
         .unwrap();
         let secrets = HashMap::from([("TOKEN".to_owned(), "t0".to_owned())]);
         let servers = mcp_servers(&config, &secrets);
-        assert_eq!(servers.len(), 1);
+        assert_eq!(servers.len(), 2);
+        let remote = &servers[1];
+        assert_eq!(remote.url.as_deref(), Some("https://example.test/mcp"));
+        assert_eq!(remote.headers["Authorization"], "Bearer t0");
+        assert!(remote.command.is_empty() && !remote.headers.contains_key("N"));
         let server = &servers[0];
         assert_eq!(server.name, "a");
         assert_eq!(server.args, ["--key=t0", "${UNSET_VAR_X}"]);

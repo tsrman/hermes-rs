@@ -29,6 +29,7 @@ class CliTest(unittest.TestCase):
             "test_context_overflow_compresses_history_and_retries_once": "overflow",
             "test_context_overflow_after_a_tool_call_is_not_retried": "overflow_tools",
             "test_mcp_stdio_tool_is_exposed_and_called": "mcp",
+            "test_mcp_streamable_http_tool_uses_profile_secrets": "mcp",
             "test_skill_index_uses_profile_and_opted_in_project_roots": "skill",
             "test_skill_view_resolves_exact_paths_and_refuses_ambiguous_names": "skill",
             "test_cancel_interrupts_pending_provider_request": "stall",
@@ -218,6 +219,25 @@ class CliTest(unittest.TestCase):
         tool_message = recorded[1]["messages"][-1]
         self.assertEqual(tool_message["role"], "tool")
         self.assertEqual(json.loads(tool_message["content"]), {"result": "from mcp"})
+
+    def test_mcp_streamable_http_tool_uses_profile_secrets(self):
+        log = self.workdir / "mcp-log.json"
+        server = subprocess.Popen(
+            ["python3", str(ROOT / "compat" / "mcp_http_fixture_server.py"), "--token", "s3cret", "--log", str(log)],
+            stdout=subprocess.PIPE, text=True)
+        self.addCleanup(server.wait)
+        self.addCleanup(server.kill)
+        url = server.stdout.readline().strip()
+        config = (f"mcp_servers:\n  fixture:\n    url: {url}\n    headers:\n"
+                  "      Authorization: 'Bearer ${MCP_TOKEN}'\n")
+        result, recorded = self.chat_with_profile(extra_config=config, dotenv="MCP_TOKEN=s3cret\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("unavailable", result.stderr)
+        self.assertNotIn("s3cret", result.stdout + result.stderr)
+        tool_message = recorded[1]["messages"][-1]
+        self.assertEqual(json.loads(tool_message["content"]), {"result": "from mcp"})
+        entries = json.loads(log.read_text(encoding="utf-8"))
+        self.assertEqual(entries[-1], {"delete": "fixture-session"})
 
     def test_invalid_compaction_summary_keeps_the_original_context(self):
         session, database, original, config = self.seed_compression_history()
