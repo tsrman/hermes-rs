@@ -85,9 +85,6 @@ impl OpenAiProvider {
                 .await
                 .map_err(ProviderError::Http)?;
             let status = response.status().as_u16();
-            if !matches!(status, 500 | 502 | 503 | 504) || attempt == 2 {
-                break response;
-            }
             let delay = response
                 .headers()
                 .get(reqwest::header::RETRY_AFTER)
@@ -95,6 +92,16 @@ impl OpenAiProvider {
                 .and_then(|value| value.trim().parse::<u64>().ok())
                 .map(|seconds| seconds.min(600))
                 .unwrap_or(2_u64 << attempt);
+            if attempt == 2 {
+                break response;
+            }
+            if status == 429 {
+                if !is_transient_rate_limit(response).await? {
+                    return Err(ProviderError::HttpStatus(status));
+                }
+            } else if !matches!(status, 500 | 502 | 503 | 504) {
+                break response;
+            }
             attempt += 1;
             tokio::time::sleep(Duration::from_secs(delay)).await;
         };
@@ -176,4 +183,117 @@ impl OpenAiProvider {
         completion.tool_calls = calls.into_values().collect();
         Ok(completion)
     }
+}
+
+async fn is_transient_rate_limit(mut response: reqwest::Response) -> Result<bool, ProviderError> {
+    const MAX_ERROR_BYTES: usize = 65_536;
+    let has_reset_header = ["retry-after", "x-ratelimit-reset"].iter().any(|name| {
+        response
+            .headers()
+            .get(*name)
+            .is_some_and(|value| !value.is_empty())
+    });
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(ProviderError::Http)? {
+        if body.len().saturating_add(chunk.len()) > MAX_ERROR_BYTES {
+            return Ok(false);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let Ok(error) = serde_json::from_slice::<Value>(&body) else {
+        return Ok(false);
+    };
+    let code = error
+        .pointer("/error/code")
+        .or_else(|| error.get("code"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let billing_codes = [
+        "insufficient_quota",
+        "billing_not_active",
+        "payment_required",
+        "insufficient_credits",
+        "no_usable_credits",
+        "balance_depleted",
+        "model_not_supported_on_free_tier",
+        "member_spend_cap_exceeded",
+        "terminal_quota_exhausted",
+        "personal-team-blocked:spending-limit",
+        "credit_balance_exhausted",
+        "organization_spend_limit_exceeded",
+        "organization_usage_limit_exceeded",
+        "project_spend_limit_exceeded",
+        "insufficient_credits_for_paid_model",
+    ];
+    if billing_codes.contains(&code.as_str()) {
+        return Ok(false);
+    }
+    let message = error
+        .pointer("/error/message")
+        .or_else(|| error.get("message"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let rate_signals = [
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "throttled",
+        "requests per minute",
+        "tokens per minute",
+        "throttling",
+    ];
+    let billing_signals = [
+        "insufficient credits",
+        "insufficient_quota",
+        "insufficient balance",
+        "payment required",
+        "billing hard limit",
+        "exceeded your current quota",
+        "daily limit",
+        "daily quota",
+        "tokens per day",
+        "weekly usage limit",
+        "weekly limit",
+        "reached your session usage limit",
+    ];
+    let reset_words = [
+        "try again",
+        "retry",
+        "resets at",
+        "reset in",
+        "resets in",
+        "reset after",
+        "available in",
+        "wait",
+        "requests remaining",
+        "periodic",
+        "window",
+        "per minute",
+        "per second",
+    ];
+    let reset_fields = ["resets_in_seconds", "resets_at", "reset_at", "retry_after"];
+    let has_reset_field = [Some(&error), error.get("error")]
+        .into_iter()
+        .flatten()
+        .any(|item| {
+            reset_fields.iter().any(|name| {
+                item.get(*name)
+                    .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+            })
+        });
+    let has_reset = has_reset_header
+        || has_reset_field
+        || reset_words.iter().any(|word| message.contains(word));
+    if !has_reset
+        && billing_signals
+            .iter()
+            .any(|signal| message.contains(signal))
+    {
+        return Ok(false);
+    }
+    Ok(code == "rate_limit_exceeded"
+        || has_reset
+        || rate_signals.iter().any(|signal| message.contains(signal)))
 }

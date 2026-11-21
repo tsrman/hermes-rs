@@ -165,6 +165,101 @@ async fn reports_rate_limit_status() {
 }
 
 #[tokio::test]
+async fn retries_explicit_transient_rate_limit() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+        for attempt in 0..2 {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0; 8192];
+            assert!(socket.read(&mut request).unwrap() > 0);
+            let response = if attempt == 0 {
+                let body =
+                    r#"{"error":{"code":"rate_limit_exceeded","message":"Rate limit exceeded"}}"#;
+                format!("HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+            } else {
+                ok_response("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+            };
+            socket.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    let provider = OpenAiProvider::new(
+        &format!("http://{address}/v1"),
+        "fixture",
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    let result = provider
+        .complete(&json!({"model":"test", "messages":[]}), |_| {})
+        .await
+        .unwrap();
+    assert_eq!(result.content, "ok");
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn retries_usage_window_with_reset_header() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+        for attempt in 0..2 {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0; 8192];
+            assert!(socket.read(&mut request).unwrap() > 0);
+            let response = if attempt == 0 {
+                let body =
+                    r#"{"error":{"code":"usage_limit_reached","message":"Daily quota exceeded"}}"#;
+                format!("HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+            } else {
+                ok_response("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+            };
+            socket.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    let provider = OpenAiProvider::new(
+        &format!("http://{address}/v1"),
+        "fixture",
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    let result = provider
+        .complete(&json!({"model":"test", "messages":[]}), |_| {})
+        .await
+        .unwrap();
+    assert_eq!(result.content, "ok");
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn does_not_retry_exhausted_quota_even_with_retry_after() {
+    let body = r#"{"error":{"code":"insufficient_quota","message":"Rate limit exceeded"}}"#;
+    let response = format!("HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+    let (base, handle) = server(response);
+    let provider = OpenAiProvider::new(&base, "fixture", Duration::from_secs(5)).unwrap();
+    let result = provider
+        .complete(&json!({"model":"test", "messages":[]}), |_| {})
+        .await;
+    assert!(matches!(result, Err(ProviderError::HttpStatus(429))));
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn does_not_retry_daily_quota_wall() {
+    let body = r#"{"error":{"message":"Daily quota exceeded; rate limit reached"}}"#;
+    let response = format!(
+        "HTTP/1.1 429 Too Many Requests\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let (base, handle) = server(response);
+    let provider = OpenAiProvider::new(&base, "fixture", Duration::from_secs(5)).unwrap();
+    let result = provider
+        .complete(&json!({"model":"test", "messages":[]}), |_| {})
+        .await;
+    assert!(matches!(result, Err(ProviderError::HttpStatus(429))));
+    handle.join().unwrap();
+}
+
+#[tokio::test]
 async fn does_not_retry_invalid_request() {
     let (base, handle) = server(
         "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned(),

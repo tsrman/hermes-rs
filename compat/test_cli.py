@@ -19,7 +19,7 @@ class CliTest(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.workdir = Path(self.directory.name)
         (self.workdir / "fixture.txt").write_text("fixture content", encoding="utf-8")
-        scenario = {"test_cancel_interrupts_pending_provider_request": "stall", "test_incomplete_tool_stream_stops_before_dispatch": "partial_tool", "test_retries_after_tool_result_without_repeating_tool_call": "tool_retry"}.get(self._testMethodName, "tool")
+        scenario = {"test_cancel_interrupts_pending_provider_request": "stall", "test_incomplete_tool_stream_stops_before_dispatch": "partial_tool", "test_retries_after_tool_result_without_repeating_tool_call": "tool_retry", "test_retries_rate_limit_after_tool_result": "tool_rate_limit"}.get(self._testMethodName, "tool")
         self.server = subprocess.Popen(
             ["python3", str(ROOT / "compat" / "model_server.py"), "--scenario", scenario],
             stdout=subprocess.PIPE,
@@ -165,6 +165,19 @@ class CliTest(unittest.TestCase):
         self.assertEqual(requests[1], requests[2])
         self.assertEqual([item["role"] for item in requests[2]["messages"]], ["user", "assistant", "tool"])
         self.assertEqual(requests[2]["messages"][-1]["tool_call_id"], "fixture-call")
+
+    def test_retries_rate_limit_after_tool_result(self):
+        env = {"PATH": os.environ.get("PATH", ""), "HERMES_API_KEY": "fixture"}
+        result = subprocess.run(
+            [str(BINARY), "chat", "-q", "test", "--base-url", self.base + "/v1", "--model", "fixture"],
+            cwd=self.workdir, env=env, capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with urlopen(self.base + "/requests", timeout=5) as response:
+            requests = json.load(response)
+        self.assertEqual(len(requests), 3)
+        self.assertEqual(requests[1], requests[2])
+        self.assertEqual(requests[2]["messages"][-1]["role"], "tool")
 
     @unittest.skipUnless(os.name == "posix", "requires SIGINT")
     def test_cancel_interrupts_pending_provider_request(self):

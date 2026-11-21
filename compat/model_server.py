@@ -46,6 +46,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if self.server.scenario == "tool_rate_limit" and len(self.server.requests) == 2:
+            data = b'{"error":{"code":"rate_limit_exceeded","message":"Rate limit exceeded"}}'
+            self.send_response(429)
+            self.send_header("Retry-After", "0")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.server.scenario == "stall":
             time.sleep(30)
             return
@@ -55,7 +63,7 @@ class Handler(BaseHTTPRequestHandler):
             "model": body.get("model", "fixture"),
         }
         messages = body.get("messages", [])
-        wants_tool = self.server.scenario in ("tool", "partial_tool", "tool_retry") and not any(
+        wants_tool = self.server.scenario in ("tool", "partial_tool", "tool_retry", "tool_rate_limit") and not any(
             isinstance(message, dict) and message.get("role") == "tool"
             for message in messages
         )
@@ -111,7 +119,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=0)
-    parser.add_argument("--scenario", choices=("text", "tool", "partial_tool", "stall", "tool_retry"), default="text")
+    parser.add_argument("--scenario", choices=("text", "tool", "partial_tool", "stall", "tool_retry", "tool_rate_limit"), default="text")
     args = parser.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.requests = []
