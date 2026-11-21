@@ -3,6 +3,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use hermes_runtime::config::{profile_home, set_config_value};
 
+mod approval;
 mod chat;
 #[cfg(unix)]
 mod owner;
@@ -79,7 +80,7 @@ async fn run() -> Result<u8, String> {
                 }
             }
             tokio::select! {
-                result = chat::execute(home, request, |event| chat::display(event).is_ok()) => result,
+                result = chat::execute(home, request, |event| chat::display(event).is_ok(), approval::prompt) => result,
                 signal = tokio::signal::ctrl_c() => {
                     signal.map_err(|error| format!("signal handler failed: {error}"))?;
                     eprintln!("interrupted");

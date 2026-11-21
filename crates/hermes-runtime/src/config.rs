@@ -36,6 +36,8 @@ pub struct ChatSettings {
     pub fallbacks: Vec<FallbackSettings>,
     pub prompt: PromptSettings,
     pub compression: CompactionSettings,
+    pub approval_timeout_secs: u32,
+    pub terminal_local: bool,
     openai_api_key: Option<String>,
     openai_base_url: Option<String>,
 }
@@ -59,6 +61,8 @@ impl Default for ChatSettings {
             fallbacks: Vec::new(),
             prompt: PromptSettings::default(),
             compression: CompactionSettings::default(),
+            approval_timeout_secs: 300,
+            terminal_local: true,
             openai_api_key: None,
             openai_base_url: None,
         }
@@ -169,13 +173,24 @@ fn read_config(path: &Path) -> Result<serde_yaml::Value, String> {
 }
 
 pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
+    let terminal_env = std::env::var_os("TERMINAL_ENV");
     let Some(home) = home else {
-        return Ok(ChatSettings::default());
+        return Ok(ChatSettings {
+            terminal_local: terminal_env
+                .as_deref()
+                .is_none_or(|backend| backend == "local"),
+            ..ChatSettings::default()
+        });
     };
     let config = read_config(&home.join("config.yaml"))?;
     let mut settings = ChatSettings {
         prompt: PromptSettings::from_config(&config),
         compression: CompactionSettings::from_config(&config),
+        approval_timeout_secs: config["approvals"]["timeout"]
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(300),
         ..ChatSettings::default()
     };
     if let Some(model) = config.get("model") {
@@ -234,6 +249,17 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.api_key = secrets.get("HERMES_API_KEY").cloned();
     settings.openai_api_key = secrets.get("OPENAI_API_KEY").cloned();
     settings.openai_base_url = secrets.get("OPENAI_BASE_URL").cloned();
+    settings.terminal_local = match &config["terminal"]["backend"] {
+        serde_yaml::Value::Null => terminal_env.as_deref().map_or_else(
+            || {
+                secrets
+                    .get("TERMINAL_ENV")
+                    .is_none_or(|backend| backend == "local")
+            },
+            |backend| backend == "local",
+        ),
+        backend => backend.as_str() == Some("local"),
+    };
     let fallback = config
         .get("fallback_providers")
         .filter(|entries| !entries.is_null())

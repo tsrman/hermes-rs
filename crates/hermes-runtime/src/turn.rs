@@ -1,14 +1,21 @@
-//! One in-memory conversation turn with read-only local tools.
+//! One in-memory conversation turn with local tools.
 
-use std::path::{Path, PathBuf};
+use std::future::Future;
+use std::path::Path;
 
 use hermes_core::prompt::{cli_system_prompt, update_cli_prompt_route};
 use serde_json::{json, Value};
 
 use crate::compaction::{messages_bytes, CompactedHistory, CompactionSettings};
+use crate::file_tools::{
+    patch_schema, search_schema, write_schema, FileWorkspace, PATCH, SEARCH_FILES, WRITE_FILE,
+};
 use crate::prompt::{load_cli_context, PromptSettings};
 use crate::providers::openai::{OpenAiProvider, ProviderError};
 use crate::skills::{SkillCatalog, SKILLS_LIST, SKILL_VIEW};
+use crate::terminal::{self, TERMINAL};
+
+pub use crate::file_tools::{ApprovalAction, ApprovalDecision, ApprovalRequest};
 
 const ITERATION_SUMMARY_REQUEST: &str = "You've reached the maximum number of tool-calling iterations allowed. Please provide a final response summarizing what you've found and accomplished so far, without calling any more tools.";
 
@@ -38,6 +45,8 @@ pub struct TurnHistory {
     pub(crate) messages: Vec<Value>,
     pub(crate) skills: SkillCatalog,
     pub(crate) compaction: Option<CompactedHistory>,
+    pub(crate) write_files: bool,
+    pub(crate) terminal_enabled: bool,
 }
 
 pub enum CompactionOutcome {
@@ -49,14 +58,26 @@ pub enum CompactionOutcome {
 impl TurnHistory {
     pub fn capture_prompt(
         &mut self,
-        profile: Option<&Path>,
-        root: &Path,
+        options: &TurnOptions<'_>,
         settings: &PromptSettings,
         route: &ModelRoute,
     ) {
-        self.skills = SkillCatalog::load(profile, root, &settings.skills);
+        self.write_files = options.can_write_files();
+        self.terminal_enabled = options.can_run_terminal();
+        self.skills = SkillCatalog::load(
+            options.profile,
+            options.root,
+            &settings.skills,
+            self.write_files,
+            self.terminal_enabled,
+        );
         if self.system_prompt.is_none() {
-            let context = load_cli_context(profile, root, settings, self.skills.prompt());
+            let context = load_cli_context(
+                options.profile,
+                options.root,
+                settings,
+                self.skills.prompt(),
+            );
             self.system_prompt = Some(context.render(&route.model, route.provider_name));
         }
     }
@@ -74,7 +95,9 @@ impl TurnHistory {
             return CompactionOutcome::Unchanged;
         }
         let system = route.system_prompt(self.system_prompt.as_deref());
-        let old_prefix = prefix_bytes(&system);
+        let write_files = self.write_files;
+        let terminal_enabled = self.terminal_enabled;
+        let old_prefix = prefix_bytes(&system, write_files, terminal_enabled);
         let input_bytes = old_prefix + messages_bytes(&self.messages) + query.len();
         let Some(range) = settings.select(&self.messages, input_bytes) else {
             return CompactionOutcome::Unchanged;
@@ -105,7 +128,13 @@ impl TurnHistory {
         let model = route.model.clone();
         let provider = route.provider_name;
         let refreshed = tokio::task::spawn_blocking(move || {
-            let skills = SkillCatalog::load(profile.as_deref(), &root, &settings.skills);
+            let skills = SkillCatalog::load(
+                profile.as_deref(),
+                &root,
+                &settings.skills,
+                write_files,
+                terminal_enabled,
+            );
             let prompt = load_cli_context(profile.as_deref(), &root, &settings, skills.prompt());
             (prompt.render(&model, provider), skills)
         })
@@ -114,7 +143,9 @@ impl TurnHistory {
             return CompactionOutcome::Skipped;
         };
         // A newly loaded memory or project file can outweigh the savings.
-        if prefix_bytes(&system) + summary_bytes >= old_prefix + removed_bytes {
+        if prefix_bytes(&system, write_files, terminal_enabled) + summary_bytes
+            >= old_prefix + removed_bytes
+        {
             return CompactionOutcome::Skipped;
         }
         self.system_prompt = Some(system);
@@ -147,18 +178,39 @@ pub enum TurnEvent<'a> {
     IterationLimit(u32),
 }
 
-pub async fn run_turn<F>(
+pub struct TurnOptions<'a> {
+    pub root: &'a Path,
+    pub profile: Option<&'a Path>,
+    pub max_turns: u32,
+    pub approval_timeout_secs: Option<u32>,
+    pub terminal_local: bool,
+}
+
+impl TurnOptions<'_> {
+    fn can_write_files(&self) -> bool {
+        self.approval_timeout_secs.is_some() && cfg!(target_os = "linux")
+    }
+
+    fn can_run_terminal(&self) -> bool {
+        self.can_write_files() && self.terminal_local
+    }
+}
+
+pub async fn run_turn<F, A, D>(
     primary: &ModelRoute,
     fallbacks: &[ModelRoute],
     query: &str,
-    root: &Path,
-    max_turns: u32,
+    options: TurnOptions<'_>,
     history: TurnHistory,
     mut on_event: F,
+    mut approve: A,
 ) -> Result<TurnOutcome, TurnError>
 where
     F: FnMut(TurnEvent<'_>),
+    A: FnMut(ApprovalRequest) -> D,
+    D: Future<Output = ApprovalDecision>,
 {
+    let mut files = FileWorkspace::new(options.root, options.profile);
     let saved_prompt = history.system_prompt.as_deref();
     let mut system_prompt = primary.system_prompt(saved_prompt);
     let (mut messages, original) = match &history.compaction {
@@ -169,10 +221,14 @@ where
     let first_new_message = messages.len();
     messages.push(json!({"role": "user", "content": query}));
     let skill_tools = system_prompt.contains("\n<available_skills>\n");
-    let tools = tools_for_prompt(&system_prompt);
+    let tools = tools_for_prompt(
+        &system_prompt,
+        options.can_write_files(),
+        options.can_run_terminal(),
+    );
     let mut route = primary;
     let mut fallback_routes = fallbacks.iter();
-    for _ in 0..max_turns {
+    for _ in 0..options.max_turns {
         let result = loop {
             let request = json!({"model": route.model, "messages": messages, "tools": tools});
             let mut emitted_text = false;
@@ -230,12 +286,37 @@ where
         for call in result.tool_calls {
             on_event(TurnEvent::ToolStarted(&call.name));
             let output = match call.name.as_str() {
-                "read_file" => read_file(root, &call.arguments),
+                "read_file" => files.read(&call.arguments),
+                SEARCH_FILES => files.search(&call.arguments),
+                WRITE_FILE | PATCH => {
+                    files
+                        .edit(
+                            &call.name,
+                            &call.arguments,
+                            options.approval_timeout_secs,
+                            &mut approve,
+                        )
+                        .await
+                }
+                TERMINAL if options.terminal_local => {
+                    terminal::execute(
+                        &files,
+                        &call.arguments,
+                        options.approval_timeout_secs,
+                        &mut approve,
+                    )
+                    .await
+                }
+                TERMINAL => json!({
+                    "error": "The configured terminal backend is unavailable in the Rust CLI.",
+                    "status": "backend_unavailable"
+                }),
                 SKILL_VIEW if skill_tools => history.skills.view(&call.arguments),
                 SKILLS_LIST if skill_tools => history.skills.list(&call.arguments),
                 _ => json!({"error": format!("Unknown tool: {}", call.name)}),
             };
-            let succeeded = output.get("error").is_none();
+            let succeeded = output.get("error").is_none()
+                && (call.name != TERMINAL || output["exit_code"].as_i64() == Some(0));
             messages.push(
                 json!({"role": "tool", "tool_call_id": call.id, "content": output.to_string()}),
             );
@@ -245,7 +326,7 @@ where
             });
         }
     }
-    on_event(TurnEvent::IterationLimit(max_turns));
+    on_event(TurnEvent::IterationLimit(options.max_turns));
     messages.push(json!({"role": "user", "content": ITERATION_SUMMARY_REQUEST}));
     let request = json!({"model": route.model, "messages": messages, "tools": tools});
     // Keep the active route and tool definitions so the provider can reuse its prompt prefix.
@@ -265,109 +346,52 @@ where
     Ok(TurnOutcome::IterationLimit)
 }
 
-fn prefix_bytes(system: &str) -> usize {
-    system.len() + messages_bytes(&tools_for_prompt(system))
+fn prefix_bytes(system: &str, write_files: bool, terminal_enabled: bool) -> usize {
+    system.len() + messages_bytes(&tools_for_prompt(system, write_files, terminal_enabled))
 }
 
-fn tools_for_prompt(system: &str) -> Vec<Value> {
-    let mut tools = vec![json!({
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "Read a UTF-8 file within the current working directory with line numbers.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "offset": {"type": "integer", "minimum": 1, "default": 1},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 2000}
-                },
-                "required": ["path"]
+fn tools_for_prompt(system: &str, write_files: bool, terminal_enabled: bool) -> Vec<Value> {
+    let mut tools = vec![
+        json!({
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a UTF-8 file within the current working directory with line numbers.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "offset": {"type": "integer", "minimum": 1, "default": 1},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 2000}
+                    },
+                    "required": ["path"]
+                }
             }
-        }
-    })];
+        }),
+        search_schema(),
+    ];
     if system.contains("\n<available_skills>\n") {
         tools.extend(SkillCatalog::schemas());
+    }
+    if write_files {
+        tools.extend([write_schema(), patch_schema()]);
+    }
+    if terminal_enabled {
+        tools.push(terminal::schema());
     }
     tools
 }
 
-fn read_file(root: &Path, arguments: &str) -> Value {
-    match read_file_inner(root, arguments) {
-        Ok(value) => value,
-        Err(error) => json!({"error": error}),
-    }
-}
-
-fn read_file_inner(root: &Path, arguments: &str) -> Result<Value, String> {
-    let args: Value = serde_json::from_str(arguments).map_err(|_| "Invalid tool arguments")?;
-    let path = args
-        .get("path")
-        .and_then(Value::as_str)
-        .ok_or("Missing path")?;
-    let offset = args
-        .get("offset")
-        .map_or(Some(1), Value::as_u64)
-        .filter(|value| *value > 0)
-        .ok_or("Invalid offset")?;
-    let limit = args
-        .get("limit")
-        .map_or(Some(2000), Value::as_u64)
-        .filter(|value| *value > 0)
-        .ok_or("Invalid limit")?
-        .min(2000);
-    let root = root.canonicalize().map_err(|error| error.to_string())?;
-    let path = PathBuf::from(path);
-    let resolved = root
-        .join(path)
-        .canonicalize()
-        .map_err(|error| error.to_string())?;
-    if !resolved.starts_with(&root) {
-        return Err("Path is outside the working directory".into());
-    }
-    let filename = resolved
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("");
-    if [
-        ".env",
-        ".env.local",
-        ".env.development",
-        ".env.production",
-        ".env.test",
-        ".env.staging",
-        ".envrc",
-    ]
-    .iter()
-    .any(|blocked| filename.eq_ignore_ascii_case(blocked))
-    {
-        return Err("Project environment files cannot be read directly".into());
-    }
-    let metadata = resolved.metadata().map_err(|error| error.to_string())?;
-    if !metadata.is_file() || metadata.len() > 10_000_000 {
-        return Err("File must be a regular file no larger than 10 MB".into());
-    }
-    let data = std::fs::read_to_string(resolved).map_err(|error| error.to_string())?;
-    let lines: Vec<&str> = data.lines().collect();
-    let start = usize::try_from(offset - 1)
-        .unwrap_or(usize::MAX)
-        .min(lines.len());
-    let end = start.saturating_add(limit as usize).min(lines.len());
-    let content = lines[start..end]
-        .iter()
-        .enumerate()
-        .map(|(index, line)| format!("{}|{}", start + index + 1, line))
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok(
-        json!({"content": content, "total_lines": lines.len(), "file_size": metadata.len(), "truncated": end < lines.len(), "is_binary": false, "is_image": false, "not_found": false}),
-    )
-}
-
 #[cfg(test)]
 mod tests {
-    use super::read_file;
-    use serde_json::json;
+    use std::path::Path;
+
+    use crate::file_tools::FileWorkspace;
+    use serde_json::{json, Value};
+
+    fn read_file(root: &Path, arguments: &str) -> Value {
+        FileWorkspace::new(root, None).read(arguments)
+    }
 
     #[test]
     fn reads_paginated_utf8_with_one_based_line_numbers() {

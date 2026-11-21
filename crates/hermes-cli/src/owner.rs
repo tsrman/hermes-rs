@@ -2,24 +2,27 @@ use std::fs::{self, File};
 use std::io;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use hermes_runtime::turn::ApprovalDecision;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{signal, SignalKind};
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{mpsc, oneshot, Notify};
 use tokio::task::JoinSet;
-use tokio::time::timeout;
+use tokio::time::{timeout, timeout_at, Instant};
 
+use crate::approval;
 use crate::chat::{self, ChatRequest, Event};
 
 const DIRECTORY: &str = "rust-owner";
 const SOCKET: &str = "owner.sock";
 const VERSION: u32 = 1;
 const CANCEL: u8 = 1;
+const APPROVAL_RESPONSE: u8 = 2;
 const MAX_FRAME: usize = 4 * 1024 * 1024;
 const MAX_OUTPUT_BUFFER: usize = 8 * 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -29,6 +32,14 @@ struct Start {
     version: u32,
     request: ChatRequest,
 }
+
+#[derive(Deserialize, Serialize)]
+struct ApprovalResponse {
+    id: u64,
+    decision: ApprovalDecision,
+}
+
+type PendingApproval = Mutex<Option<(u64, oneshot::Sender<ApprovalDecision>)>>;
 
 struct OwnerSocket {
     path: PathBuf,
@@ -186,28 +197,94 @@ pub async fn forward(mut stream: UnixStream, request: ChatRequest) -> Result<u8,
     };
     result.map_err(|error| format!("cannot send request to local owner: {error}"))?;
     let (mut reader, mut writer) = stream.into_split();
-    let receive = async {
-        loop {
-            let event = read_frame::<Event>(&mut reader).await.map_err(|error| {
-                format!("local owner disconnected before reporting the turn result: {error}")
-            })?;
-            if let Event::Exit(code) = event {
-                return Ok(code);
+    let mut cancelled = None;
+    loop {
+        let event = {
+            let frame = read_frame::<Event>(&mut reader);
+            tokio::pin!(frame);
+            if let Some(deadline) = cancelled {
+                read_until_cancelled(deadline, frame).await
+            } else {
+                tokio::select! {
+                    biased;
+                    signal = &mut interrupt => {
+                        signal.map_err(|error| format!("signal handler failed: {error}"))?;
+                        let deadline = cancel(&mut writer).await?;
+                        cancelled = Some(deadline);
+                        // Keep the same frame future so bytes already read are not lost.
+                        read_until_cancelled(deadline, frame).await
+                    }
+                    frame = &mut frame => frame.map_err(owner_disconnected),
+                }
             }
-            chat::display(event).map_err(|error| error.to_string())?;
+        }?;
+        match event {
+            Event::Exit(code) => return Ok(code),
+            Event::Approval { id, request } if cancelled.is_none() => {
+                let decision = tokio::select! {
+                    biased;
+                    signal = &mut interrupt => {
+                        signal.map_err(|error| format!("signal handler failed: {error}"))?;
+                        cancelled = Some(cancel(&mut writer).await?);
+                        continue;
+                    }
+                    decision = approval::prompt(request) => decision,
+                };
+                timeout(IO_TIMEOUT, async {
+                    writer.write_u8(APPROVAL_RESPONSE).await?;
+                    write_frame(&mut writer, &ApprovalResponse { id, decision }).await
+                })
+                .await
+                .map_err(|_| "local owner approval response timed out")?
+                .map_err(|error| error.to_string())?;
+            }
+            event => chat::display(event).map_err(|error| error.to_string())?,
         }
-    };
-    tokio::pin!(receive);
-    tokio::select! {
-        result = &mut receive => result,
-        signal = &mut interrupt => {
-            signal.map_err(|error| format!("signal handler failed: {error}"))?;
-            match timeout(IO_TIMEOUT, async {
-                writer.write_u8(CANCEL).await.map_err(|error| error.to_string())?;
-                receive.await
-            }).await {
-                Ok(result) => result,
-                Err(_) => Err("local owner did not acknowledge cancellation".into()),
+    }
+}
+
+fn owner_disconnected(error: io::Error) -> String {
+    format!("local owner disconnected before reporting the turn result: {error}")
+}
+
+async fn cancel(writer: &mut (impl AsyncWrite + Unpin)) -> Result<Instant, String> {
+    timeout(IO_TIMEOUT, writer.write_u8(CANCEL))
+        .await
+        .map_err(|_| "local owner did not accept cancellation")?
+        .map_err(|error| error.to_string())?;
+    Ok(Instant::now() + IO_TIMEOUT)
+}
+
+async fn read_until_cancelled(
+    deadline: Instant,
+    frame: impl std::future::Future<Output = io::Result<Event>>,
+) -> Result<Event, String> {
+    timeout_at(deadline, frame)
+        .await
+        .map_err(|_| "local owner did not acknowledge cancellation")?
+        .map_err(owner_disconnected)
+}
+
+async fn read_controls(
+    reader: &mut (impl AsyncRead + Unpin),
+    pending: &PendingApproval,
+) -> io::Result<()> {
+    loop {
+        match reader.read_u8().await? {
+            CANCEL => return Ok(()),
+            APPROVAL_RESPONSE => {
+                let response: ApprovalResponse = timeout(IO_TIMEOUT, read_frame(reader)).await??;
+                let mut waiting = pending.lock().unwrap();
+                if waiting.as_ref().is_some_and(|(id, _)| *id == response.id) {
+                    let (_, sender) = waiting.take().expect("matched approval");
+                    let _ = sender.send(response.decision);
+                }
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid local owner control byte",
+                ))
             }
         }
     }
@@ -228,31 +305,56 @@ async fn handle(mut stream: UnixStream, home: &Path) -> io::Result<()> {
     let queued = AtomicUsize::new(0);
     let stalled = Notify::new();
     let execute = async {
+        let pending = PendingApproval::default();
+        let next_id = AtomicU64::new(1);
+        let queue = |event| {
+            // Bound memory by bytes so a burst of small SSE deltas can still be forwarded.
+            let bytes = match &event {
+                Event::Stdout(text) | Event::Stderr(text) => text.capacity() + 64,
+                Event::Approval { request, .. } => {
+                    request.target.capacity() + request.content.capacity() + 128
+                }
+                Event::Exit(_) => 64,
+            };
+            if queued
+                .fetch_update(Relaxed, Relaxed, |total| {
+                    total
+                        .checked_add(bytes)
+                        .filter(|total| *total <= MAX_OUTPUT_BUFFER)
+                })
+                .is_err()
+                || events.send((event, bytes)).is_err()
+            {
+                stalled.notify_one();
+                return false;
+            }
+            true
+        };
+        let approve = |request| {
+            let (sender, receiver) = oneshot::channel();
+            let id = next_id.fetch_add(1, Relaxed);
+            *pending.lock().unwrap() = Some((id, sender));
+            let queued = queue(Event::Approval { id, request });
+            async move {
+                if queued {
+                    receiver.await.unwrap_or(ApprovalDecision::Unavailable)
+                } else {
+                    ApprovalDecision::Unavailable
+                }
+            }
+        };
         let result = tokio::select! {
             biased;
-            control = reader.read_u8() => match control {
-                Ok(CANCEL) => {
+            control = read_controls(&mut reader, &pending) => match control {
+                Ok(()) => {
                     let _ = events.send((Event::Stderr("interrupted".into()), 0));
                     Ok(130)
                 }
-                Ok(_) => Err("invalid local owner control byte".into()),
+                Err(error) if error.kind() == io::ErrorKind::InvalidData => Err(error.to_string()),
                 Err(_) => return Ok(()),
             },
             _ = stalled.notified() => Err("local owner output buffer is full".into()),
-            result = chat::execute(Some(home), request, |event| {
-                // Bound memory by bytes so a burst of small SSE deltas can still be forwarded.
-                let bytes = match &event {
-                    Event::Stdout(text) | Event::Stderr(text) => text.capacity() + 64,
-                    Event::Exit(_) => 64,
-                };
-                if queued.fetch_update(Relaxed, Relaxed, |total| {
-                    total.checked_add(bytes).filter(|total| *total <= MAX_OUTPUT_BUFFER)
-                }).is_err() || events.send((event, bytes)).is_err() {
-                    stalled.notify_one();
-                    return false;
-                }
-                true
-            }) => result,
+            result = chat::execute(Some(home), request, &queue, approve) => result,
         };
         let code = match result {
             Ok(code) => code,

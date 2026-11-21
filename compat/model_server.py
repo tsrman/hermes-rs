@@ -95,7 +95,21 @@ class Handler(BaseHTTPRequestHandler):
         if scenario == "compact" and messages and messages[-1].get("content") == "Cancel this turn":
             self.server.release.wait(timeout=15)
         function = {"name": "read_file", "arguments": '{"path":"fixture.txt"}'}
-        if scenario == "skill":
+        if scenario == "local_tools":
+            user_index = max(i for i, message in enumerate(messages) if message.get("role") == "user")
+            fixture = json.loads(messages[user_index]["content"])
+            step = sum(message.get("role") == "tool" for message in messages[user_index + 1:])
+            if fixture.get("read") and step == 0:
+                function = {"name": "read_file", "arguments": json.dumps({"path": fixture["path"]})}
+            elif "tool" in fixture:
+                function = {"name": fixture["tool"], "arguments": json.dumps(fixture["arguments"])}
+            else:
+                function = {"name": "write_file", "arguments": json.dumps({
+                    "path": fixture["path"], "content": fixture["content"],
+                })}
+            wants_tool = step < (2 if fixture.get("read") else 1)
+            call_id = f"file-{step}"
+        elif scenario == "skill":
             last_user = max(i for i, message in enumerate(messages) if message.get("role") == "user")
             wants_tool = not any(message.get("role") == "tool" for message in messages[last_user + 1:])
             call_id = f"skill-{len(self.server.requests)}"
@@ -178,7 +192,7 @@ def main():
         "text", "tool", "partial_tool", "stall", "tool_retry", "tool_rate_limit",
         "fallback_after_tool", "fallback_auth", "partial_text", "disconnect_once",
         "iteration_limit", "iteration_summary_tool", "partial_after_tool", "stall_on_resume", "burst", "skill",
-        "compact", "compact_failure",
+        "compact", "compact_failure", "local_tools",
     ), default="text")
     args = parser.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)

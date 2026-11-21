@@ -10,11 +10,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use serde_yaml::Value as Yaml;
 
+use crate::file_tools::{PATCH, SEARCH_FILES, WRITE_FILE};
 use crate::prompt::{normalize_text, read_scoped_text, threats};
+use crate::terminal::TERMINAL;
 
 pub(crate) const SKILL_VIEW: &str = "skill_view";
 pub(crate) const SKILLS_LIST: &str = "skills_list";
-const TOOLS: &[&str] = &["read_file", SKILL_VIEW, SKILLS_LIST];
+const TOOLS: &[&str] = &["read_file", SEARCH_FILES, SKILL_VIEW, SKILLS_LIST];
 const TOOLSETS: &[&str] = &["file", "skills"];
 const SKILL_FILE: &str = "SKILL.md";
 const EXCLUDED_DIRS: &[&str] = &[
@@ -144,7 +146,13 @@ struct Skill {
 }
 
 impl SkillCatalog {
-    pub(crate) fn load(profile: Option<&Path>, cwd: &Path, settings: &SkillSettings) -> Self {
+    pub(crate) fn load(
+        profile: Option<&Path>,
+        cwd: &Path,
+        settings: &SkillSettings,
+        write_files: bool,
+        terminal_enabled: bool,
+    ) -> Self {
         let roots = search_roots(profile, cwd, settings);
         let mut skills = Vec::new();
         let mut bytes_left = MAX_CATALOG_BYTES;
@@ -154,7 +162,14 @@ impl SkillCatalog {
             collect_paths(root, 0, files_left, &mut paths);
             files_left -= paths.len();
             for path in paths {
-                let Some(skill) = Skill::read(*tier, root_index, root, &path) else {
+                let Some(skill) = Skill::read(
+                    *tier,
+                    root_index,
+                    root,
+                    &path,
+                    write_files,
+                    terminal_enabled,
+                ) else {
                     continue;
                 };
                 let Some(remaining) = bytes_left.checked_sub(skill.content.len()) else {
@@ -470,7 +485,14 @@ fn collect_paths(dir: &Path, depth: usize, limit: usize, out: &mut Vec<PathBuf>)
 }
 
 impl Skill {
-    fn read(tier: Tier, root_index: usize, root: &Path, path: &Path) -> Option<Self> {
+    fn read(
+        tier: Tier,
+        root_index: usize,
+        root: &Path,
+        path: &Path,
+        write_files: bool,
+        terminal_enabled: bool,
+    ) -> Option<Self> {
         let directory = path.parent()?;
         let leaf = directory.file_name()?.to_str()?.to_owned();
         let mut relative = directory
@@ -517,7 +539,7 @@ impl Skill {
             category,
             name,
             description,
-            compatible: compatible(&metadata),
+            compatible: compatible(&metadata, write_files, terminal_enabled),
             content,
         })
     }
@@ -547,7 +569,7 @@ fn frontmatter(text: &str) -> Option<Yaml> {
     None
 }
 
-fn compatible(metadata: &Yaml) -> bool {
+fn compatible(metadata: &Yaml, write_files: bool, terminal_enabled: bool) -> bool {
     let platforms = strings(&metadata["platforms"]);
     let host = match std::env::consts::OS {
         "macos" => "darwin",
@@ -589,20 +611,23 @@ fn compatible(metadata: &Yaml) -> bool {
         return false;
     }
     let hermes = &metadata["metadata"]["hermes"];
+    let has_tool = |name: &&str| {
+        TOOLS.contains(name)
+            || (write_files && matches!(*name, WRITE_FILE | PATCH))
+            || (terminal_enabled && *name == TERMINAL)
+    };
+    let has_toolset =
+        |name: &&str| TOOLSETS.contains(name) || (terminal_enabled && *name == "terminal");
     let surface = strings(&hermes["session_platforms"]);
     (surface.is_empty() || surface.iter().any(|name| name.eq_ignore_ascii_case("cli")))
-        && !strings(&hermes["fallback_for_tools"])
-            .iter()
-            .any(|name| TOOLS.contains(name))
+        && !strings(&hermes["fallback_for_tools"]).iter().any(has_tool)
         && !strings(&hermes["fallback_for_toolsets"])
             .iter()
-            .any(|name| TOOLSETS.contains(name))
-        && strings(&hermes["requires_tools"])
-            .iter()
-            .all(|name| TOOLS.contains(name))
+            .any(has_toolset)
+        && strings(&hermes["requires_tools"]).iter().all(has_tool)
         && strings(&hermes["requires_toolsets"])
             .iter()
-            .all(|name| TOOLSETS.contains(name))
+            .all(has_toolset)
 }
 
 fn clip_description(description: &str, limit: usize) -> String {

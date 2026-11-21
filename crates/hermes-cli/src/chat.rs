@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::future::Future;
 use std::io::{self, Write};
 use std::path::Path;
 use std::time::Duration;
@@ -8,7 +9,10 @@ use hermes_runtime::config::{load_chat_settings, CompactionSettings};
 use hermes_runtime::prompt::PromptSettings;
 use hermes_runtime::providers::openai::OpenAiProvider;
 use hermes_runtime::storage::SessionWriter;
-use hermes_runtime::turn::{run_turn, CompactionOutcome, ModelRoute, TurnEvent, TurnOutcome};
+use hermes_runtime::turn::{
+    run_turn, ApprovalDecision, ApprovalRequest, CompactionOutcome, ModelRoute, TurnEvent,
+    TurnOptions, TurnOutcome,
+};
 use serde::{Deserialize, Serialize};
 use tokio::task::block_in_place;
 use tokio::time::{interval_at, Instant};
@@ -47,6 +51,10 @@ pub struct ChatRequest {
     prompt: PromptSettings,
     #[serde(default)]
     compression: CompactionSettings,
+    #[serde(default)]
+    approval_timeout_secs: Option<u32>,
+    #[serde(default)]
+    terminal_local: bool,
     model_override: Option<String>,
     primary: Route,
     fallbacks: Vec<Route>,
@@ -81,6 +89,7 @@ impl Route {
 pub enum Event {
     Stdout(String),
     Stderr(String),
+    Approval { id: u64, request: ApprovalRequest },
     Exit(u8),
 }
 
@@ -92,7 +101,7 @@ pub fn display(event: Event) -> io::Result<()> {
             output.flush()
         }
         Event::Stderr(text) => writeln!(io::stderr().lock(), "{text}"),
-        Event::Exit(_) => Ok(()),
+        Event::Exit(_) | Event::Approval { .. } => Ok(()),
     }
 }
 
@@ -121,6 +130,9 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
         attempts: settings.api_max_attempts,
         prompt: settings.prompt,
         compression: settings.compression,
+        approval_timeout_secs: (!args.oneshot && crate::approval::available())
+            .then_some(settings.approval_timeout_secs),
+        terminal_local: settings.terminal_local,
         model_override: args.model,
         primary: Route {
             model: settings.model,
@@ -141,11 +153,16 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
     })
 }
 
-pub async fn execute(
+pub async fn execute<A, F>(
     home: Option<&Path>,
     request: ChatRequest,
     mut emit: impl FnMut(Event) -> bool,
-) -> Result<u8, String> {
+    approve: A,
+) -> Result<u8, String>
+where
+    A: FnMut(ApprovalRequest) -> F,
+    F: Future<Output = ApprovalDecision>,
+{
     let root = Path::new(&request.root);
     if !root.is_absolute()
         || request.max_turns == 0
@@ -180,7 +197,14 @@ pub async fn execute(
         .as_mut()
         .map_or_else(Default::default, SessionWriter::take_history);
     let primary = request.primary.open(model, request.attempts)?;
-    block_in_place(|| history.capture_prompt(home, root, &request.prompt, &primary));
+    let options = TurnOptions {
+        root,
+        profile: home,
+        max_turns: request.max_turns,
+        approval_timeout_secs: request.approval_timeout_secs,
+        terminal_local: request.terminal_local,
+    };
+    block_in_place(|| history.capture_prompt(&options, &request.prompt, &primary));
     let fallbacks = request
         .fallbacks
         .iter()
@@ -208,14 +232,14 @@ pub async fn execute(
                 &primary,
                 &fallbacks,
                 &request.query,
-                root,
-                request.max_turns,
+                options,
                 history,
                 |event| {
                     if receiving {
                         receiving = emit(format_event(event));
                     }
                 },
+                approve,
             )
             .await
         };
