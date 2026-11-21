@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::mcp::McpServerConfig;
 use crate::prompt::PromptSettings;
 
 pub use crate::compaction::CompactionSettings;
@@ -40,6 +41,7 @@ pub struct ChatSettings {
     pub compression: CompactionSettings,
     pub approval_timeout_secs: u32,
     pub terminal_local: bool,
+    pub mcp_servers: Vec<McpServerConfig>,
     openai_api_key: Option<String>,
     openai_base_url: Option<String>,
     anthropic_api_key: Option<String>,
@@ -69,6 +71,7 @@ impl Default for ChatSettings {
             compression: CompactionSettings::default(),
             approval_timeout_secs: 300,
             terminal_local: true,
+            mcp_servers: Vec::new(),
             openai_api_key: None,
             openai_base_url: None,
             anthropic_api_key: None,
@@ -301,6 +304,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.openai_base_url = secrets.get("OPENAI_BASE_URL").cloned();
     settings.anthropic_api_key = secrets.get("ANTHROPIC_API_KEY").cloned();
     settings.anthropic_base_url = secrets.get("ANTHROPIC_BASE_URL").cloned();
+    settings.mcp_servers = mcp_servers(&config, &secrets);
     settings.terminal_local = match &config["terminal"]["backend"] {
         serde_yaml::Value::Null => terminal_env.as_deref().map_or_else(
             || {
@@ -387,5 +391,127 @@ fn default_base_url(provider: &str) -> Option<&'static str> {
         "openai" => Some("https://api.openai.com/v1"),
         "anthropic" => Some("https://api.anthropic.com/v1"),
         _ => None,
+    }
+}
+
+/// Stdio servers from `mcp_servers`. Entries without `command` (URL servers) are not supported yet.
+fn mcp_servers(
+    config: &serde_yaml::Value,
+    secrets: &HashMap<String, String>,
+) -> Vec<McpServerConfig> {
+    let Some(entries) = config
+        .get("mcp_servers")
+        .and_then(serde_yaml::Value::as_mapping)
+    else {
+        return Vec::new();
+    };
+    let expand = |text: &str| expand_env(text, secrets);
+    entries
+        .iter()
+        .filter_map(|(name, entry)| {
+            let name = name.as_str()?.to_owned();
+            if !truthy(
+                entry.get("enabled").unwrap_or(&serde_yaml::Value::Null),
+                true,
+            ) {
+                return None;
+            }
+            let command = expand(entry.get("command")?.as_str()?);
+            let args = entry
+                .get("args")
+                .and_then(serde_yaml::Value::as_sequence)
+                .map(|args| {
+                    args.iter()
+                        .filter_map(serde_yaml::Value::as_str)
+                        .map(&expand)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let env = entry
+                .get("env")
+                .and_then(serde_yaml::Value::as_mapping)
+                .map(|env| {
+                    env.iter()
+                        .filter_map(|(key, value)| {
+                            let value = match value {
+                                serde_yaml::Value::String(text) => expand(text),
+                                serde_yaml::Value::Number(number) => number.to_string(),
+                                serde_yaml::Value::Bool(flag) => flag.to_string(),
+                                _ => return None,
+                            };
+                            Some((key.as_str()?.to_owned(), value))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let seconds = |key, default| {
+                entry
+                    .get(key)
+                    .and_then(serde_yaml::Value::as_u64)
+                    .filter(|value| *value > 0)
+                    .unwrap_or(default)
+            };
+            Some(McpServerConfig {
+                name,
+                command,
+                args,
+                env,
+                timeout_secs: seconds("timeout", 120),
+                connect_timeout_secs: seconds("connect_timeout", 60),
+            })
+        })
+        .collect()
+}
+
+/// Replace `${NAME}` from the profile `.env` or the process environment.
+/// Unknown names stay as written so a missing secret is visible in the failure.
+fn expand_env(text: &str, secrets: &HashMap<String, String>) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        match after.find('}') {
+            Some(end) => {
+                let name = &after[..end];
+                match secrets
+                    .get(name)
+                    .cloned()
+                    .or_else(|| std::env::var(name).ok())
+                {
+                    Some(value) => out.push_str(&value),
+                    None => out.push_str(&rest[start..start + 3 + end]),
+                }
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push_str(&rest[start..]);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+mod mcp_tests {
+    use super::*;
+
+    #[test]
+    fn parses_stdio_servers_and_expands_profile_variables() {
+        let config: serde_yaml::Value = serde_yaml::from_str(
+            "mcp_servers:\n  a:\n    command: run\n    args: ['--key=${TOKEN}', '${UNSET_VAR_X}']\n    env: {K: '${TOKEN}', N: 5}\n    timeout: 7\n  off:\n    command: x\n    enabled: false\n  remote:\n    url: https://example.test/mcp\n",
+        )
+        .unwrap();
+        let secrets = HashMap::from([("TOKEN".to_owned(), "t0".to_owned())]);
+        let servers = mcp_servers(&config, &secrets);
+        assert_eq!(servers.len(), 1);
+        let server = &servers[0];
+        assert_eq!(server.name, "a");
+        assert_eq!(server.args, ["--key=t0", "${UNSET_VAR_X}"]);
+        assert_eq!(server.env["K"], "t0");
+        assert_eq!(server.env["N"], "5");
+        assert_eq!((server.timeout_secs, server.connect_timeout_secs), (7, 60));
     }
 }

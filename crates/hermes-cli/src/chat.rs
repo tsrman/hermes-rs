@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use clap::Args;
 use hermes_runtime::config::{load_chat_settings, CompactionSettings};
+use hermes_runtime::mcp::{McpClients, McpServerConfig};
 use hermes_runtime::prompt::PromptSettings;
 use hermes_runtime::providers::{
     AnthropicProvider, OpenAiProvider, Provider, ProviderError, ResponsesProvider,
@@ -57,6 +58,8 @@ pub struct ChatRequest {
     approval_timeout_secs: Option<u32>,
     #[serde(default)]
     terminal_local: bool,
+    #[serde(default)]
+    mcp_servers: Vec<McpServerConfig>,
     model_override: Option<String>,
     primary: Route,
     fallbacks: Vec<Route>,
@@ -157,6 +160,7 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
         approval_timeout_secs: (!args.oneshot && crate::approval::available())
             .then_some(settings.approval_timeout_secs),
         terminal_local: settings.terminal_local,
+        mcp_servers: settings.mcp_servers,
         model_override: args.model,
         primary: Route {
             model: settings.model,
@@ -223,7 +227,13 @@ where
         .as_mut()
         .map_or_else(Default::default, SessionWriter::take_history);
     let primary = request.primary.open(model, request.attempts)?;
+    let (clients, warnings) = McpClients::start(&request.mcp_servers).await;
+    for warning in warnings {
+        emit(Event::Stderr(warning));
+    }
+    let mcp = tokio::sync::Mutex::new(clients);
     let options = TurnOptions {
+        mcp: Some(&mcp),
         root,
         profile: home,
         max_turns: request.max_turns,
@@ -316,6 +326,7 @@ where
             }
         }
     };
+    mcp.lock().await.shutdown().await;
     if !receiving || !emit(Event::Stdout("\n".into())) {
         return Err("chat output was interrupted".into());
     }

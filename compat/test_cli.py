@@ -28,6 +28,7 @@ class CliTest(unittest.TestCase):
             "test_cancel_after_summary_leaves_no_compaction": "compact",
             "test_context_overflow_compresses_history_and_retries_once": "overflow",
             "test_context_overflow_after_a_tool_call_is_not_retried": "overflow_tools",
+            "test_mcp_stdio_tool_is_exposed_and_called": "mcp",
             "test_skill_index_uses_profile_and_opted_in_project_roots": "skill",
             "test_skill_view_resolves_exact_paths_and_refuses_ambiguous_names": "skill",
             "test_cancel_interrupts_pending_provider_request": "stall",
@@ -199,6 +200,24 @@ class CliTest(unittest.TestCase):
         self.assertEqual(len(recorded) - len(original), 2)
         with sqlite3.connect(database) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM messages WHERE _compressed_summary = 1").fetchone(), (0,))
+
+    def test_mcp_stdio_tool_is_exposed_and_called(self):
+        server = ROOT / "compat" / "mcp_fixture_server.py"
+        config = (f"mcp_servers:\n  fixture:\n    command: python3\n    args: ['-I', '{server}']\n"
+                  "  disabled:\n    command: /nonexistent\n    enabled: false\n"
+                  "  broken:\n    command: /nonexistent/hermes-mcp\n")
+        result, recorded = self.chat_with_profile(extra_config=config)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "Ответ модели\n")
+        self.assertIn('MCP server "broken" is unavailable', result.stderr)
+        self.assertNotIn("disabled", result.stderr)
+        self.assertIn("Tool completed: \"mcp_fixture_echo\"", result.stderr)
+        names = [tool["function"]["name"] for tool in recorded[0]["tools"]]
+        self.assertIn("mcp_fixture_echo", names)
+        self.assertIn("mcp_fixture_spawn_child", names)
+        tool_message = recorded[1]["messages"][-1]
+        self.assertEqual(tool_message["role"], "tool")
+        self.assertEqual(json.loads(tool_message["content"]), {"result": "from mcp"})
 
     def test_invalid_compaction_summary_keeps_the_original_context(self):
         session, database, original, config = self.seed_compression_history()

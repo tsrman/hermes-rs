@@ -1,6 +1,7 @@
 mod compaction;
 pub mod config;
 mod file_tools;
+pub mod mcp;
 #[cfg(target_os = "linux")]
 pub mod profile;
 pub mod prompt;

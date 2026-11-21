@@ -10,6 +10,7 @@ use crate::compaction::{messages_bytes, CompactedHistory, CompactionSettings};
 use crate::file_tools::{
     patch_schema, search_schema, write_schema, FileWorkspace, PATCH, SEARCH_FILES, WRITE_FILE,
 };
+use crate::mcp::McpClients;
 use crate::prompt::{load_cli_context, PromptSettings};
 use crate::providers::{Provider, ProviderError};
 use crate::skills::{SkillCatalog, SKILLS_LIST, SKILL_VIEW};
@@ -199,6 +200,8 @@ pub enum TurnEvent<'a> {
 
 #[derive(Clone, Copy)]
 pub struct TurnOptions<'a> {
+    /// Connected MCP servers whose tools are added to every request.
+    pub mcp: Option<&'a tokio::sync::Mutex<McpClients>>,
     pub root: &'a Path,
     pub profile: Option<&'a Path>,
     pub max_turns: u32,
@@ -241,11 +244,14 @@ where
     let first_new_message = messages.len();
     messages.push(json!({"role": "user", "content": query}));
     let skill_tools = system_prompt.contains("\n<available_skills>\n");
-    let tools = tools_for_prompt(
+    let mut tools = tools_for_prompt(
         &system_prompt,
         options.can_write_files(),
         options.can_run_terminal(),
     );
+    if let Some(mcp) = options.mcp {
+        tools.extend(mcp.lock().await.schemas());
+    }
     let mut route = primary;
     let mut fallback_routes = fallbacks.iter();
     for _ in 0..options.max_turns {
@@ -333,7 +339,17 @@ where
                 }),
                 SKILL_VIEW if skill_tools => history.skills.view(&call.arguments),
                 SKILLS_LIST if skill_tools => history.skills.list(&call.arguments),
-                _ => json!({"error": format!("Unknown tool: {}", call.name)}),
+                name => match options.mcp {
+                    Some(mcp) => {
+                        let mut mcp = mcp.lock().await;
+                        if mcp.owns(name) {
+                            mcp.call(name, &call.arguments).await
+                        } else {
+                            json!({"error": format!("Unknown tool: {name}")})
+                        }
+                    }
+                    None => json!({"error": format!("Unknown tool: {name}")}),
+                },
             };
             let succeeded = output.get("error").is_none()
                 && (call.name != TERMINAL || output["exit_code"].as_i64() == Some(0));
