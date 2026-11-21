@@ -31,6 +31,7 @@ class CliTest(unittest.TestCase):
             "test_context_overflow_compresses_history_and_retries_once": "overflow",
             "test_context_overflow_after_a_tool_call_is_not_retried": "overflow_tools",
             "test_mcp_stdio_tool_is_exposed_and_called": "mcp",
+            "test_memory_tool_writes_the_store_without_changing_the_prompt_snapshot": "memory",
             "test_web_search_uses_the_configured_backend_and_hides_tools_without_one": "web",
             "test_mcp_streamable_http_tool_uses_profile_secrets": "mcp",
             "test_skill_index_uses_profile_and_opted_in_project_roots": "skill",
@@ -283,6 +284,31 @@ class CliTest(unittest.TestCase):
         rows = json.loads(tool_message["content"])["data"]["web"]
         self.assertEqual([row["title"] for row in rows], ["Hermes", "Other"])
         self.assertEqual(tool_message["content"][:2], "{\n")
+
+    def test_memory_tool_writes_the_store_without_changing_the_prompt_snapshot(self):
+        memories = self.workdir / "hermes" / "memories"
+        memories.mkdir(parents=True)
+        (memories / "USER.md").write_text("Existing fact", encoding="utf-8")
+        result, recorded = self.chat_with_profile()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("memory", [t["function"]["name"] for t in recorded[0]["tools"]])
+        system = recorded[0]["messages"][0]["content"]
+        self.assertIn("You have persistent memory, carried across sessions", system)
+        self.assertIn("USER PROFILE (who the user is)", system)
+        # The write lands on disk, but the running session keeps its frozen snapshot.
+        self.assertEqual((memories / "USER.md").read_text(encoding="utf-8"), "Existing fact\n§\nPrefers Russian replies")
+        self.assertEqual(recorded[1]["messages"][0]["content"], system)
+        reply = json.loads(recorded[1]["messages"][-1]["content"])
+        self.assertEqual((reply["success"], reply["target"], reply["entry_count"]), (True, "user", 2))
+        self.assertNotIn("current_entries", reply)
+
+        # With both stores disabled the tool and its guidance are absent.
+        off = "memory:\n  memory_enabled: false\n  user_profile_enabled: false\n"
+        disabled, recorded = self.chat_with_profile(extra_config=off, query="again")
+        self.assertEqual(disabled.returncode, 0, disabled.stderr)
+        latest = recorded[-1]
+        self.assertNotIn("memory", [t["function"]["name"] for t in latest["tools"]])
+        self.assertNotIn("You have persistent memory", latest["messages"][0]["content"])
 
     def test_invalid_compaction_summary_keeps_the_original_context(self):
         session, database, original, config = self.seed_compression_history()

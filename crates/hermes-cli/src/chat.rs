@@ -7,6 +7,7 @@ use std::time::Duration;
 use clap::Args;
 use hermes_runtime::config::{load_chat_settings, CompactionSettings};
 use hermes_runtime::mcp::{McpClients, McpServerConfig};
+use hermes_runtime::memory_tool::MemorySettings;
 use hermes_runtime::prompt::PromptSettings;
 use hermes_runtime::providers::{
     AnthropicProvider, OpenAiProvider, Provider, ProviderError, ResponsesProvider,
@@ -63,6 +64,8 @@ pub struct ChatRequest {
     mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     web: WebSettings,
+    #[serde(default)]
+    memory: MemorySettings,
     model_override: Option<String>,
     primary: Route,
     fallbacks: Vec<Route>,
@@ -165,6 +168,7 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
         terminal_local: settings.terminal_local,
         mcp_servers: settings.mcp_servers,
         web: settings.web,
+        memory: settings.memory,
         model_override: args.model,
         primary: Route {
             model: settings.model,
@@ -239,6 +243,7 @@ where
     let options = TurnOptions {
         mcp: Some(&mcp),
         web: Some(&request.web),
+        memory: Some(&request.memory),
         root,
         profile: home,
         max_turns: request.max_turns,

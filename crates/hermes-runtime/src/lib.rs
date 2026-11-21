@@ -3,6 +3,7 @@ pub mod config;
 pub mod cron;
 mod file_tools;
 pub mod mcp;
+pub mod memory_tool;
 #[cfg(target_os = "linux")]
 pub mod profile;
 pub mod prompt;

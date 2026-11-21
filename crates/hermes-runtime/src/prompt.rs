@@ -84,6 +84,13 @@ pub(crate) fn load_cli_context(
         }
         Some(truncate(&text, "SOUL.md", &path, cap))
     });
+    let mut tool_guidance = Vec::new();
+    if profile.is_some() {
+        tool_guidance.extend(crate::memory_tool::guidance(
+            settings.memory_enabled,
+            settings.user_profile_enabled,
+        ));
+    }
     let mut sections = Vec::new();
     if let Some(context) = project_context(root, cap) {
         sections.push(context);
@@ -111,7 +118,11 @@ pub(crate) fn load_cli_context(
             }
         }
     }
-    CliPromptContext { identity, sections }
+    CliPromptContext {
+        identity,
+        tool_guidance,
+        sections,
+    }
 }
 
 fn user_owned_soul(profile: &Path) -> bool {

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::mcp::McpServerConfig;
+use crate::memory_tool::MemorySettings;
 use crate::prompt::PromptSettings;
 use crate::web_tools::WebSettings;
 
@@ -44,6 +45,7 @@ pub struct ChatSettings {
     pub terminal_local: bool,
     pub mcp_servers: Vec<McpServerConfig>,
     pub web: WebSettings,
+    pub memory: MemorySettings,
     openai_api_key: Option<String>,
     openai_base_url: Option<String>,
     anthropic_api_key: Option<String>,
@@ -75,6 +77,7 @@ impl Default for ChatSettings {
             terminal_local: true,
             mcp_servers: Vec::new(),
             web: WebSettings::default(),
+            memory: MemorySettings::default(),
             openai_api_key: None,
             openai_base_url: None,
             anthropic_api_key: None,
@@ -309,6 +312,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.anthropic_base_url = secrets.get("ANTHROPIC_BASE_URL").cloned();
     settings.mcp_servers = mcp_servers(&config, &secrets);
     settings.web = WebSettings::from_config(&config, &secrets);
+    settings.memory = MemorySettings::from_config(&config);
     settings.terminal_local = match &config["terminal"]["backend"] {
         serde_yaml::Value::Null => terminal_env.as_deref().map_or_else(
             || {

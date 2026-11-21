@@ -115,6 +115,20 @@ fn invisible_chars(mut input: &str) -> Vec<String> {
         .collect()
 }
 
+/// User-facing error for the first threat found in text bound for the system prompt.
+pub(crate) fn first_threat_message(content: &str) -> Option<String> {
+    let hits = findings(content, true);
+    let id = hits.first()?;
+    Some(match id.strip_prefix("invisible_unicode_") {
+        Some(codepoint) => format!(
+            "Blocked: content contains invisible unicode character {codepoint} (possible injection)."
+        ),
+        None => format!(
+            "Blocked: content matches threat pattern '{id}'. Content is injected into the system prompt and must not contain injection or exfiltration payloads."
+        ),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::findings;

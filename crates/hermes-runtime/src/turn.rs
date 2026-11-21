@@ -11,6 +11,7 @@ use crate::file_tools::{
     patch_schema, search_schema, write_schema, FileWorkspace, PATCH, SEARCH_FILES, WRITE_FILE,
 };
 use crate::mcp::McpClients;
+use crate::memory_tool::{self, MemorySettings, MemoryTurn, MEMORY};
 use crate::prompt::{load_cli_context, PromptSettings};
 use crate::providers::{Provider, ProviderError};
 use crate::skills::{SkillCatalog, SKILLS_LIST, SKILL_VIEW};
@@ -205,6 +206,8 @@ pub struct TurnOptions<'a> {
     pub mcp: Option<&'a tokio::sync::Mutex<McpClients>>,
     /// Web backends; the web tools are offered only when one is configured.
     pub web: Option<&'a WebSettings>,
+    /// Memory store limits; the tool is offered when a profile directory and a writable store exist.
+    pub memory: Option<&'a MemorySettings>,
     pub root: &'a Path,
     pub profile: Option<&'a Path>,
     pub max_turns: u32,
@@ -252,6 +255,12 @@ where
         options.can_write_files(),
         options.can_run_terminal(),
     );
+    let memory = options
+        .memory
+        .filter(|settings| settings.offered() && options.profile.is_some());
+    if memory.is_some() {
+        tools.push(memory_tool::schema());
+    }
     if let Some(web) = options.web {
         if web.offers_search() {
             tools.push(web_tools::search_schema());
@@ -263,6 +272,7 @@ where
     if let Some(mcp) = options.mcp {
         tools.extend(mcp.lock().await.schemas());
     }
+    let mut memory_turn = MemoryTurn::default();
     let mut route = primary;
     let mut fallback_routes = fallbacks.iter();
     for _ in 0..options.max_turns {
@@ -350,6 +360,12 @@ where
                 }),
                 SKILL_VIEW if skill_tools => history.skills.view(&call.arguments),
                 SKILLS_LIST if skill_tools => history.skills.list(&call.arguments),
+                MEMORY if memory.is_some() && options.profile.is_some() => memory_tool::call(
+                    memory.unwrap_or(&MemorySettings::default()),
+                    &mut memory_turn,
+                    options.profile.unwrap_or(Path::new("")),
+                    &call.arguments,
+                ),
                 WEB_SEARCH if options.web.is_some_and(WebSettings::offers_search) => {
                     web_tools::search(
                         options.web.unwrap_or(&WebSettings::default()),
