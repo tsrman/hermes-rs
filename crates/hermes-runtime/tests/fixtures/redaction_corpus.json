@@ -917,6 +917,161 @@
    "input": "Set-Cookie: sid=abcdefghijklmnop1234567890; HttpOnly",
    "force": true,
    "output": "Set-Cookie: ***"
+  },
+  {
+   "input": "curl -H 'X-API-Key: abcdefghijklmnop1234567890' https://x.test",
+   "force": true,
+   "output": "curl -H 'X-API-Key: ***' https://x.test"
+  },
+  {
+   "input": "curl -H \"x-api-key: abcdefghijklmnop1234567890\" https://x.test",
+   "force": true,
+   "output": "curl -H \"x-api-key: ***\" https://x.test"
+  },
+  {
+   "input": "curl -H X-Auth-Token:abcdefghijklmnop1234567890 https://x.test",
+   "force": true,
+   "output": "curl -H X-Auth-Token:*** https://x.test"
+  },
+  {
+   "input": "curl --header=\"api-key: abcdefghijklmnop1234567890\" url",
+   "force": true,
+   "output": "curl --header=\"api-key: ***\" url"
+  },
+  {
+   "input": "curl -H 'Cookie: sid=abcdefghijklmnop1234567890; a=b' https://x.test",
+   "force": true,
+   "output": "curl -H 'Cookie: ***' https://x.test"
+  },
+  {
+   "input": "curl -H \"Set-Cookie: sid=abcdefghijklmnop1234567890\" x",
+   "force": true,
+   "output": "curl -H \"Set-Cookie: ***\" x"
+  },
+  {
+   "input": "curl -H Cookie:sid=abcdefghijklmnop1234567890 https://x.test",
+   "force": true,
+   "output": "curl -H Cookie:*** https://x.test"
+  },
+  {
+   "input": "log line x-api-key: abcdefghijklmnop1234567890 after",
+   "force": true,
+   "output": "log line x-api-key: *** after"
+  },
+  {
+   "input": "> X-Api-Key: abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "> X-Api-Key: ***"
+  },
+  {
+   "input": "x-api-key: *** see docs",
+   "force": true,
+   "output": "x-api-key: *** see docs"
+  },
+  {
+   "input": "x-api-key: ${API_KEY}",
+   "force": true,
+   "output": "x-api-key: ***"
+  },
+  {
+   "input": "curl -H 'x-api-key:' https://x.test",
+   "force": true,
+   "output": "curl -H 'x-api-key:' https://x.test"
+  },
+  {
+   "input": "{\"x-api-key\": \"abcdefghijklmnop1234567890\"}",
+   "force": true,
+   "output": "{\"x-api-key\": \"abcdef...7890\"}"
+  },
+  {
+   "input": "{\"Cookie\": \"sid=abcdefghijklmnop1234567890\"}",
+   "force": true,
+   "output": "{\"Cookie\": \"sid=ab...7890\"}"
+  },
+  {
+   "input": "{\"Cookie\": \"chocolate\"}",
+   "force": true,
+   "output": "{\"Cookie\": \"chocolate\"}"
+  },
+  {
+   "input": "{\"set-cookie\": \"sid=abcdefghijklmnop1234567890; Path=/\"}",
+   "force": true,
+   "output": "{\"set-cookie\": \"sid=ab...th=/\"}"
+  },
+  {
+   "input": "{\"x-api-key\": \"${KEY}\"}",
+   "force": true,
+   "output": "{\"x-api-key\": \"${KEY}\"}"
+  },
+  {
+   "input": "{\"x-api-key\": \"os.getenv('K')\"}",
+   "force": true,
+   "output": "{\"x-api-key\": \"os.getenv('K')\"}"
+  },
+  {
+   "input": "{\"api-key\": \"unterminated abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "{\"api-key\": \"unterm...7890"
+  },
+  {
+   "input": "session_cookie=abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "session_cookie=abcdef...7890"
+  },
+  {
+   "input": "cookie=sid=abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "cookie=sid=ab...7890"
+  },
+  {
+   "input": "cookie=chocolate",
+   "force": true,
+   "output": "cookie=chocolate"
+  },
+  {
+   "input": "cookie_policy=strict",
+   "force": true,
+   "output": "cookie_policy=strict"
+  },
+  {
+   "input": "mycookiejar=1",
+   "force": true,
+   "output": "mycookiejar=1"
+  },
+  {
+   "input": "SESSION_COOKIE='abcdefghijklmnop1234567890'",
+   "force": true,
+   "output": "SESSION_COOKIE='abcdef...7890'"
+  },
+  {
+   "input": "?cookie=abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "?cookie=abcdefghijklmnop1234567890"
+  },
+  {
+   "input": "cookie: abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "cookie: abcdefghijklmnop1234567890"
+  },
+  {
+   "input": "Set-Cookie: abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "Set-Cookie: ***"
+  },
+  {
+   "input": "the cookie: policy",
+   "force": true,
+   "output": "the cookie: policy"
+  },
+  {
+   "input": "Cookie: a=b; c=d\nX-API-Key: abcdefghijklmnop1234567890\n",
+   "force": true,
+   "output": "Cookie: ***\nX-API-Key: ***\n"
+  },
+  {
+   "input": "curl -H 'X-API-Key: abcdefghijklmnop1234567890' \\\n  -H 'Accept: x'",
+   "force": true,
+   "output": "curl -H 'X-API-Key: ***' \\\n  -H 'Accept: x'"
   }
  ],
  "telegram": [

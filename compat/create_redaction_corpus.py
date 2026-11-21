@@ -104,6 +104,16 @@ CORPUS = {
     "header_credential": [
         f"X-API-Key: {A}", f"Cookie: session={A}; theme=dark", f"X-Auth-Token: {A}",
         "Content-Type: application/json", f"Set-Cookie: sid={A}; HttpOnly",
+        f"curl -H 'X-API-Key: {A}' https://x.test", f'curl -H "x-api-key: {A}" https://x.test',
+        f"curl -H X-Auth-Token:{A} https://x.test", f"curl --header=\"api-key: {A}\" url",
+        f"curl -H 'Cookie: sid={A}; a=b' https://x.test", f'curl -H "Set-Cookie: sid={A}" x',
+        f"curl -H Cookie:sid={A} https://x.test", f"log line x-api-key: {A} after", f"> X-Api-Key: {A}",
+        "x-api-key: *** see docs", "x-api-key: ${API_KEY}", "curl -H 'x-api-key:' https://x.test",
+        f'{{"x-api-key": "{A}"}}', f'{{"Cookie": "sid={A}"}}', '{"Cookie": "chocolate"}', f'{{"set-cookie": "sid={A}; Path=/"}}',
+        '{"x-api-key": "${KEY}"}', '{"x-api-key": "os.getenv(\'K\')"}', f'{{"api-key": "unterminated {A}',
+        f"session_cookie={A}", f"cookie=sid={A}", "cookie=chocolate", "cookie_policy=strict", "mycookiejar=1",
+        f"SESSION_COOKIE='{A}'", f"?cookie={A}", f"cookie: {A}", f"Set-Cookie: {A}", "the cookie: policy",
+        f"Cookie: a=b; c=d\nX-API-Key: {A}\n", f"curl -H 'X-API-Key: {A}' \\\n  -H 'Accept: x'",
     ],
     "telegram": [f"bot123456789:AA{A[:20]}ABCDEFGHIJKLMNO", "123456789:AAH" + "x" * 32],
     "python_repr": [

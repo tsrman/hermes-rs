@@ -7,16 +7,8 @@
   "env_assignment": [
     "app_secret=Zq8x4kLm2PvN7wRt9s"
   ],
-  "header_credential": [
-    "X-API-Key: abcdefghijklmnop1234567890",
-    "Cookie: session=abcdefghijklmnop1234567890; theme=dark",
-    "X-Auth-Token: abcdefghijklmnop1234567890",
-    "Set-Cookie: sid=abcdefghijklmnop1234567890; HttpOnly"
-  ],
-  "json_field": [
-    "{\"apiKey\": \"test\"}",
-    "{\"apikey\": \"abcdefghijklmnop1234567890\"}"
-  ],
+  "header_credential": [],
+  "json_field": [],
   "jwt": [],
   "phone": [],
   "plain": [],

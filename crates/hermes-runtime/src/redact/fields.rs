@@ -184,6 +184,7 @@ pub(super) fn redact_python_repr_fields(text: &str) -> String {
 pub(super) fn redact_json_fields(text: &str) -> String {
     let mut text = text.to_owned();
     if text.contains(':') && text.contains('"') {
+        text = super::headers::redact_json_header_fields(&text);
         text = replace_all(&JSON_FIELD, &text, |caps| {
             let key = &caps[1];
             // The bare name `apiKey` is left as it is by the reference.

@@ -8,6 +8,7 @@
 mod assignments;
 mod cli;
 mod fields;
+mod headers;
 mod kv_connstr;
 mod mask;
 mod prefix;
@@ -17,7 +18,7 @@ mod tokens;
 pub use mask::{mask_secret, mask_token};
 
 /// The passes of the reference's `redact_credential_shapes` that this module applies, in order.
-pub const PORTED: [&str; 15] = [
+pub const PORTED: [&str; 16] = [
     "private_key",
     "prefix",
     "env_assignment",
@@ -26,6 +27,7 @@ pub const PORTED: [&str; 15] = [
     "cli_flag",
     "connection_string",
     "auth_header",
+    "header_credential",
     "telegram",
     "db_connstr",
     "webhook",
@@ -47,6 +49,11 @@ pub fn redact_sensitive_text(text: &str) -> String {
     let text = fields::redact_json_fields(&text);
     let text = cli::redact_cli_secrets(&text);
     let text = tokens::redact_auth_headers(&text);
+    let text = if text.contains(':') {
+        headers::redact_header_credentials(&text)
+    } else {
+        text
+    };
     let text = tokens::redact_telegram(&text);
     let text = tokens::redact_db_urls(&text);
     let text = kv_connstr::redact_kv_connection_strings(&text);

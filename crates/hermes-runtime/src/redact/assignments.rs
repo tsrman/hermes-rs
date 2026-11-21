@@ -249,7 +249,8 @@ pub(super) fn redact_env_assignments(text: &str) -> String {
     if !text.contains('=') {
         return text.to_owned();
     }
-    let text = replace_all(&ENV_ASSIGN, text, mask_assignment);
+    let text = super::headers::redact_cookie_assignments(text);
+    let text = replace_all(&ENV_ASSIGN, &text, mask_assignment);
     // Lowercase names would match URL query parameters, which are passed through on purpose.
     if text.contains("://") {
         return text;
