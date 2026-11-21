@@ -120,6 +120,11 @@ pub(super) fn is_python_repr_secret_key(key: &str) -> bool {
     is_qualified_key_name(key)
 }
 
+/// A name the JSON field pass masks: its closed list, or a credential-suffixed name.
+pub(super) fn is_json_secret_name(name: &str) -> bool {
+    JSON_KEY_NAMES_FULL.is_match(name) || is_python_repr_secret_key(&VALUE_SUFFIX.replace(name, ""))
+}
+
 /// Whether `"key": "value"` holds a credential under an affixed secret-word key.
 fn json_affixed_key_secret(key: &str, value: &str) -> bool {
     // The closed-list pass already decided these fields.

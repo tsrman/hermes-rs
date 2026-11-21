@@ -67,6 +67,9 @@ pub(super) fn redact(text: &str) -> String {
     if text.contains("-----BEGIN") && text.contains("-----END") {
         text = PEM.replace_all(&text, MARKER).into_owned();
     }
+    if text.contains("PRIVATE KEY-----") {
+        text = super::extra::redact_partial_private_keys(&text);
+    }
     if text.contains("LS0tLS1CRUdJTi") {
         text = B64_PEM
             .replace_all(&text, |caps: &regex::Captures<'_>| {

@@ -186,3 +186,70 @@ pub(super) fn redact_form_body(text: &str) -> String {
     }
     redact_query_string(text.trim())
 }
+
+static STRICT_URL_PARAM: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"([?#&;])([A-Za-z0-9_.~+%\-]+)=([^#&;\s"'<>]*(?:'[A-Za-z0-9_~+%\-][^#&;\s"'<>]*)*)"#,
+    )
+    .expect("valid pattern")
+});
+static STRICT_URL_USERINFO: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"//[^/\s?#@"]+@"#).expect("valid pattern"));
+
+/// `%41` and `+` in a parameter name, decoded up to three times as the reference does.
+fn decode_param_name(name: &str) -> String {
+    let mut decoded = name.to_owned();
+    for _ in 0..3 {
+        let bytes = decoded.replace('+', " ").into_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                if let Ok(value) =
+                    u8::from_str_radix(&String::from_utf8_lossy(&bytes[i + 1..i + 3]), 16)
+                {
+                    out.push(value);
+                    i += 3;
+                    continue;
+                }
+            }
+            out.push(bytes[i]);
+            i += 1;
+        }
+        let next = String::from_utf8_lossy(&out).into_owned();
+        if next == decoded {
+            break;
+        }
+        decoded = next;
+    }
+    decoded
+}
+
+fn is_sensitive_url_param(name: &str) -> bool {
+    let decoded = decode_param_name(name);
+    let folded = decoded.to_lowercase();
+    let canonical = if SENSITIVE_QUERY_PARAMS.contains(&folded.as_str()) {
+        folded
+    } else {
+        folded.replace('-', "_")
+    };
+    if SENSITIVE_QUERY_PARAMS.contains(&canonical.as_str()) {
+        return true;
+    }
+    super::fields::is_json_secret_name(&decoded.replace('-', "_"))
+}
+
+/// Credential-named query parameters and URL user information, for text that leaves the
+/// session (a derived summary, a log).
+pub(super) fn redact_strict_url_credentials(text: &str) -> String {
+    let text = STRICT_URL_PARAM.replace_all(text, |caps: &regex::Captures<'_>| {
+        if is_sensitive_url_param(&caps[2]) {
+            format!("{}{}=***", &caps[1], &caps[2])
+        } else {
+            caps[0].to_owned()
+        }
+    });
+    STRICT_URL_USERINFO
+        .replace_all(&text, "//***:***@")
+        .into_owned()
+}

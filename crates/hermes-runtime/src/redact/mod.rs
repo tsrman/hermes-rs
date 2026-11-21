@@ -8,12 +8,14 @@
 mod assignments;
 mod cfg;
 mod cli;
+mod extra;
 mod fields;
 mod headers;
 mod kv_connstr;
 mod mask;
 mod prefix;
 mod private_keys;
+mod spaced;
 mod tokens;
 mod urls;
 
@@ -43,16 +45,29 @@ pub const PORTED: [&str; 17] = [
 /// Redact credential shapes in `text` (the reference's `force=True` path, so no setting can
 /// switch it off). Passes that are not ported yet leave the text as it is.
 pub fn redact_sensitive_text(text: &str) -> String {
+    redact(text, false)
+}
+
+/// Text derived from stored conversations (summaries, search results) re-enters unrelated
+/// prompts, so it also loses credential-named URL parameters and user information.
+pub fn redact_derived_text(text: &str) -> String {
+    redact(text, true)
+}
+
+fn redact(text: &str, strict_urls: bool) -> String {
     if text.is_empty() {
         return String::new();
     }
     let text = private_keys::redact(text);
     let text = prefix::redact(&text);
+    let text = extra::redact_zhipu(&text);
+    let text = extra::redact_discord_tokens(&text);
     let text = assignments::redact_env_assignments(&text);
     let text = cfg::redact_config_assignments(&text);
     let text = fields::redact_json_fields(&text);
     let text = cfg::redact_yaml_assignments(&text);
     let text = cli::redact_cli_secrets(&text);
+    let text = extra::redact_basic_pairs(&text);
     let text = tokens::redact_auth_headers(&text);
     let mut text = if text.contains(':') {
         let text = headers::redact_header_credentials(&text);
@@ -71,6 +86,11 @@ pub fn redact_sensitive_text(text: &str) -> String {
     let text = kv_connstr::redact_kv_connection_strings(&text);
     let text = tokens::redact_jwt(&text);
     let text = tokens::redact_webapp_links(&text);
+    let text = if strict_urls {
+        urls::redact_strict_url_credentials(&text)
+    } else {
+        text
+    };
     let text = if text.contains('&') && text.contains('=') {
         urls::redact_form_body(&text)
     } else {

@@ -137,7 +137,7 @@ fn key_has_secret_keyword(key: &str) -> bool {
 }
 
 /// A credential-like shape, so that short technical scalars are not masked for their key name.
-fn looks_like_opaque_credential(value: &str) -> bool {
+pub(super) fn looks_like_opaque_credential(value: &str) -> bool {
     if value == "***" || value.starts_with("«redacted:") {
         return true;
     }
@@ -250,6 +250,12 @@ pub(super) fn redact_env_assignments(text: &str) -> String {
         return text.to_owned();
     }
     let text = super::headers::redact_cookie_assignments(text);
+    // Before the ENV passes: their `\S+` value stops at the space inside a quoted value.
+    let text = if super::spaced::applies(&text) {
+        super::spaced::redact_spaced_cfg_assignments(&text)
+    } else {
+        text
+    };
     let text = replace_all(&ENV_ASSIGN, &text, mask_assignment);
     // Lowercase names would match URL query parameters, which are passed through on purpose.
     if text.contains("://") {

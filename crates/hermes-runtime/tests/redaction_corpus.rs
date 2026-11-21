@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use hermes_runtime::redact::redact_sensitive_text;
+use hermes_runtime::redact::{redact_derived_text, redact_sensitive_text};
 use serde_json::Value;
 
 const BASELINE_PATH: &str = concat!(
@@ -22,7 +22,12 @@ fn failing() -> BTreeMap<String, Vec<String>> {
         let mut inputs = Vec::new();
         for row in rows.as_array().unwrap() {
             let input = row["input"].as_str().unwrap();
-            if redact_sensitive_text(input) != row["output"].as_str().unwrap() {
+            let redacted = if row["derived"] == true {
+                redact_derived_text(input)
+            } else {
+                redact_sensitive_text(input)
+            };
+            if redacted != row["output"].as_str().unwrap() {
                 inputs.push(input.to_owned());
             }
         }

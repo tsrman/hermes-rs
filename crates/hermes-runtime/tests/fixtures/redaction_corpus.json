@@ -1461,6 +1461,229 @@
    "output": "id 12345678"
   }
  ],
+ "zhipu_discord": [
+  {
+   "input": "0123456789abcdef0123456789abcdef.Zq8x4kLm2PvN7wRt9s",
+   "force": true,
+   "output": "012345...Rt9s"
+  },
+  {
+   "input": "sha 0123456789abcdef0123456789abcdef.bundle",
+   "force": true,
+   "output": "sha 0123456789abcdef0123456789abcdef.bundle"
+  },
+  {
+   "input": "x=MTIzNDU2Nzg5MDEyMzQ1Njc4.abcdef.Zq8x4kLm2PvN7wRt9sAbCdEfGhI",
+   "force": true,
+   "output": "x=MTIzND...fGhI"
+  },
+  {
+   "input": "mfa.Zq8xZq8xZq8xZq8xZq8xZq8xZq8xZq8xZq8xZq8xZq8xZq8xZq8xZq8xZq8xZq8xZq8xZq8xZq8xZq8xZq8x",
+   "force": true,
+   "output": "mfa.Zq...Zq8x"
+  },
+  {
+   "input": "mfa.verify_totp_code_for_user",
+   "force": true,
+   "output": "mfa.verify_totp_code_for_user"
+  },
+  {
+   "input": "SomeVeryLongClassName.Config.AnotherLongAttributeName",
+   "force": true,
+   "output": "SomeVeryLongClassName.Config.AnotherLongAttributeName"
+  },
+  {
+   "input": "tok=MTIzNDU2Nzg5MDEyMzQ1Njc4.abcdef.Zq8x4kLm2PvN7wRt9sAbCdEfGhI.",
+   "force": true,
+   "output": "tok=MTIzND...fGhI."
+  }
+ ],
+ "partial_key": [
+  {
+   "input": "-----BEGIN PRIVATE KEY-----\nQUJDREVGR0hJSktMTU5PUFFSU1RVVldY\nWVphYmNkZWZnaGlqa2xtbm9w",
+   "force": true,
+   "output": "[REDACTED PRIVATE KEY]"
+  },
+  {
+   "input": "cHFyc3R1dnd4eXoxMjM0NTY3\nODkwQUJDREVGR0hJSktMTU5P\nUA==\n-----END PRIVATE KEY-----",
+   "force": true,
+   "output": "[REDACTED PRIVATE KEY]"
+  },
+  {
+   "input": "-----BEGIN PRIVATE KEY-----\ndeadbeefdeadbeefdeadbeef\nnot a key line",
+   "force": true,
+   "output": "-----BEGIN PRIVATE KEY-----\ndeadbeefdeadbeefdeadbeef\nnot a key line"
+  },
+  {
+   "input": "head\n-----BEGIN PRIVATE KEY-----\nQUJDREVGR0hJSktMTU5PUFFSU1RVVldY\ntail",
+   "force": true,
+   "output": "head\n[REDACTED PRIVATE KEY]\ntail"
+  }
+ ],
+ "basic_pair": [
+  {
+   "input": "PROXY_AUTH=alice:s3cretpassw0rd",
+   "force": true,
+   "output": "PROXY_AUTH=***"
+  },
+  {
+   "input": "IMAGE=redis:7-alpine",
+   "force": true,
+   "output": "IMAGE=redis:7-alpine"
+  },
+  {
+   "input": "BASIC=user:{pw}",
+   "force": true,
+   "output": "BASIC=user:{pw}"
+  },
+  {
+   "input": "CHECKSUM=sha256:0123456789abcdef0123",
+   "force": true,
+   "output": "CHECKSUM=sha256:0123456789abcdef0123"
+  },
+  {
+   "input": "BASIC_AUTH='bob:Zq8x4kLm2PvN7wRt'",
+   "force": true,
+   "output": "BASIC_AUTH='***'"
+  },
+  {
+   "input": "CRED=user:password",
+   "force": true,
+   "output": "CRED=user:password"
+  },
+  {
+   "input": "LOGIN=u:12345678",
+   "force": true,
+   "output": "LOGIN=u:12345678"
+  },
+  {
+   "input": "LS_COLORS=rs=0:di=01;34",
+   "force": true,
+   "output": "LS_COLORS=rs=0:di=01;34"
+  },
+  {
+   "input": "BRANCH_AUTH=origin:feature2",
+   "force": true,
+   "output": "BRANCH_AUTH=***"
+  },
+  {
+   "input": "USERINFO=name:version-1.2.3",
+   "force": true,
+   "output": "USERINFO=name:***"
+  }
+ ],
+ "spaced_cfg": [
+  {
+   "input": "password = \"abcdefghijklmnop1234567890\"",
+   "force": true,
+   "output": "password = \"***\""
+  },
+  {
+   "input": "api_key = abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "api_key=***"
+  },
+  {
+   "input": "password = hunter2",
+   "force": true,
+   "output": "password = hunter2"
+  },
+  {
+   "input": "auth_type = \"oauth\"",
+   "force": true,
+   "output": "auth_type = \"oauth\""
+  },
+  {
+   "input": "token = getpass.getpass()",
+   "force": true,
+   "output": "token = getpass.getpass()"
+  },
+  {
+   "input": "[db]\nuser = app\npassword = abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "[db]\nuser = app\npassword = ***"
+  },
+  {
+   "input": "secret_key = 'abcdefghijklmnop1234567890'  # comment",
+   "force": true,
+   "output": "secret_key='***'  # comment"
+  },
+  {
+   "input": "password = None",
+   "force": true,
+   "output": "password = None"
+  },
+  {
+   "input": "spring.db.password = abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "spring.db.password = ***"
+  },
+  {
+   "input": "no_token_msg = \"please log in\"",
+   "force": true,
+   "output": "no_token_msg = \"please log in\""
+  },
+  {
+   "input": "password = password",
+   "force": true,
+   "output": "password = password"
+  },
+  {
+   "input": "secret = $SECRET",
+   "force": true,
+   "output": "secret = $SECRET"
+  },
+  {
+   "input": "self.token = \"abcdefghijklmnop1234567890\"",
+   "force": true,
+   "output": "self.token = \"***\""
+  },
+  {
+   "input": "api key = abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "api key = ***"
+  },
+  {
+   "input": "auth = a or b",
+   "force": true,
+   "output": "auth = a or b"
+  },
+  {
+   "input": "x = 1",
+   "force": true,
+   "output": "x = 1"
+  },
+  {
+   "input": "password == other",
+   "force": true,
+   "output": "password == other"
+  },
+  {
+   "input": "key = abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "key = abcdefghijklmnop1234567890"
+  },
+  {
+   "input": "client_secret = \"abcdefghijklmnop1234567890\";",
+   "force": true,
+   "output": "client_secret=***"
+  },
+  {
+   "input": "password = [1, 2]",
+   "force": true,
+   "output": "password = [1, 2]"
+  },
+  {
+   "input": "    database_password = \"abcdefghijklmnop1234567890\"",
+   "force": true,
+   "output": "    database_password=\"***\""
+  },
+  {
+   "input": "7| token = abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "7| token = ***"
+  }
+ ],
  "plain": [
   {
    "input": "",
@@ -1496,6 +1719,92 @@
    "input": "line one\nline two\r\nline three",
    "force": true,
    "output": "line one\nline two\r\nline three"
+  }
+ ],
+ "derived": [
+  {
+   "input": "https://example.com/cb?code=abcdefghijklmnop1234567890&state=ok",
+   "force": true,
+   "derived": true,
+   "output": "https://example.com/cb?code=***&state=ok"
+  },
+  {
+   "input": "https://example.com/?access_token=abcdefghijklmnop1234567890&page=2",
+   "force": true,
+   "derived": true,
+   "output": "https://example.com/?access_token=***&page=2"
+  },
+  {
+   "input": "https://user:abcdefghijklmnop1234567890@example.com/path",
+   "force": true,
+   "derived": true,
+   "output": "https://***:***@example.com/path"
+  },
+  {
+   "input": "https://example.com/plain?page=2",
+   "force": true,
+   "derived": true,
+   "output": "https://example.com/plain?page=2"
+  },
+  {
+   "input": "//host/x?apiKey=abcdefghijklmnop1234567890",
+   "force": true,
+   "derived": true,
+   "output": "//host/x?apiKey=***"
+  },
+  {
+   "input": "https://x.test/a?X-Amz-Signature=abcdefghijklmnop1234567890&b=1",
+   "force": true,
+   "derived": true,
+   "output": "https://x.test/a?X-Amz-Signature=***&b=1"
+  },
+  {
+   "input": "https://x.test/a?pageToken=abcdefghijklmnop1234567890",
+   "force": true,
+   "derived": true,
+   "output": "https://x.test/a?pageToken=***"
+  },
+  {
+   "input": "https://x.test/?%74oken=abcdefgh",
+   "force": true,
+   "derived": true,
+   "output": "https://x.test/?%74oken=***"
+  },
+  {
+   "input": "https://x.test/#access_token=abcdefghijklmnop1234567890",
+   "force": true,
+   "derived": true,
+   "output": "https://x.test/#access_token=***"
+  },
+  {
+   "input": "https://x.test/?name=Alice&city=Paris",
+   "force": true,
+   "derived": true,
+   "output": "https://x.test/?name=Alice&city=Paris"
+  },
+  {
+   "input": "see //a.test/p?sig=abcdef and more",
+   "force": true,
+   "derived": true,
+   "output": "see //a.test/p?sig=*** and more"
+  },
+  {
+   "input": "password=abcdefghijklmnop1234567890&other=1",
+   "force": true,
+   "derived": true,
+   "output": "password=***&other=1"
+  },
+  {
+   "input": "[link](https://x.test/cb?refresh_token=abcdefghijklmnop1234567890)",
+   "force": true,
+   "derived": true,
+   "output": "[link](https://x.test/cb?refresh_token=***"
+  },
+  {
+   "input": "https://x.test/?code=",
+   "force": true,
+   "derived": true,
+   "output": "https://x.test/?code=***"
   }
  ]
 }

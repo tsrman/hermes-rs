@@ -91,6 +91,7 @@ pub(super) fn redact_config_assignments(text: &str) -> String {
     if !text.contains("://") && CFG_SECRET_WORD.is_match(&text) {
         text = replace_all(&CFG_DOTTED, &text, redact_assignment);
         text = replace_all(&CFG_ANCHORED, &text, redact_assignment);
+        text = super::spaced::redact_spaced_cfg_assignments(&text);
     }
     text
 }

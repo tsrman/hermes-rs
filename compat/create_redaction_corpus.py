@@ -14,6 +14,8 @@ import tempfile
 from pathlib import Path
 
 A = "abcdefghijklmnop1234567890"
+import base64
+DISCORD_USER = base64.urlsafe_b64encode(b"123456789012345678").decode().rstrip("=")
 CORPUS = {
     "prefix": [
         f"key sk-{A}", f"sk-{A} at the start", f"token=ghp_{A}", f"github_pat_{A}_xyz",
@@ -148,6 +150,30 @@ CORPUS = {
         "https://discord.com/api/webhooks/123456789012345678/" + A + "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
     ],
     "phone": ["call +15551234567 now", "+4915112345678", "version +1.2.3", "id 12345678"],
+    "zhipu_discord": [
+        "0123456789abcdef0123456789abcdef." + "Zq8x4kLm2PvN7wRt9s", "sha 0123456789abcdef0123456789abcdef.bundle",
+        "x=" + DISCORD_USER + "." + "abcdef" + "." + "Zq8x4kLm2PvN7wRt9sAbCdEfGhI", "mfa." + "Zq8x" * 21,
+        "mfa.verify_totp_code_for_user", "SomeVeryLongClassName.Config.AnotherLongAttributeName",
+        "tok=" + DISCORD_USER + "." + "abcdef" + "." + "Zq8x4kLm2PvN7wRt9sAbCdEfGhI" + ".",
+    ],
+    "partial_key": [
+        "-----BEGIN PRIVATE KEY-----\nQUJDREVGR0hJSktMTU5PUFFSU1RVVldY\nWVphYmNkZWZnaGlqa2xtbm9w",
+        "cHFyc3R1dnd4eXoxMjM0NTY3\nODkwQUJDREVGR0hJSktMTU5P\nUA==\n-----END PRIVATE KEY-----",
+        "-----BEGIN PRIVATE KEY-----\ndeadbeefdeadbeefdeadbeef\nnot a key line",
+        "head\n-----BEGIN PRIVATE KEY-----\nQUJDREVGR0hJSktMTU5PUFFSU1RVVldY\ntail",
+    ],
+    "basic_pair": [
+        "PROXY_AUTH=alice:s3cretpassw0rd", "IMAGE=redis:7-alpine", "BASIC=user:{pw}", "CHECKSUM=sha256:0123456789abcdef0123",
+        "BASIC_AUTH='bob:Zq8x4kLm2PvN7wRt'", "CRED=user:password", "LOGIN=u:12345678", "LS_COLORS=rs=0:di=01;34",
+        "BRANCH_AUTH=origin:feature2", "USERINFO=name:version-1.2.3",
+    ],
+    "spaced_cfg": [
+        f'password = "{A}"', f"api_key = {A}", "password = hunter2", 'auth_type = "oauth"', "token = getpass.getpass()",
+        f"[db]\nuser = app\npassword = {A}", f"secret_key = '{A}'  # comment", "password = None", f"spring.db.password = {A}",
+        'no_token_msg = "please log in"', "password = password", "secret = $SECRET", 'self.token = "' + A + '"',
+        f"api key = {A}", "auth = a or b", "x = 1", "password == other", f"key = {A}", f'client_secret = "{A}";',
+        "password = [1, 2]", f'    database_password = "{A}"', f"7| token = {A}",
+    ],
     "plain": [
         "", "nothing secret here", "A normal sentence with = and : and // signs.",
         "path /usr/local/bin and https://example.com/docs", "***already masked***",
@@ -156,17 +182,29 @@ CORPUS = {
 }
 
 
+DERIVED = [
+    f"https://example.com/cb?code={A}&state=ok", f"https://example.com/?access_token={A}&page=2",
+    f"https://user:{A}@example.com/path", "https://example.com/plain?page=2", f"//host/x?apiKey={A}",
+    f"https://x.test/a?X-Amz-Signature={A}&b=1", f"https://x.test/a?pageToken={A}", "https://x.test/?%74oken=abcdefgh",
+    f"https://x.test/#access_token={A}", "https://x.test/?name=Alice&city=Paris", "see //a.test/p?sig=abcdef and more",
+    f"password={A}&other=1", f"[link](https://x.test/cb?refresh_token={A})", "https://x.test/?code=",
+]
+
+
 def main():
     reference, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
     os.environ["HERMES_HOME"] = tempfile.mkdtemp()
     sys.path.insert(0, str(reference))
     os.chdir(reference)
-    from agent.redact import redact_sensitive_text
+    from agent.redact import redact_derived_text, redact_sensitive_text
 
     rows = {}
     for category, inputs in CORPUS.items():
         rows[category] = [{"input": text, "force": True, "output": redact_sensitive_text(text, force=True)}
                           for text in inputs]
+    for text in DERIVED:
+        rows.setdefault("derived", []).append(
+            {"input": text, "force": True, "derived": True, "output": redact_derived_text(text)})
     output.write_text(json.dumps(rows, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     print({category: len(items) for category, items in rows.items()})
 
