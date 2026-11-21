@@ -6,6 +6,7 @@
 //! complete redactor and must not be wired into a safety boundary until `PENDING` is empty.
 
 mod assignments;
+mod cfg;
 mod cli;
 mod fields;
 mod headers;
@@ -14,11 +15,12 @@ mod mask;
 mod prefix;
 mod private_keys;
 mod tokens;
+mod urls;
 
 pub use mask::{mask_secret, mask_token};
 
 /// The passes of the reference's `redact_credential_shapes` that this module applies, in order.
-pub const PORTED: [&str; 16] = [
+pub const PORTED: [&str; 17] = [
     "private_key",
     "prefix",
     "env_assignment",
@@ -30,6 +32,7 @@ pub const PORTED: [&str; 16] = [
     "header_credential",
     "telegram",
     "db_connstr",
+    "url",
     "webhook",
     "jwt",
     "webapp_link",
@@ -46,19 +49,32 @@ pub fn redact_sensitive_text(text: &str) -> String {
     let text = private_keys::redact(text);
     let text = prefix::redact(&text);
     let text = assignments::redact_env_assignments(&text);
+    let text = cfg::redact_config_assignments(&text);
     let text = fields::redact_json_fields(&text);
+    let text = cfg::redact_yaml_assignments(&text);
     let text = cli::redact_cli_secrets(&text);
     let text = tokens::redact_auth_headers(&text);
-    let text = if text.contains(':') {
-        headers::redact_header_credentials(&text)
+    let mut text = if text.contains(':') {
+        let text = headers::redact_header_credentials(&text);
+        tokens::redact_telegram(&text)
     } else {
         text
     };
-    let text = tokens::redact_telegram(&text);
-    let text = tokens::redact_db_urls(&text);
+    if text.contains("://") {
+        text = tokens::redact_db_urls(&text);
+        text = urls::redact_db_url_query_passwords(&text);
+        text = tokens::redact_webhooks(&text);
+        text = urls::redact_url_bare_tokens(&text);
+        text = urls::redact_userinfo_passwords(&text);
+    }
+    let text = urls::redact_network_path_userinfo(&text);
     let text = kv_connstr::redact_kv_connection_strings(&text);
-    let text = tokens::redact_webhooks(&text);
     let text = tokens::redact_jwt(&text);
     let text = tokens::redact_webapp_links(&text);
+    let text = if text.contains('&') && text.contains('=') {
+        urls::redact_form_body(&text)
+    } else {
+        text
+    };
     tokens::redact_phone_numbers(&text)
 }

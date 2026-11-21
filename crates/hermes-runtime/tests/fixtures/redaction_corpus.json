@@ -768,7 +768,286 @@
    "output": "tool -password=***"
   }
  ],
+ "config": [
+  {
+   "input": "spring.datasource.password=abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "spring.datasource.password=abcdef...7890"
+  },
+  {
+   "input": "app.api.key=abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "app.api.key=abcdef...7890"
+  },
+  {
+   "input": "db.password=short",
+   "force": true,
+   "output": "db.password=***"
+  },
+  {
+   "input": "password=hunter2hunter2",
+   "force": true,
+   "output": "password=***"
+  },
+  {
+   "input": "export api_key=abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "export api_key=***"
+  },
+  {
+   "input": "  token=abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "  token=abcdef...7890"
+  },
+  {
+   "input": "5|password=hunter2hunter2",
+   "force": true,
+   "output": "5|password=***"
+  },
+  {
+   "input": "6:api_key=Zq8x4kLm2PvN7wRt9s",
+   "force": true,
+   "output": "6:api_key=***"
+  },
+  {
+   "input": "I have password=abcdefghijklmnop1234567890 in prose",
+   "force": true,
+   "output": "I have password=abcdefghijklmnop1234567890 in prose"
+  },
+  {
+   "input": "secret.name=my-secret",
+   "force": true,
+   "output": "secret.name=***"
+  },
+  {
+   "input": "auth.mode=oauth2",
+   "force": true,
+   "output": "auth.mode=***"
+  },
+  {
+   "input": "tokenizer.model=cl100k_base",
+   "force": true,
+   "output": "tokenizer.model=cl100k_base"
+  },
+  {
+   "input": "aws.secret.key='abcdefghijklmnop1234567890'",
+   "force": true,
+   "output": "aws.secret.key='abcdef...7890'"
+  },
+  {
+   "input": "x.secret=\"\"",
+   "force": true,
+   "output": "x.secret=***"
+  },
+  {
+   "input": "password=abcdefghijklmnop1234567890&other=1",
+   "force": true,
+   "output": "password=***&other=1"
+  },
+  {
+   "input": "server.port=8080",
+   "force": true,
+   "output": "server.port=8080"
+  },
+  {
+   "input": "api_key: abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "api_key: abcdef...7890"
+  },
+  {
+   "input": "  client_secret: \"abcdefghijklmnop1234567890\"",
+   "force": true,
+   "output": "  client_secret: \"abcdef...7890\""
+  },
+  {
+   "input": "password: ${DB_PASSWORD}",
+   "force": true,
+   "output": "password: ***"
+  },
+  {
+   "input": "token: <your token>",
+   "force": true,
+   "output": "token: <your token>"
+  },
+  {
+   "input": "api_key: ''",
+   "force": true,
+   "output": "api_key: ''"
+  },
+  {
+   "input": "secret: '{{ .Values.secret }}'",
+   "force": true,
+   "output": "secret: '{{ .Values.secret }}'"
+  },
+  {
+   "input": "db:\n  password: abcdefghijklmnop1234567890\n  host: x",
+   "force": true,
+   "output": "db:\n  password: abcdef...7890\n  host: x"
+  },
+  {
+   "input": "auth: oauth2",
+   "force": true,
+   "output": "auth: oauth2"
+  },
+  {
+   "input": "password: true",
+   "force": true,
+   "output": "password: true"
+  },
+  {
+   "input": "7:   ADS_API_TOKEN: abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "7:   ADS_API_TOKEN: abcdef...7890"
+  },
+  {
+   "input": "key: value",
+   "force": true,
+   "output": "key: value"
+  },
+  {
+   "input": "private_key: abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "private_key: abcdef...7890"
+  },
+  {
+   "input": "tokens: abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "tokens: abcdef...7890"
+  },
+  {
+   "input": "secretary: J. Smith",
+   "force": true,
+   "output": "secretary: J. Smith"
+  },
+  {
+   "input": "tokenizer: cl100k_base",
+   "force": true,
+   "output": "tokenizer: cl100k_base"
+  },
+  {
+   "input": "client_key_data: abcdefghijklmnop1234567890ABCD",
+   "force": true,
+   "output": "client_key_data: abcdef...ABCD"
+  },
+  {
+   "input": "credential: Zq8x4kLm2PvN7wRt9s",
+   "force": true,
+   "output": "credential: Zq8x4k...Rt9s"
+  }
+ ],
  "url": [
+  {
+   "input": "https://abcdefghijklmnop1234567890@github.com/org/repo.git",
+   "force": true,
+   "output": "https://abcdef...7890@github.com/org/repo.git"
+  },
+  {
+   "input": "git clone https://user:abcdefghijklmnop1234567890@host.test/repo",
+   "force": true,
+   "output": "git clone https://user:***@host.test/repo"
+  },
+  {
+   "input": "https://user:password@host.test/",
+   "force": true,
+   "output": "https://user:password@host.test/"
+  },
+  {
+   "input": "https://user:{pw}@host.test/",
+   "force": true,
+   "output": "https://user:{pw}@host.test/"
+  },
+  {
+   "input": "https://user:${TOKEN}@host.test/",
+   "force": true,
+   "output": "https://user:${TOKEN}@host.test/"
+  },
+  {
+   "input": "https://user:<password>@host.test/",
+   "force": true,
+   "output": "https://user:<password>@host.test/"
+  },
+  {
+   "input": "jdbc:postgresql://db/app?user=app&password=abcdefghijklmnop1234567890",
+   "force": true,
+   "output": "jdbc:postgresql://db/app?user=app&password=***"
+  },
+  {
+   "input": "postgresql+psycopg2://db/app?sslpassword=abcdefghijklmnop1234567890&x=1",
+   "force": true,
+   "output": "postgresql+psycopg2://db/app?sslpassword=***&x=1"
+  },
+  {
+   "input": "postgres://db/app?password=${PG}&a=b",
+   "force": true,
+   "output": "postgres://db/app?password=${PG}&a=b"
+  },
+  {
+   "input": "mysql://db/app?pwd=abcdefghijklmnop1234567890;a=b",
+   "force": true,
+   "output": "mysql://db/app?pwd=***"
+  },
+  {
+   "input": "https://example.com/?token=abc&password=def",
+   "force": true,
+   "output": "https://example.com/?token=abc&password=def"
+  },
+  {
+   "input": "mount //user:abcdefghijklmnop1234567890@host/share",
+   "force": true,
+   "output": "mount //user:***@host/share"
+  },
+  {
+   "input": "// comment with user:pass@word",
+   "force": true,
+   "output": "// comment with user:pass@word"
+  },
+  {
+   "input": "wss://abcdefghijklmnop1234567890abcd@host.test/socket",
+   "force": true,
+   "output": "wss://abcdef...abcd@host.test/socket"
+  },
+  {
+   "input": "redis://:abcdefghijklmnop1234567890@cache/0",
+   "force": true,
+   "output": "redis://:***@cache/0"
+  },
+  {
+   "input": "redis://:${REDIS_PASSWORD}@cache/0",
+   "force": true,
+   "output": "redis://:${REDIS_PASSWORD}@cache/0"
+  },
+  {
+   "input": "redis://:<password>@cache/0",
+   "force": true,
+   "output": "redis://:<password>@cache/0"
+  },
+  {
+   "input": "amqp://guest:abcdefghijklmnop1234567890@broker//vhost",
+   "force": true,
+   "output": "amqp://guest:***@broker//vhost"
+  },
+  {
+   "input": "ftp://anonymous@ftp.test/pub",
+   "force": true,
+   "output": "ftp://***@ftp.test/pub"
+  },
+  {
+   "input": "ssh://git@abcdefghijklmnop1234567890@host",
+   "force": true,
+   "output": "ssh://git@abcdefghijklmnop1234567890@host"
+  },
+  {
+   "input": "https://a.test/path?x=1",
+   "force": true,
+   "output": "https://a.test/path?x=1"
+  },
+  {
+   "input": "mongodb://u:abcdefghijklmnop1234567890@h1,h2/db?replicaSet=r",
+   "force": true,
+   "output": "mongodb://u:***@h1,h2/db?replicaSet=r"
+  }
+ ],
+ "url_legacy": [
   {
    "input": "https://user:abcdefghijklmnop1234567890@example.com/path",
    "force": true,

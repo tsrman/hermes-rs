@@ -1,25 +1,19 @@
 {
   "auth_header": [],
   "cli_flag": [],
-  "connection_string": [
-    "Password=changeme"
-  ],
-  "env_assignment": [
-    "app_secret=Zq8x4kLm2PvN7wRt9s"
-  ],
+  "config": [],
+  "connection_string": [],
+  "env_assignment": [],
   "header_credential": [],
   "json_field": [],
   "jwt": [],
   "phone": [],
   "plain": [],
-  "prefix": [
-    "token=ghp_abcdefghijklmnop1234567890"
-  ],
+  "prefix": [],
   "private_key": [],
   "python_repr": [],
   "telegram": [],
-  "url": [
-    "https://user:abcdefghijklmnop1234567890@example.com/path"
-  ],
+  "url": [],
+  "url_legacy": [],
   "webhook": []
 }

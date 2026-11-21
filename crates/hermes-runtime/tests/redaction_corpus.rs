@@ -65,18 +65,12 @@ fn rows_match_the_reference_except_the_listed_ones() {
 }
 
 #[test]
-fn a_category_that_is_fully_ported_has_no_failing_rows() {
-    let now = failing();
-    for category in [
-        "private_key",
-        "jwt",
-        "plain",
-        "auth_header",
-        "telegram",
-        "phone",
-        "webhook",
-    ] {
-        assert_eq!(now[category], Vec::<String>::new(), "{category}");
+fn every_row_of_the_corpus_matches_the_reference() {
+    for (category, positions) in failing() {
+        assert!(
+            positions.is_empty(),
+            "{category}: rows {positions:?} differ"
+        );
     }
 }
 
