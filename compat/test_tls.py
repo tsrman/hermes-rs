@@ -18,6 +18,33 @@ OPENSSL = shutil.which("openssl")
 BWRAP = shutil.which("bwrap")
 
 
+def create_test_certificates(certs):
+    def openssl(*args):
+        subprocess.run([OPENSSL, *args], cwd=certs, check=True, capture_output=True, timeout=10)
+
+    for name in ("trusted", "unrelated"):
+        openssl(
+            "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
+            "-nodes", "-subj", f"/CN=Hermes test {name}", "-days", "2",
+            "-keyout", f"{name}.key", "-out", f"{name}.pem",
+            "-addext", "basicConstraints=critical,CA:TRUE",
+            "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+        )
+    openssl(
+        "req", "-new", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
+        "-nodes", "-subj", "/CN=Hermes test server", "-keyout", "server.key", "-out", "server.csr",
+    )
+    (certs / "server.ext").write_text(
+        "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\n"
+        "extendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n",
+        encoding="utf-8",
+    )
+    openssl(
+        "x509", "-req", "-in", "server.csr", "-CA", "trusted.pem", "-CAkey", "trusted.key",
+        "-CAcreateserial", "-days", "2", "-extfile", "server.ext", "-out", "server.pem",
+    )
+
+
 class UnavailableModel(Handler):
     def do_POST(self):
         self.send_json(503, {"error": "fixture primary unavailable"})
@@ -31,31 +58,7 @@ class SystemRootsTest(unittest.TestCase):
         cls.addClassCleanup(directory.cleanup)
         cls.certs = Path(directory.name)
         (cls.certs / "empty-cert-dir").mkdir()
-
-        def openssl(*args):
-            subprocess.run([OPENSSL, *args], cwd=cls.certs, check=True, capture_output=True, timeout=10)
-
-        for name in ("trusted", "unrelated"):
-            openssl(
-                "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
-                "-nodes", "-subj", f"/CN=Hermes test {name}", "-days", "2",
-                "-keyout", f"{name}.key", "-out", f"{name}.pem",
-                "-addext", "basicConstraints=critical,CA:TRUE",
-                "-addext", "keyUsage=critical,keyCertSign,cRLSign",
-            )
-        openssl(
-            "req", "-new", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
-            "-nodes", "-subj", "/CN=Hermes test server", "-keyout", "server.key", "-out", "server.csr",
-        )
-        (cls.certs / "server.ext").write_text(
-            "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\n"
-            "extendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n",
-            encoding="utf-8",
-        )
-        openssl(
-            "x509", "-req", "-in", "server.csr", "-CA", "trusted.pem", "-CAkey", "trusted.key",
-            "-CAcreateserial", "-days", "2", "-extfile", "server.ext", "-out", "server.pem",
-        )
+        create_test_certificates(cls.certs)
 
     def setUp(self):
         directory = tempfile.TemporaryDirectory()

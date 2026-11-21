@@ -1,7 +1,9 @@
 import json
 import os
 import sqlite3
+import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import closing
@@ -214,6 +216,121 @@ class SessionMigrationTest(unittest.TestCase):
         result = self.hermes(home, *arguments)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
+
+    def profile_command(self, *arguments):
+        return subprocess.run(
+            [str(BINARY), "profile", *arguments], cwd=self.home,
+            env={"HERMES_HOME": str(self.home), "PATH": os.environ.get("PATH", "")},
+            text=True, capture_output=True, timeout=15,
+        )
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux profile migration")
+    def test_profile_migration_supports_named_profiles_without_history(self):
+        selected = self.home / "profiles" / "empty"
+        selected.mkdir(parents=True)
+        (selected / "config.yaml").write_text("model: fixture\n")
+        (self.home / ".env").write_text("HERMES_API_KEY=fixture-default\n")
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "pilot"
+            result = self.profile_command("-p", "empty", "migrate", "--output", str(destination))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIsNone(json.loads(result.stdout)["database"])
+            self.assertEqual((destination / "config.yaml").read_text(), "model: fixture\n")
+            self.assertFalse((destination / ".env").exists())
+            self.assertFalse((destination / "state.db").exists())
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux profile migration")
+    def test_profile_preflight_reports_permissions_and_database_without_secrets(self):
+        secret = "fixture-key-never-printed"
+        dotenv = self.home / ".env"
+        dotenv.write_text(f"HERMES_API_KEY={secret}\n")
+        dotenv.chmod(0o644)
+        (self.home / "auth.json").write_text(secret)
+        initial = self.source.read_bytes()
+        result = self.profile_command("check")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(secret, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(report["ready"])
+        inventory = {entry["path"]: entry for entry in report["entries"]}
+        self.assertEqual(inventory[".env"]["permissions"], "0644")
+        self.assertTrue(inventory[".env"]["shared_access"])
+        self.assertEqual(inventory["auth.json"]["action"], "inspect_only")
+        self.assertEqual(inventory["memories"]["state"], "missing")
+        self.assertEqual(report["database"]["source_schema"], 32)
+        self.assertEqual(report["database"]["sessions"], 5)
+        self.assertEqual(report["database"]["messages"], 3)
+        self.assertEqual(self.source.read_bytes(), initial)
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux profile migration")
+    def test_profile_migration_copies_committed_history_and_supported_assets(self):
+        for relative, contents in {
+            "config.yaml": "model: fixture\nplugin: {unknown: true}\n",
+            ".env": "HERMES_API_KEY=fixture-api-key\n",
+            "auth.json": '{"refresh_token":"fixture-refresh"}',
+            "SOUL.md": "Fixture identity",
+            "memories/USER.md": "Fixture memory",
+            "skills/demo/SKILL.md": "Fixture skill",
+        }.items():
+            path = self.home / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(contents)
+        with tempfile.TemporaryDirectory() as directory, closing(sqlite3.connect(self.source)) as live:
+            target = Path(directory) / "pilot"
+            self.assertEqual(live.execute("PRAGMA journal_mode=WAL").fetchone(), ("wal",))
+            with live:
+                live.execute("INSERT INTO messages(id, session_id, role, content, timestamp) "
+                             "VALUES (4, 'tip', 'assistant', 'WAL marker', 3)")
+            wal = self.home / "state.db-wal"
+            original = (self.source.read_bytes(), wal.read_bytes())
+            result = self.profile_command("migrate", "--output", str(target))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("fixture-api-key", result.stdout + result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual(report["database"]["target_schema"], 33)
+            self.assertEqual(report["database"]["messages"], 4)
+            self.assertEqual((self.source.read_bytes(), wal.read_bytes()), original)
+            for relative in ("config.yaml", ".env", "SOUL.md", "memories/USER.md", "skills/demo/SKILL.md"):
+                self.assertEqual((target / relative).read_bytes(), (self.home / relative).read_bytes())
+            self.assertFalse((target / "auth.json").exists())
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE((target / ".env").stat().st_mode), 0o600)
+            self.assertFalse((target / "state.db-wal").exists())
+            self.assertEqual({row["id"] for row in self.read_json(target, "search", "marker")}, {1, 2, 4})
+            newer = Path(directory) / "current"
+            result = subprocess.run(
+                [str(BINARY), "profile", "migrate", "--output", str(newer)], cwd=target,
+                env={"HERMES_HOME": str(target), "PATH": os.environ.get("PATH", "")},
+                text=True, capture_output=True, timeout=15,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["database"]["source_schema"], 33)
+            self.assertEqual(self.read_json(newer, "show", "root", "--all"),
+                             self.read_json(target, "show", "root", "--all"))
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux profile migration")
+    def test_profile_rejects_unsafe_paths_existing_outputs_and_damaged_indexes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "pilot"
+            destination.mkdir()
+            (destination / "keep").write_text("existing")
+            existing = self.profile_command("migrate", "--output", str(destination))
+            self.assertNotEqual(existing.returncode, 0)
+            self.assertEqual((destination / "keep").read_text(), "existing")
+            output = Path(directory) / "new"
+            (self.home / ".env").symlink_to(destination / "keep")
+            blocked = self.profile_command("migrate", "--output", str(output))
+            self.assertNotEqual(blocked.returncode, 0)
+            self.assertFalse(output.exists())
+            (self.home / ".env").unlink()
+            with closing(sqlite3.connect(self.source)) as db, db:
+                db.execute("INSERT INTO messages_fts(messages_fts) VALUES ('delete-all')")
+            check = self.profile_command("check")
+            self.assertNotEqual(check.returncode, 0)
+            self.assertFalse(json.loads(check.stdout)["ready"])
+            blocked = self.profile_command("migrate", "--output", str(output))
+            self.assertNotEqual(blocked.returncode, 0)
+            self.assertFalse(output.exists())
 
     def test_migrates_a_snapshot_with_committed_wal_and_preserves_history(self):
         with closing(sqlite3.connect(self.source)) as live:

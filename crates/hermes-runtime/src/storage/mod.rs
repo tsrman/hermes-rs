@@ -13,6 +13,8 @@ mod migration;
 mod resume;
 mod write;
 pub use migration::migrate_session_copy;
+#[cfg(target_os = "linux")]
+pub(crate) use migration::{write_verified_snapshot, SnapshotReport};
 pub use write::SessionWriter;
 
 const SCHEMA_VERSION: i64 = 33;

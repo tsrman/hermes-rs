@@ -7,6 +7,8 @@ mod approval;
 mod chat;
 #[cfg(unix)]
 mod owner;
+#[cfg(target_os = "linux")]
+mod profile;
 mod sessions;
 
 #[derive(Parser)]
@@ -23,6 +25,12 @@ enum Command {
     Sessions {
         #[command(subcommand)]
         command: sessions::Command,
+    },
+    /// Check a profile and prepare a copy for migration.
+    #[cfg(target_os = "linux")]
+    Profile {
+        #[command(subcommand)]
+        command: profile::Command,
     },
     Config {
         #[command(subcommand)]
@@ -63,6 +71,10 @@ async fn run() -> Result<u8, String> {
         Command::Sessions { command } => {
             sessions::run(home.ok_or("profile root is unavailable")?, command)?;
             Ok(0)
+        }
+        #[cfg(target_os = "linux")]
+        Command::Profile { command } => {
+            profile::run(home.ok_or("profile root is unavailable")?, command)
         }
         Command::Config {
             command: ConfigCommand::Set { key, value },

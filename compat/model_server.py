@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import ssl
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -188,6 +189,8 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--tls-cert")
+    parser.add_argument("--tls-key")
     parser.add_argument("--scenario", choices=(
         "text", "tool", "partial_tool", "stall", "tool_retry", "tool_rate_limit",
         "fallback_after_tool", "fallback_auth", "partial_text", "disconnect_once",
@@ -195,12 +198,19 @@ def main():
         "compact", "compact_failure", "local_tools",
     ), default="text")
     args = parser.parse_args()
+    if bool(args.tls_cert) != bool(args.tls_key):
+        parser.error("--tls-cert and --tls-key must be supplied together")
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.requests = []
     server.scenario = args.scenario
     server.release = threading.Event()
-    print(f"http://127.0.0.1:{server.server_port}", flush=True)
     try:
+        if args.tls_cert:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(args.tls_cert, args.tls_key)
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+        scheme = "https" if args.tls_cert else "http"
+        print(f"{scheme}://127.0.0.1:{server.server_port}", flush=True)
         server.serve_forever()
     finally:
         server.server_close()

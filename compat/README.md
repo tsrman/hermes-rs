@@ -49,6 +49,54 @@ HERMES_HOME="$migrated_profile" target/debug/hermes sessions show compat-legacy-
 
 Команда переносит только базу сессий. Для запуска `chat --resume` на копии укажите параметры модели и ключ в окружении или настройте отдельный профиль. Базы со старым встроенным FTS по-прежнему доступны через `sessions show` и `sessions search`.
 
+## Предварительная проверка и миграция профиля
+
+В Linux команды работают с профилем, выбранным через `HERMES_HOME` или `-p`.
+
+```bash
+HERMES_HOME=/path/to/source-profile hermes profile check
+pilot_parent="$(mktemp -d)"
+HERMES_HOME=/path/to/source-profile hermes profile migrate --output "$pilot_parent/profile"
+HERMES_HOME="$pilot_parent/profile" hermes sessions search 'привет'
+```
+
+`profile check` печатает JSON с инвентарём путей, правами доступа и признаком `ready`. `shared_access` отмечает права группы или других пользователей. Отчёт о секретах содержит только наличие и права доступа. При блокирующей ошибке проверка возвращает код 1. Проверка базы выполняется на временной копии.
+
+`profile migrate` публикует новый каталог вне исходного профиля, когда все проверки пройдены. Копия включает `config.yaml`, `.env`, `SOUL.md`, `memories/`, `skills/` и `state.db` при их наличии. Хранилища авторизации отмечены в отчёте как `inspect_only`. Каталоги и файлы копии доступны владельцу. Перед копированием профиля для пилота остановите процессы, которые могут менять его файлы. Ссылки и специальные файлы внутри копируемых путей блокируют операцию.
+
+Снимок SQLite включает зафиксированные данные из WAL. Поддерживаются схемы 32 и 33 с FTS 3. Схема 32 обновляется в копии, схема 33 сохраняется. В JSON-отчёте указаны обе версии схемы, число сессий и сообщений и результаты проверки истории и FTS. [Проверки на эталонных профилях](matrix.md#проверка-и-миграция-профиля)
+
+## Пилот переключения на Rust CLI
+
+1. На изолированной копии профиля остановите приём новых запросов Python. Дождитесь сохранения текущего хода и запишите ID контрольной сессии.
+2. Остановите процесс Python и проверьте, что он завершился. Если переключение прервалось, перед повтором сверяйте состояние процесса и сохранённой истории.
+3. Удерживайте блокировку переключения до готовности Rust. Например, запустите `flock -n /path/to/pilot.lock bash` и выполните проверку, миграцию и контрольный ход из этой оболочки. Все операторы должны использовать один и тот же файл блокировки.
+4. Выполните `profile check` и `profile migrate` в новый каталог. После прерывания до публикации можно повторить команду с тем же выходным путём. Временный каталог `.hermes-migrate-*` может остаться в родительской папке. Удаляйте его после проверки, что процесс миграции завершился. Опубликованную копию проверьте через `profile check` и сравните контрольную сессию с источником.
+5. Запустите `hermes owner` для копии в другом терминале. Выполните `hermes chat --oneshot --resume <id> -q 'Проверка пилота'`, затем проверьте `sessions show <id>` и `sessions search`. После аварии владельца до начала хода запустите его повторно. Для прерванного хода сначала сверяйте историю и эффекты инструментов. [Аренда сессии](#локальный-владелец-сессий)
+
+Репетиция с принудительными прерываниями создаёт одноразовый профиль из зафиксированного Python-эталона и использует локальный имитатор.
+
+```bash
+python3 compat/rehearse_profile_pilot.py target/x86_64-unknown-linux-gnu/release/hermes \
+  /tmp/hermes-reference-venv/bin/python /tmp/hermes-main
+```
+
+Для musl укажите бинарник из `target/x86_64-unknown-linux-musl/release/`. Результаты прерываний записаны в [матрице совместимости](matrix.md#пилот-переключения-на-rust-cli).
+
+## Контрольный возврат на Python
+
+1. Завершите текущий ход, остановите владельца Rust и возьмите ту же блокировку, что при переключении на Rust. Сохраните копию профиля после Rust командой `hermes profile migrate --output <архивный-каталог>`.
+2. Для проверенного Python схемы 33 откройте рабочую копию после Rust. Сверьте контрольные сессии с архивом, возобновите их по ID и проверьте поиск.
+3. Для возврата к Python схемы 32 восстановите отдельную копию снимка до переключения. Экспортируйте новые сессии из архива Rust через `maintenance.export_session` у Python схемы 33 и преобразуйте результат функцией `to_legacy_export_dict`. Импортируйте его через `SessionDB.import_sessions` у Python схемы 32. Импорт пропускает существующие ID. Поздние Rust-ходы в этих сессиях остаются доступны в архиве схемы 33.
+4. Сверьте выполненные действия инструментов по истории и состоянию рабочих файлов. В репетиции созданный Rust файл сохранился при возврате на Python, а его вызов и результат передались в историю без повторного исполнения.
+
+```bash
+python3 compat/rehearse_profile_rollback.py target/x86_64-unknown-linux-gnu/release/hermes \
+  /tmp/hermes-reference-venv/bin/python /tmp/hermes-main /tmp/hermes-v32.wAEl1m
+```
+
+Скрипт проверяет оба варианта на одноразовых профилях и локальном имитаторе. Для musl укажите бинарник из `target/x86_64-unknown-linux-musl/release/`. [Результаты](matrix.md#контрольный-возврат-на-python)
+
 ## Запись нового хода
 
 Для сохранения `hermes chat --oneshot -q 'Прочитай fixture.txt'` передайте `--save-session` и укажите отдельный временный профиль через `HERMES_HOME` или `-p`. После успешного хода команда печатает ID новой сессии в `stderr`. Запрос, вызовы и результаты инструментов, финальный ответ и обновление FTS входят в одну транзакцию. Отмена, обрыв потока и исчерпание лимита оставляют ход без записи.
@@ -126,12 +174,49 @@ fallback_providers:
 
 Для сравнения исчерпания бюджета запустить сервер со сценарием `iteration_limit` и передать `--max-turns 2` в `run_reference_turn.py` и `hermes chat`. Для каждого клиента запустить свежий экземпляр сервера. В `/requests` первые два запроса содержат обычную историю, а третий добавляет запрос на сводку после второго результата инструмента.
 
+## Установка CLI из GitHub Releases
+
+Выберите архив `x86_64-unknown-linux-gnu` для Linux с glibc или `x86_64-unknown-linux-musl` для Alpine Linux. Укажите тег опубликованного релиза и скачайте архив вместе с файлом контрольной суммы.
+
+```bash
+tag=v0.1.0
+target=x86_64-unknown-linux-gnu
+archive="hermes-${tag#v}-$target.tar.gz"
+url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
+(
+  set -e
+  download_dir="$(mktemp -d)"
+  cd "$download_dir"
+  curl -fsSLO "$url/$archive"
+  curl -fsSLO "$url/$archive.sha256"
+  sha256sum --check "$archive.sha256"
+  tar -xzf "$archive" hermes
+  install -Dm755 hermes "$HOME/.local/hermes-rs/$tag/hermes"
+) && "$HOME/.local/hermes-rs/$tag/hermes" --help
+```
+
+Используйте отдельный профиль для [миграции](#предварительная-проверка-и-миграция-профиля) и [контрольного возврата на Python](#контрольный-возврат-на-python).
+
 ## Релизная проверка Linux x86_64
 
 ```bash
 cargo build --release --locked -p hermes-cli --target x86_64-unknown-linux-gnu
 CC_x86_64_unknown_linux_musl=musl-gcc cargo build --release --locked -p hermes-cli --target x86_64-unknown-linux-musl
 ```
+
+Workflow [Release CLI](../.github/workflows/release-cli.yml) выполняет проверки workspace, собирает обе цели, упаковывает архивы с SHA-256 и запускает проверки в контейнерах. Вручную его можно запустить для проверки артефактов в Actions. Публикация запускается отправкой тега `v<версия hermes-cli>`. После неё workflow скачивает архивы и суммы из GitHub Releases и сверяет их с проверенными файлами. [События GitHub Actions](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)
+
+Упаковку и проверку архивов можно воспроизвести локально.
+
+```bash
+output="$(mktemp -d)"
+bash compat/package_cli_release.sh x86_64-unknown-linux-gnu "$output"
+bash compat/package_cli_release.sh x86_64-unknown-linux-musl "$output"
+python3 -m compat.smoke_cli_release "$output/hermes-0.1.0-x86_64-unknown-linux-gnu.tar.gz" debian:trixie-slim
+python3 -m compat.smoke_cli_release "$output/hermes-0.1.0-x86_64-unknown-linux-musl.tar.gz" alpine:3.24.2
+```
+
+Проверка запускает распакованный бинарник в контейнере без Python. Она проверяет отклонение недоверенного сертификата и успешный запрос к локальному HTTPS-имитатору после подключения тестового корня как системного хранилища. Затем проверяет сохранение сессии, `--resume` и поиск по истории.
 
 Для проверки запуска на чистой системе использовать `debian:trixie-slim` для GNU и `alpine:3.24.2` для musl. В контейнер CLI смонтировать только соответствующий бинарник. Завести временный `HERMES_HOME` и отдельную рабочую папку. Для проверки записи, истории и `--resume` запустить `model_server.py --scenario local_tools` в отдельном Python-контейнере и подключить CLI к его сетевому пространству через `--network container:<id>`. Запрос на запись отправить через `docker exec -it`, чтобы CLI получил управляющий терминал для подтверждения.
 

@@ -2,7 +2,9 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
-use rusqlite::{Connection, DatabaseName, TransactionBehavior};
+use ring::digest::{self, Context, Digest};
+use rusqlite::{types::ValueRef, Connection, DatabaseName, OpenFlags, TransactionBehavior};
+use serde::Serialize;
 
 use super::{
     open_read_only, read_schema_version,
@@ -29,22 +31,8 @@ pub fn migrate_session_copy(profile: &Path, destination: &Path) -> Result<(), St
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
 
-    let temporary = {
-        let mut source = open_read_only(profile)?;
-        let snapshot = source.transaction()?;
-        let version = read_schema_version(&snapshot)?;
-        if version != LEGACY_SCHEMA_VERSION {
-            return Err(StorageError::MigrationSourceVersion(version));
-        }
-        verify_fts_layout(&snapshot)?;
-        let temporary = tempfile::NamedTempFile::new_in(parent)?;
-        snapshot.backup(DatabaseName::Main, temporary.path(), None)?;
-        snapshot.commit()?;
-        temporary
-    };
-
-    migrate_snapshot(temporary.path())?;
-    temporary.as_file().sync_all()?;
+    let temporary = tempfile::NamedTempFile::new_in(parent)?;
+    write_verified_snapshot(profile, temporary.path(), true)?;
     ensure_destination_is_clear(destination)?;
     temporary
         .persist_noclobber(destination)
@@ -52,6 +40,136 @@ pub fn migrate_session_copy(profile: &Path, destination: &Path) -> Result<(), St
     #[cfg(unix)]
     fs::File::open(parent)?.sync_all()?;
     Ok(())
+}
+
+#[derive(Serialize)]
+pub(crate) struct SnapshotReport {
+    source_schema: i64,
+    target_schema: i64,
+    sessions: u64,
+    messages: u64,
+    fts_integrity: bool,
+    history_verified: bool,
+}
+
+/// The caller provides a private scratch file and publishes it only on success.
+pub(crate) fn write_verified_snapshot(
+    profile: &Path,
+    destination: &Path,
+    legacy_only: bool,
+) -> Result<SnapshotReport, StorageError> {
+    let mut source = if legacy_only {
+        open_read_only(profile)?
+    } else {
+        open_profile_database(profile)?
+    };
+    let snapshot = source.transaction()?;
+    let version = read_schema_version(&snapshot)?;
+    if legacy_only && version != LEGACY_SCHEMA_VERSION {
+        return Err(StorageError::MigrationSourceVersion(version));
+    }
+    if !matches!(version, LEGACY_SCHEMA_VERSION | SCHEMA_VERSION) {
+        return Err(StorageError::UnsupportedSchema(version));
+    }
+    verify_fts_layout(&snapshot)?;
+    let before = history(&snapshot, version)?;
+    snapshot.backup(DatabaseName::Main, destination, None)?;
+    snapshot.commit()?;
+    verify_snapshot(destination, version, &before)?;
+    fs::File::open(destination)?.sync_all()?;
+    Ok(SnapshotReport {
+        source_schema: version,
+        target_schema: SCHEMA_VERSION,
+        sessions: before.sessions.0,
+        messages: before.messages.0,
+        fts_integrity: true,
+        history_verified: true,
+    })
+}
+
+fn open_profile_database(profile: &Path) -> Result<Connection, StorageError> {
+    for name in ["state.db-journal", "state.db-wal", "state.db-shm"] {
+        match profile.join(name).symlink_metadata() {
+            Ok(metadata) if metadata.is_file() => {}
+            Ok(_) => {
+                return Err(StorageError::MigrationIntegrity(format!(
+                    "{name} must be a regular file"
+                )));
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(Connection::open_with_flags(
+        profile.join("state.db"),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?)
+}
+
+struct History {
+    sessions: (u64, Digest),
+    messages: (u64, Digest),
+    prompts: (u64, Digest),
+}
+
+fn history(connection: &Connection, source_version: i64) -> rusqlite::Result<History> {
+    // The v32 upgrade adds prompt_cache_clock and can update delegate metadata.
+    let ignored: &[&str] = if source_version == LEGACY_SCHEMA_VERSION {
+        &["model_config", "prompt_cache_clock"]
+    } else {
+        &[]
+    };
+    Ok(History {
+        sessions: fingerprint_rows(connection, "SELECT * FROM sessions ORDER BY id", ignored)?,
+        messages: fingerprint_rows(connection, "SELECT * FROM messages ORDER BY id", &[])?,
+        prompts: fingerprint_rows(
+            connection,
+            "SELECT * FROM system_prompts ORDER BY hash",
+            &[],
+        )?,
+    })
+}
+
+fn fingerprint_rows(
+    connection: &Connection,
+    query: &str,
+    ignored: &[&str],
+) -> rusqlite::Result<(u64, Digest)> {
+    let mut statement = connection.prepare(query)?;
+    let columns: Vec<_> = statement
+        .column_names()
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, name)| (!ignored.contains(&name)).then_some(index))
+        .collect();
+    let mut rows = statement.query([])?;
+    let mut digest = Context::new(&digest::SHA256);
+    let mut count = 0;
+    while let Some(row) = rows.next()? {
+        count += 1;
+        for &index in &columns {
+            match row.get_ref(index)? {
+                ValueRef::Null => digest.update(&[0]),
+                ValueRef::Integer(value) => {
+                    digest.update(&[1]);
+                    digest.update(&value.to_le_bytes());
+                }
+                ValueRef::Real(value) => {
+                    digest.update(&[2]);
+                    digest.update(&value.to_bits().to_le_bytes());
+                }
+                ValueRef::Text(bytes) => hash_bytes(&mut digest, 3, bytes),
+                ValueRef::Blob(bytes) => hash_bytes(&mut digest, 4, bytes),
+            }
+        }
+    }
+    Ok((count, digest.finish()))
+}
+
+fn hash_bytes(digest: &mut Context, kind: u8, bytes: &[u8]) {
+    digest.update(&[kind]);
+    digest.update(&(bytes.len() as u64).to_le_bytes());
+    digest.update(bytes);
 }
 
 fn ensure_destination_is_clear(destination: &Path) -> Result<(), StorageError> {
@@ -67,7 +185,7 @@ fn ensure_destination_is_clear(destination: &Path) -> Result<(), StorageError> {
     Ok(())
 }
 
-fn migrate_snapshot(path: &Path) -> Result<(), StorageError> {
+fn verify_snapshot(path: &Path, source_version: i64, before: &History) -> Result<(), StorageError> {
     let mut connection = open_write(path)?;
     // Publish a self-contained database file with no WAL to move or replay.
     let mode: String =
@@ -78,6 +196,33 @@ fn migrate_snapshot(path: &Path) -> Result<(), StorageError> {
         )));
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if read_schema_version(&transaction)? != source_version {
+        return Err(StorageError::MigrationIntegrity(
+            "snapshot schema changed".into(),
+        ));
+    }
+    if source_version == LEGACY_SCHEMA_VERSION {
+        upgrade_legacy(&transaction)?;
+    }
+    check_integrity(&transaction)?;
+    let after = history(&transaction, source_version)?;
+    if [
+        (before.sessions, after.sessions),
+        (before.messages, after.messages),
+        (before.prompts, after.prompts),
+    ]
+    .iter()
+    .any(|(before, after)| before.0 != after.0 || before.1.as_ref() != after.1.as_ref())
+    {
+        return Err(StorageError::MigrationIntegrity(
+            "snapshot history changed".into(),
+        ));
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
+fn upgrade_legacy(transaction: &Connection) -> Result<(), StorageError> {
     let has_cache_clock: bool = transaction.query_row(
         "SELECT EXISTS (SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'prompt_cache_clock')",
         [],
@@ -115,8 +260,6 @@ fn migrate_snapshot(path: &Path) -> Result<(), StorageError> {
           );",
     )?;
     transaction.execute("UPDATE schema_version SET version = ?1", [SCHEMA_VERSION])?;
-    check_integrity(&transaction)?;
-    transaction.commit()?;
     Ok(())
 }
 
