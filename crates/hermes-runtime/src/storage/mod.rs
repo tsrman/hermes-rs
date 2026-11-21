@@ -10,6 +10,7 @@ use serde_json::Value;
 
 mod compression;
 mod migration;
+pub mod recall;
 mod resume;
 mod write;
 pub use migration::migrate_session_copy;
