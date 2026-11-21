@@ -127,6 +127,9 @@ class Handler(BaseHTTPRequestHandler):
                 })}
             wants_tool = step < (2 if fixture.get("read") else 1)
             call_id = f"file-{step}"
+        elif scenario == "cron_failure":
+            wants_tool = False
+            call_id = "none"
         elif scenario == "memory":
             function = {"name": "memory", "arguments": json.dumps({"target": "user", "operations": [
                 {"action": "add", "content": "Prefers Russian replies"}]}, ensure_ascii=False)}
@@ -170,7 +173,8 @@ class Handler(BaseHTTPRequestHandler):
             message = {"role": "assistant", "content": None, "tool_calls": [tool_call]}
             finish_reason = "tool_calls"
         else:
-            message = {"role": "assistant", "content": "Ответ модели"}
+            message = {"role": "assistant", "content": (
+                "[CRON_FAILURE]\nchild task failed" if scenario == "cron_failure" else "Ответ модели")}
             finish_reason = "stop"
         if scenario in ("compact", "compact_failure", "overflow", "overflow_tools") and messages[0]["content"].startswith("Summarize completed conversation history"):
             message["content"] = "Earlier turns resolved the fixture checks."
@@ -225,7 +229,7 @@ def main():
         "text", "tool", "partial_tool", "stall", "tool_retry", "tool_rate_limit",
         "fallback_after_tool", "fallback_auth", "partial_text", "disconnect_once",
         "iteration_limit", "iteration_summary_tool", "partial_after_tool", "stall_on_resume", "burst", "skill",
-        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "mcp", "web", "memory",
+        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "mcp", "web", "memory", "cron_failure",
     ), default="text")
     args = parser.parse_args()
     if bool(args.tls_cert) != bool(args.tls_key):

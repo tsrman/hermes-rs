@@ -30,6 +30,12 @@ impl ToolPolicy {
     }
 
     pub(crate) fn from_config(config: &serde_yaml::Value) -> Self {
+        Self::for_platform(config, "cli")
+    }
+
+    /// The policy of `platform` (`cli`, `cron`): its `platform_toolsets` entry, else the
+    /// platform's composite `hermes-<platform>`.
+    pub(crate) fn for_platform(config: &serde_yaml::Value, platform: &str) -> Self {
         let listed = |value: Option<&serde_yaml::Value>| -> Option<Vec<String>> {
             match value? {
                 serde_yaml::Value::Sequence(items) => Some(
@@ -51,9 +57,9 @@ impl ToolPolicy {
         let names = listed(
             config
                 .get("platform_toolsets")
-                .and_then(|sets| sets.get("cli")),
+                .and_then(|sets| sets.get(platform)),
         )
-        .unwrap_or_else(|| vec!["hermes-cli".to_owned()]);
+        .unwrap_or_else(|| vec![format!("hermes-{platform}")]);
         let mut allowed: BTreeSet<String> = BTreeSet::new();
         for name in names {
             // Older configs name the composite just "hermes".

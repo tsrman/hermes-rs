@@ -3,11 +3,13 @@
 mod expr;
 pub mod schedule;
 pub mod store;
+pub mod tick;
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
-use chrono_tz::Tz;
+pub use chrono::DateTime;
+use chrono::Utc;
+pub use chrono_tz::Tz;
 
 /// The profile's zone: `HERMES_TIMEZONE`, then `timezone` in `config.yaml`, then the host zone.
 /// An unknown name falls back to the next source, as the reference does.
@@ -34,4 +36,10 @@ pub fn now_in(zone: Tz) -> DateTime<Tz> {
     DateTime::<Utc>::from_timestamp(elapsed.as_secs() as i64, elapsed.subsec_nanos())
         .unwrap_or_default()
         .with_timezone(&zone)
+}
+
+/// The `cron` settings of the profile at `home`.
+pub fn load_tick_settings(home: &Path) -> Result<tick::TickSettings, String> {
+    let config = crate::config::read_config(&home.join("config.yaml"))?;
+    Ok(tick::TickSettings::from_config(&config))
 }

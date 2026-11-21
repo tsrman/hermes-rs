@@ -424,3 +424,8 @@ fn grouped_count(count: usize) -> String {
     }
     grouped
 }
+
+/// The threat a prompt that came from a stored job would trigger, as a user-facing message.
+pub fn prompt_threat(text: &str) -> Option<String> {
+    threats::first_threat_message(text)
+}

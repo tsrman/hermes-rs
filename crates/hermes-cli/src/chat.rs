@@ -376,3 +376,43 @@ fn format_event(event: TurnEvent<'_>) -> Event {
         )),
     }
 }
+
+/// Run one unattended turn and return the final text and the exit status. Nothing is asked of
+/// a person: file writes and commands are not offered, and the turn is not saved as a session.
+/// `activity` is called on every output event so that a caller can watch for a stalled turn.
+pub async fn run_text(
+    home: Option<&Path>,
+    query: String,
+    model: Option<String>,
+    platform: &str,
+    mut activity: impl FnMut(),
+) -> Result<(String, u8), String> {
+    let env = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+    let args = ChatArgs {
+        query,
+        oneshot: true,
+        save_session: false,
+        resume: None,
+        max_turns: None,
+        base_url: env("HERMES_BASE_URL"),
+        model: model.or_else(|| env("HERMES_MODEL")),
+        api_key: env("HERMES_API_KEY"),
+    };
+    let mut request = prepare(home, args)?;
+    request.tools = hermes_runtime::config::load_tool_policy(home, platform)?;
+    let mut text = String::new();
+    let code = execute(
+        home,
+        request,
+        |event| {
+            activity();
+            if let Event::Stdout(chunk) = event {
+                text.push_str(&chunk);
+            }
+            true
+        },
+        |_| async { ApprovalDecision::Unavailable },
+    )
+    .await?;
+    Ok((text, code))
+}

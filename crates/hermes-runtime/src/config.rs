@@ -604,6 +604,17 @@ fn expand_env(text: &str, secrets: &HashMap<String, String>) -> String {
     out
 }
 
+/// The tool policy of a platform for the profile at `home` (all tools without a profile).
+pub fn load_tool_policy(home: Option<&Path>, platform: &str) -> Result<ToolPolicy, String> {
+    let Some(home) = home else {
+        return Ok(ToolPolicy::allow_all());
+    };
+    Ok(ToolPolicy::for_platform(
+        &read_config(&home.join("config.yaml"))?,
+        platform,
+    ))
+}
+
 #[cfg(test)]
 mod mcp_tests {
     use super::*;

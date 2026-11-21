@@ -78,7 +78,7 @@ fn optional(job: &Value, key: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn summarize(job: &Value) -> JobSummary {
+pub(super) fn summarize(job: &Value) -> JobSummary {
     let id = Some(text(job, "id"))
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| "unknown".into());
@@ -168,7 +168,7 @@ fn effective_state(job: &Value, enabled: bool) -> String {
     }
 }
 
-fn cron_dir(home: &Path) -> PathBuf {
+pub(super) fn cron_dir(home: &Path) -> PathBuf {
     home.join("cron")
 }
 
@@ -176,7 +176,7 @@ fn cron_dir(home: &Path) -> PathBuf {
 /// reports a change. Only the canonical `{"jobs": [...]}` shape is written: anything else could
 /// lose data, so it is refused rather than repaired.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn with_jobs<T>(
+pub(super) fn with_jobs<T>(
     home: &Path,
     now: DateTime<Tz>,
     change: impl FnOnce(&mut Vec<Value>) -> Result<(T, bool), String>,
@@ -248,7 +248,7 @@ fn with_jobs<T>(
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn with_jobs<T>(
+pub(super) fn with_jobs<T>(
     _home: &Path,
     _now: DateTime<Tz>,
     _change: impl FnOnce(&mut Vec<Value>) -> Result<(T, bool), String>,
@@ -304,7 +304,7 @@ fn reject_terminal(job: &Value, action: &str) -> Result<(), String> {
     }
 }
 
-fn job_zone(job: &Value) -> Option<Tz> {
+pub(super) fn job_zone(job: &Value) -> Option<Tz> {
     job["timezone"]
         .as_str()
         .and_then(|name| name.trim().parse().ok())
