@@ -230,7 +230,7 @@ impl FileWorkspace<'_> {
                 continue;
             }
             #[cfg(target_os = "linux")]
-            let Ok(directory) = super::linux::open_directory(root, &path) else {
+            let Ok(directory) = super::directory::open_directory(root, &path) else {
                 continue;
             };
             #[cfg(target_os = "linux")]

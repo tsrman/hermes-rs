@@ -11,7 +11,7 @@ use rustix::fs::{openat, renameat_with, Mode, OFlags, RenameFlags};
 use serde::Serialize;
 use tempfile::{Builder, NamedTempFile};
 
-use crate::file_tools::linux::open_directory;
+use crate::file_tools::directory::open_directory;
 use crate::storage::{write_verified_snapshot, SnapshotReport};
 
 #[derive(Clone, Copy)]

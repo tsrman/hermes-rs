@@ -192,7 +192,7 @@ impl TurnOptions<'_> {
     }
 
     fn can_run_terminal(&self) -> bool {
-        self.can_write_files() && self.terminal_local
+        self.approval_timeout_secs.is_some() && self.terminal_local && terminal::SUPPORTED
     }
 }
 

@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -165,6 +166,12 @@ def smoke_native(archive, work):
         hits = json.loads(cli(binary, "-p", "fixture", "sessions", "search", '"native smoke resumed"').stdout)
         assert len(hits) == 1 and hits[0]["session_id"] == session
     print(f"{archive.name}: checksum, startup, named profile, read_file, session resume and FTS passed")
+    if sys.platform == "darwin":
+        subprocess.run(
+            [sys.executable, "-m", "unittest", "-v", "compat.test_file_tools.TerminalToolTest"],
+            env={**os.environ, "HERMES_TEST_BINARY": str(binary)},
+            check=True, timeout=120,
+        )
 
 
 def main():

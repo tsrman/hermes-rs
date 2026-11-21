@@ -1,4 +1,4 @@
-//! Approved foreground commands on the local Linux CLI.
+//! Approved foreground commands on the local Linux and macOS CLI.
 
 use std::future::Future;
 
@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use crate::file_tools::{approval_error, ApprovalDecision, ApprovalRequest, FileWorkspace};
 
 pub(crate) const TERMINAL: &str = "terminal";
+pub(crate) const SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos"));
 
 pub(crate) async fn execute<A, F>(
     workspace: &FileWorkspace<'_>,
@@ -18,16 +19,16 @@ where
     A: FnMut(ApprovalRequest) -> F,
     F: Future<Output = ApprovalDecision>,
 {
-    let Some(approval_timeout) = approval_timeout.filter(|_| cfg!(target_os = "linux")) else {
+    let Some(approval_timeout) = approval_timeout.filter(|_| SUPPORTED) else {
         return approval_error(ApprovalDecision::Unavailable);
     };
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        linux::execute(workspace, arguments, approval_timeout, approve)
+        shell::execute(workspace, arguments, approval_timeout, approve)
             .await
             .unwrap_or_else(|error| json!({"error": error, "exit_code": -1, "status": "error"}))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (workspace, arguments, approval_timeout, approve);
         approval_error(ApprovalDecision::Unavailable)
@@ -45,22 +46,21 @@ pub(crate) fn schema() -> Value {
     }})
 }
 
-#[cfg(target_os = "linux")]
-mod linux {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod shell {
     use std::fs::File;
     use std::io;
-    use std::os::fd::AsRawFd;
     use std::os::unix::fs::MetadataExt;
     use std::process::{ExitStatus, Stdio};
     use std::time::Duration;
 
-    use rustix::process::{kill_process_group, Pid, Signal};
+    use rustix::process::{fchdir, kill_process_group, Pid, Signal};
     use serde::Deserialize;
     use tokio::io::{AsyncRead, AsyncReadExt};
     use tokio::process::{Child, Command};
     use tokio::time::timeout;
 
-    use crate::file_tools::{linux::open_directory, request_approval, ApprovalAction};
+    use crate::file_tools::{directory::open_directory, request_approval, ApprovalAction};
 
     use super::*;
 
@@ -122,7 +122,7 @@ mod linux {
         }
         run(
             &args.command,
-            &directory,
+            directory,
             Duration::from_secs(u64::from(seconds)),
         )
         .await
@@ -133,20 +133,29 @@ mod linux {
         Ok((metadata.dev(), metadata.ino()))
     }
 
-    async fn run(command: &str, directory: &File, duration: Duration) -> Result<Value, String> {
-        let child = Command::new("/bin/sh")
+    async fn run(command: &str, directory: File, duration: Duration) -> Result<Value, String> {
+        let mut child = Command::new("/bin/sh");
+        child
             .args(["-c", command])
-            .current_dir(format!("/proc/self/fd/{}", directory.as_raw_fd()))
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
-            .env("LANG", "C.UTF-8")
+            .env(
+                "LANG",
+                if cfg!(target_os = "macos") {
+                    "en_US.UTF-8"
+                } else {
+                    "C.UTF-8"
+                },
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0)
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|error| error.to_string())?;
+            .kill_on_drop(true);
+        // SAFETY: fchdir is async-signal-safe and the closure owns the open
+        // descriptor, so the child enters the approved directory before exec.
+        unsafe { child.pre_exec(move || fchdir(&directory).map_err(io::Error::from)) };
+        let child = child.spawn().map_err(|error| error.to_string())?;
         let pid = child
             .id()
             .and_then(|pid| i32::try_from(pid).ok())

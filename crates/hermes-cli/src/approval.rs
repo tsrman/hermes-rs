@@ -1,19 +1,19 @@
 use hermes_runtime::turn::{ApprovalDecision, ApprovalRequest};
 
 pub fn available() -> bool {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use std::io::IsTerminal;
         std::io::stdin().is_terminal() && terminal::open().is_ok()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         false
     }
 }
 
 pub async fn prompt(request: ApprovalRequest) -> ApprovalDecision {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use std::time::Duration;
         match tokio::time::timeout(
@@ -27,14 +27,14 @@ pub async fn prompt(request: ApprovalRequest) -> ApprovalDecision {
             Err(_) => ApprovalDecision::TimedOut,
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = request;
         ApprovalDecision::Unavailable
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod terminal {
     use std::fs::{File, OpenOptions};
     use std::io::{self, Read, Write};
