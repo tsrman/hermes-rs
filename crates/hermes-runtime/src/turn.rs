@@ -15,6 +15,7 @@ use crate::prompt::{load_cli_context, PromptSettings};
 use crate::providers::{Provider, ProviderError};
 use crate::skills::{SkillCatalog, SKILLS_LIST, SKILL_VIEW};
 use crate::terminal::{self, TERMINAL};
+use crate::web_tools::{self, WebSettings, WEB_EXTRACT, WEB_SEARCH};
 
 pub use crate::file_tools::{ApprovalAction, ApprovalDecision, ApprovalRequest};
 
@@ -202,6 +203,8 @@ pub enum TurnEvent<'a> {
 pub struct TurnOptions<'a> {
     /// Connected MCP servers whose tools are added to every request.
     pub mcp: Option<&'a tokio::sync::Mutex<McpClients>>,
+    /// Web backends; the web tools are offered only when one is configured.
+    pub web: Option<&'a WebSettings>,
     pub root: &'a Path,
     pub profile: Option<&'a Path>,
     pub max_turns: u32,
@@ -249,6 +252,14 @@ where
         options.can_write_files(),
         options.can_run_terminal(),
     );
+    if let Some(web) = options.web {
+        if web.offers_search() {
+            tools.push(web_tools::search_schema());
+        }
+        if web.offers_extract() {
+            tools.push(web_tools::extract_schema());
+        }
+    }
     if let Some(mcp) = options.mcp {
         tools.extend(mcp.lock().await.schemas());
     }
@@ -339,6 +350,20 @@ where
                 }),
                 SKILL_VIEW if skill_tools => history.skills.view(&call.arguments),
                 SKILLS_LIST if skill_tools => history.skills.list(&call.arguments),
+                WEB_SEARCH if options.web.is_some_and(WebSettings::offers_search) => {
+                    web_tools::search(
+                        options.web.unwrap_or(&WebSettings::default()),
+                        &call.arguments,
+                    )
+                    .await
+                }
+                WEB_EXTRACT if options.web.is_some_and(WebSettings::offers_extract) => {
+                    web_tools::extract(
+                        options.web.unwrap_or(&WebSettings::default()),
+                        &call.arguments,
+                    )
+                    .await
+                }
                 name => match options.mcp {
                     Some(mcp) => {
                         let mut mcp = mcp.lock().await;
@@ -351,11 +376,18 @@ where
                     None => json!({"error": format!("Unknown tool: {name}")}),
                 },
             };
-            let succeeded = output.get("error").is_none()
-                && (call.name != TERMINAL || output["exit_code"].as_i64() == Some(0));
-            messages.push(
-                json!({"role": "tool", "tool_call_id": call.id, "content": output.to_string()}),
-            );
+            // A tool may answer with ready-made text, such as the web tools' indented JSON.
+            let (content, structured) = match output {
+                Value::String(text) => {
+                    let parsed = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
+                    (text, parsed)
+                }
+                other => (other.to_string(), other),
+            };
+            let succeeded = structured.get("error").is_none_or(Value::is_null)
+                && structured["success"].as_bool() != Some(false)
+                && (call.name != TERMINAL || structured["exit_code"].as_i64() == Some(0));
+            messages.push(json!({"role": "tool", "tool_call_id": call.id, "content": content}));
             on_event(TurnEvent::ToolFinished {
                 name: &call.name,
                 succeeded,

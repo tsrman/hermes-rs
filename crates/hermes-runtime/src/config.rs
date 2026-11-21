@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::mcp::McpServerConfig;
 use crate::prompt::PromptSettings;
+use crate::web_tools::WebSettings;
 
 pub use crate::compaction::CompactionSettings;
 
@@ -42,6 +43,7 @@ pub struct ChatSettings {
     pub approval_timeout_secs: u32,
     pub terminal_local: bool,
     pub mcp_servers: Vec<McpServerConfig>,
+    pub web: WebSettings,
     openai_api_key: Option<String>,
     openai_base_url: Option<String>,
     anthropic_api_key: Option<String>,
@@ -72,6 +74,7 @@ impl Default for ChatSettings {
             approval_timeout_secs: 300,
             terminal_local: true,
             mcp_servers: Vec::new(),
+            web: WebSettings::default(),
             openai_api_key: None,
             openai_base_url: None,
             anthropic_api_key: None,
@@ -305,6 +308,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.anthropic_api_key = secrets.get("ANTHROPIC_API_KEY").cloned();
     settings.anthropic_base_url = secrets.get("ANTHROPIC_BASE_URL").cloned();
     settings.mcp_servers = mcp_servers(&config, &secrets);
+    settings.web = WebSettings::from_config(&config, &secrets);
     settings.terminal_local = match &config["terminal"]["backend"] {
         serde_yaml::Value::Null => terminal_env.as_deref().map_or_else(
             || {

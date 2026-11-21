@@ -5,7 +5,9 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.request import urlopen
@@ -29,6 +31,7 @@ class CliTest(unittest.TestCase):
             "test_context_overflow_compresses_history_and_retries_once": "overflow",
             "test_context_overflow_after_a_tool_call_is_not_retried": "overflow_tools",
             "test_mcp_stdio_tool_is_exposed_and_called": "mcp",
+            "test_web_search_uses_the_configured_backend_and_hides_tools_without_one": "web",
             "test_mcp_streamable_http_tool_uses_profile_secrets": "mcp",
             "test_skill_index_uses_profile_and_opted_in_project_roots": "skill",
             "test_skill_view_resolves_exact_paths_and_refuses_ambiguous_names": "skill",
@@ -238,6 +241,48 @@ class CliTest(unittest.TestCase):
         self.assertEqual(json.loads(tool_message["content"]), {"result": "from mcp"})
         entries = json.loads(log.read_text(encoding="utf-8"))
         self.assertEqual(entries[-1], {"delete": "fixture-session"})
+
+    def test_web_search_uses_the_configured_backend_and_hides_tools_without_one(self):
+        seen = []
+
+        class Searx(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                seen.append(self.path)
+                body = json.dumps({"results": [
+                    {"title": "Hermes", "url": "https://h.test/", "content": "agent", "score": 2},
+                    {"title": "Other", "url": "https://o.test/", "content": "x", "score": 1},
+                    {"title": "Third", "url": "https://t.test/", "content": "y", "score": 0}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        searx = HTTPServer(("127.0.0.1", 0), Searx)
+        thread = threading.Thread(target=searx.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(searx.server_close)
+        self.addCleanup(searx.shutdown)
+        # Without a configured backend the model is not offered the web tools.
+        bare, recorded = self.chat_with_profile(query="no web")
+        self.assertEqual(bare.returncode, 0, bare.stderr)
+        self.assertFalse({"web_search", "web_extract"} & {t["function"]["name"] for t in recorded[0]["tools"]})
+        count = len(recorded)
+
+        result, recorded = self.chat_with_profile(
+            extra_config="web:\n  search_backend: searxng\n", dotenv=f"SEARXNG_URL=http://127.0.0.1:{searx.server_port}\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        offered = [t["function"]["name"] for t in recorded[count]["tools"]]
+        self.assertIn("web_search", offered)
+        self.assertIn("web_extract", offered)  # offered so that a search-only backend can explain itself
+        self.assertEqual(seen, ["/search?q=hermes+agent&format=json&pageno=1"])
+        tool_message = recorded[count + 1]["messages"][-1]
+        rows = json.loads(tool_message["content"])["data"]["web"]
+        self.assertEqual([row["title"] for row in rows], ["Hermes", "Other"])
+        self.assertEqual(tool_message["content"][:2], "{\n")
 
     def test_invalid_compaction_summary_keeps_the_original_context(self):
         session, database, original, config = self.seed_compression_history()

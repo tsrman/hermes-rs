@@ -121,6 +121,10 @@ class Handler(BaseHTTPRequestHandler):
                 })}
             wants_tool = step < (2 if fixture.get("read") else 1)
             call_id = f"file-{step}"
+        elif scenario == "web":
+            function = {"name": "web_search", "arguments": '{"query":"hermes agent","limit":2}'}
+            wants_tool = not any(message.get("role") == "tool" for message in messages)
+            call_id = "web-call"
         elif scenario == "mcp":
             function = {"name": "mcp_fixture_echo", "arguments": '{"text":"from mcp"}'}
             wants_tool = not any(message.get("role") == "tool" for message in messages)
@@ -210,7 +214,7 @@ def main():
         "text", "tool", "partial_tool", "stall", "tool_retry", "tool_rate_limit",
         "fallback_after_tool", "fallback_auth", "partial_text", "disconnect_once",
         "iteration_limit", "iteration_summary_tool", "partial_after_tool", "stall_on_resume", "burst", "skill",
-        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "mcp",
+        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "mcp", "web",
     ), default="text")
     args = parser.parse_args()
     if bool(args.tls_cert) != bool(args.tls_key):

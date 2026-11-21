@@ -16,6 +16,7 @@ use hermes_runtime::turn::{
     run_turn, ApprovalDecision, ApprovalRequest, CompactionOutcome, CompactionTrigger, ModelRoute,
     TurnError, TurnEvent, TurnOptions, TurnOutcome,
 };
+use hermes_runtime::web_tools::WebSettings;
 use serde::{Deserialize, Serialize};
 use tokio::task::block_in_place;
 use tokio::time::{interval_at, Instant};
@@ -60,6 +61,8 @@ pub struct ChatRequest {
     terminal_local: bool,
     #[serde(default)]
     mcp_servers: Vec<McpServerConfig>,
+    #[serde(default)]
+    web: WebSettings,
     model_override: Option<String>,
     primary: Route,
     fallbacks: Vec<Route>,
@@ -161,6 +164,7 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
             .then_some(settings.approval_timeout_secs),
         terminal_local: settings.terminal_local,
         mcp_servers: settings.mcp_servers,
+        web: settings.web,
         model_override: args.model,
         primary: Route {
             model: settings.model,
@@ -234,6 +238,7 @@ where
     let mcp = tokio::sync::Mutex::new(clients);
     let options = TurnOptions {
         mcp: Some(&mcp),
+        web: Some(&request.web),
         root,
         profile: home,
         max_turns: request.max_turns,
