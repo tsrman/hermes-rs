@@ -102,6 +102,20 @@ pub fn installed() -> Option<&'static ApprovalPolicy> {
 pub struct ApprovalPolicy {
     settings: ApprovalSettings,
     grants: Mutex<Grants>,
+    /// Set by `/yolo` in an interactive conversation; acts like `approve_all`.
+    approve_all: std::sync::atomic::AtomicBool,
+}
+
+impl ApprovalPolicy {
+    /// Switch approving everything on or off for the rest of the run.
+    pub fn set_approve_all(&self, on: bool) {
+        self.approve_all
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn approves_all(&self) -> bool {
+        self.settings.approve_all || self.approve_all.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 /// `fnmatch` with `*` and `?`, ignoring case.
@@ -162,6 +176,7 @@ impl ApprovalPolicy {
         Self {
             settings,
             grants: Mutex::new(Grants::default()),
+            approve_all: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -178,7 +193,7 @@ impl ApprovalPolicy {
             // Code can do anything its interpreter can, so no pattern list covers it: it runs
             // when everything is approved, or when this exact code was allowed before.
             ApprovalAction::RunCode => {
-                if self.settings.approve_all || grants.code.contains(&request.content) {
+                if self.approves_all() || grants.code.contains(&request.content) {
                     Verdict::Allow
                 } else {
                     Verdict::Ask
@@ -194,7 +209,7 @@ impl ApprovalPolicy {
                 {
                     return Verdict::Deny;
                 }
-                if self.settings.approve_all || grants.commands.contains(command) {
+                if self.approves_all() || grants.commands.contains(command) {
                     return Verdict::Allow;
                 }
                 let allowed = self
@@ -213,7 +228,7 @@ impl ApprovalPolicy {
             ApprovalAction::CreateFile
             | ApprovalAction::ReplaceFile
             | ApprovalAction::ManageSkills => {
-                if self.settings.approve_all || grants.edits {
+                if self.approves_all() || grants.edits {
                     Verdict::Allow
                 } else {
                     Verdict::Ask

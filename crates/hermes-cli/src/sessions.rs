@@ -6,6 +6,11 @@ use hermes_runtime::storage::{migrate_session_copy, SessionStore, TranscriptOpti
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// List recent sessions, newest first.
+    List {
+        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..))]
+        limit: u32,
+    },
     /// Print a stored transcript as JSON.
     Show {
         id: String,
@@ -49,6 +54,29 @@ pub fn run(home: &Path, command: Command) -> Result<(), String> {
                 )
                 .map_err(|error| error.to_string())?;
             serde_json::to_writer(&mut output, &transcript)
+        }
+        Command::List { limit } => {
+            let store = SessionStore::open_read_only(home).map_err(|error| error.to_string())?;
+            for session in store
+                .recent(limit, None)
+                .map_err(|error| error.to_string())?
+            {
+                let text = session
+                    .title
+                    .or(session.preview)
+                    .unwrap_or_default()
+                    .replace('\n', " ");
+                writeln!(
+                    output,
+                    "{}  {:>4} msgs  {}  {}",
+                    session.id,
+                    session.message_count,
+                    session.model.unwrap_or_default(),
+                    text
+                )
+                .map_err(|error| error.to_string())?;
+            }
+            return Ok(());
         }
         Command::Search { query, limit } => {
             let store = SessionStore::open_read_only(home).map_err(|error| error.to_string())?;

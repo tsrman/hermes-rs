@@ -161,6 +161,20 @@ pub struct SearchHit {
     pub snippet: Option<String>,
 }
 
+/// One row of the session list.
+#[derive(Debug, Serialize)]
+pub struct SessionSummary {
+    pub id: String,
+    pub source: String,
+    pub model: Option<String>,
+    pub title: Option<String>,
+    pub started_at: f64,
+    pub last_activity_at: Option<f64>,
+    pub message_count: i64,
+    /// The first thing the user asked, shortened.
+    pub preview: Option<String>,
+}
+
 pub struct SessionStore {
     connection: Connection,
 }
@@ -218,6 +232,39 @@ impl SessionStore {
         };
         transaction.commit()?;
         Ok(Transcript { session, messages })
+    }
+
+    /// The most recently active sessions that have messages, newest first. `source` limits the
+    /// list to one origin such as `cli`.
+    pub fn recent(
+        &self,
+        limit: u32,
+        source: Option<&str>,
+    ) -> Result<Vec<SessionSummary>, StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT s.id, s.source, s.model, s.title, s.started_at, s.last_activity_at,
+                    COALESCE(s.message_count, 0),
+                    (SELECT substr(m.content, 1, 80) FROM messages m
+                     WHERE m.session_id = s.id AND m.role = 'user' AND m.active = 1
+                     ORDER BY m.id LIMIT 1)
+             FROM sessions s
+             WHERE COALESCE(s.message_count, 0) > 0 AND (?1 IS NULL OR s.source = ?1)
+             ORDER BY COALESCE(s.last_activity_at, s.started_at) DESC, s.started_at DESC
+             LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![source, limit], |row| {
+            Ok(SessionSummary {
+                id: row.get(0)?,
+                source: row.get(1)?,
+                model: row.get(2)?,
+                title: row.get(3)?,
+                started_at: row.get(4)?,
+                last_activity_at: row.get(5)?,
+                message_count: row.get(6)?,
+                preview: row.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn search(&self, query: &str, limit: u32) -> Result<Vec<SearchHit>, StorageError> {

@@ -111,6 +111,7 @@ class ReplTest(ReplBase):
         self.assertEqual(process.returncode, 0, err)
         self.assertIn("/new", out)
         self.assertIn("Unknown command /nope", err)
+        self.assertRegex(err, r"\[\d+\.\ds[\] ·]")
         self.assertEqual(len(self.requests()), 2)
         self.assertEqual(len(self.sessions()), 1)
 
@@ -139,6 +140,48 @@ class ReplTest(ReplBase):
         users = [m["content"] for m in self.requests()[-1]["messages"] if m["role"] == "user"]
         self.assertEqual(users, ["remember apples", "and pears"])
         self.assertEqual(len(self.sessions()), 1)
+
+
+    def test_model_sessions_and_yolo_commands(self):
+        process, _ = self.start(tty=False)
+        out, err = process.communicate(
+            "/model\none\n/model other-model\ntwo\n/sessions\n/yolo\n/yolo\n/resume\n", timeout=30)
+        self.assertEqual(process.returncode, 0, err)
+        self.assertEqual([r["model"] for r in self.requests()], ["fixture", "other-model"])
+        self.assertIn("fixture\n", out)
+        self.assertIn("Model for the next turns: other-model", out)
+        self.assertIn(self.sessions()[0][0], out)
+        self.assertIn("yolo on", out)
+        self.assertIn("yolo off", out)
+        self.assertIn("Usage: /resume", err)
+
+    def test_continue_picks_up_the_latest_session_and_sessions_list_shows_it(self):
+        first, _ = self.start(tty=False)
+        first.communicate("about apples\n", timeout=30)
+        second, _ = self.start("--continue", tty=False)
+        _, err = second.communicate("and pears\n", timeout=30)
+        self.assertEqual(second.returncode, 0, err)
+        users = [m["content"] for m in self.requests()[-1]["messages"] if m["role"] == "user"]
+        self.assertEqual(users, ["about apples", "and pears"])
+        listing = subprocess.run([str(BINARY), "sessions", "list"], env=self.env, capture_output=True,
+                                 text=True, timeout=10)
+        self.assertEqual(listing.returncode, 0, listing.stderr)
+        self.assertIn("about apples", listing.stdout)
+        self.assertEqual(len(listing.stdout.strip().splitlines()), 1)
+
+    def test_continue_without_a_saved_session_says_so(self):
+        run = subprocess.run([str(BINARY), "chat", "--continue"], cwd=self.root, env=self.env,
+                             input="", capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("no saved session to continue", run.stderr)
+
+    def test_a_missing_provider_explains_how_to_set_one_up(self):
+        env = {k: v for k, v in self.env.items() if k != "HERMES_API_KEY"}
+        (self.profile / "config.yaml").write_text("", encoding="utf-8")
+        run = subprocess.run([str(BINARY), "chat", "-q", "hi"], cwd=self.root, env=env,
+                             capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("hermes config set model.base_url", run.stderr)
 
 
 @unittest.skipUnless(sys.platform == "linux", "requires Linux terminals")
@@ -172,6 +215,14 @@ class ReplInterruptTest(ReplBase):
         self.wait_for(master, b"interrupted")
         self.wait_for(master, PROMPT, count=2)
         self.assertIsNone(process.poll())
+        os.write(master, b"/retry\n")
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and len(self.requests()) < 2:
+            time.sleep(0.05)
+        self.assertEqual(len(self.requests()), 2, "/retry did not send the turn again")
+        self.assertEqual(self.requests()[1]["messages"][-1]["content"], "this will hang")
+        os.write(master, b"\x03")
+        self.wait_for(master, PROMPT, count=3)
         os.write(master, b"/exit\n")
         self.assertEqual(self.finish(process, master), 0)
 

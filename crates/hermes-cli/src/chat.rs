@@ -25,6 +25,9 @@ use serde::{Deserialize, Serialize};
 use tokio::task::block_in_place;
 use tokio::time::{interval_at, Instant};
 
+/// What to do when the provider is not set up yet.
+const SETUP_HINT: &str = "Set it once with `hermes config set model.provider custom`, `hermes config set model.base_url <url>`, `hermes config set model.default <model>` and put the key in the profile .env as HERMES_API_KEY (or in config.yaml as model.api_key); --base-url, --model and --api-key do the same for one run.";
+
 #[derive(Args)]
 pub struct ChatArgs {
     /// The request to run. Without it, an interactive conversation starts.
@@ -36,8 +39,11 @@ pub struct ChatArgs {
     #[arg(long)]
     save_session: bool,
     /// Continue a saved session and append a completed turn.
-    #[arg(short = 'r', long, conflicts_with = "save_session")]
+    #[arg(short = 'r', long, conflicts_with_all = ["save_session", "continue_last"])]
     resume: Option<String>,
+    /// Continue the most recent CLI session.
+    #[arg(short = 'c', long = "continue", conflicts_with = "save_session")]
+    continue_last: bool,
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     max_turns: Option<u32>,
     #[arg(long, env = "HERMES_BASE_URL")]
@@ -176,13 +182,24 @@ pub fn display(event: Event) -> io::Result<()> {
     }
 }
 
-pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, String> {
+pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, String> {
+    if args.continue_last {
+        let home = home.ok_or("profile root is unavailable")?;
+        let store = hermes_runtime::storage::SessionStore::open_read_only(home)
+            .map_err(|_| "no saved session to continue".to_owned())?;
+        let latest = store
+            .recent(1, Some("cli"))
+            .map_err(|error| error.to_string())?
+            .pop()
+            .ok_or("no saved session to continue")?;
+        args.resume = Some(latest.id);
+    }
     let settings = load_chat_settings(home)?;
     let base_url = args
         .base_url
         .or_else(|| settings.base_url.clone())
         .filter(|value| !value.is_empty())
-        .ok_or("model base URL is required")?;
+        .ok_or(format!("model base URL is required. {SETUP_HINT}"))?;
     let vendor_api_key = settings.vendor_key_for(settings.provider, &base_url);
     let api_key = args
         .api_key
@@ -190,7 +207,7 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
         .or(settings.api_key)
         .or(vendor_api_key)
         .filter(|value| !value.is_empty())
-        .ok_or("API key is required")?;
+        .ok_or(format!("API key is required. {SETUP_HINT}"))?;
     let extra_body = (settings.provider == "custom" && !settings.responses)
         .then(|| {
             let model = args.model.as_deref().or(settings.model.as_deref())?;
@@ -420,6 +437,10 @@ where
     }
     match outcome {
         TurnOutcome::Completed(turn) => {
+            if request.state_scope.is_some() {
+                let (input, output) = turn.usage();
+                emit(Event::Stderr(format!("Usage: {input} {output}")));
+            }
             if let Some(mut writer) = writer {
                 let id = block_in_place(|| writer.save(&turn, root))
                     .map_err(|error| error.to_string())?;
@@ -462,6 +483,7 @@ pub async fn run_text(
         oneshot: true,
         save_session: false,
         resume: None,
+        continue_last: false,
         max_turns: None,
         base_url: env("HERMES_BASE_URL"),
         model: model.or_else(|| env("HERMES_MODEL")),
@@ -491,6 +513,17 @@ pub async fn run_text(
 impl ChatRequest {
     pub fn is_interactive(&self) -> bool {
         self.query.is_empty()
+    }
+
+    /// The model the next turn uses: the `/model` choice, else the configured default.
+    pub fn model(&self) -> Option<&str> {
+        self.model_override
+            .as_deref()
+            .or(self.primary.model.as_deref())
+    }
+
+    pub fn set_model(&mut self, model: &str) {
+        self.model_override = Some(model.to_owned());
     }
 
     pub fn resume(&self) -> Option<&str> {

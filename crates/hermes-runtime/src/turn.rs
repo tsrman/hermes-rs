@@ -57,7 +57,7 @@ impl CompletedTurn {
     }
 
     /// Tokens the provider reported for the turn.
-    pub(crate) fn usage(&self) -> (u64, u64) {
+    pub fn usage(&self) -> (u64, u64) {
         (self.input_tokens, self.output_tokens)
     }
 
