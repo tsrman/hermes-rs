@@ -45,6 +45,12 @@ pub struct ChatArgs {
     model: Option<String>,
     #[arg(long, env = "HERMES_API_KEY", hide_env_values = true)]
     api_key: Option<String>,
+    /// Approve every file change and command without asking, except what `approvals.deny` names.
+    #[arg(long)]
+    yolo: bool,
+    /// Append what the turn sent, received and ran to this file, one JSON object per line.
+    #[arg(long, env = "HERMES_DEBUG_LOG", value_name = "FILE")]
+    debug_log: Option<OsString>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -60,9 +66,15 @@ pub struct ChatRequest {
     #[serde(default)]
     compression: CompactionSettings,
     #[serde(default)]
+    debug_log: Option<OsString>,
+    #[serde(default)]
+    approvals: hermes_runtime::approval_policy::ApprovalSettings,
+    #[serde(default)]
     approval_timeout_secs: Option<u32>,
     #[serde(default)]
     terminal_local: bool,
+    #[serde(default)]
+    terminal_env: hermes_runtime::terminal::TerminalSettings,
     #[serde(default = "default_clarify_timeout")]
     clarify_timeout_secs: u32,
     #[serde(default)]
@@ -179,9 +191,18 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
         attempts: settings.api_max_attempts,
         prompt: settings.prompt,
         compression: settings.compression,
-        approval_timeout_secs: (!args.oneshot && crate::approval::available())
+        debug_log: args.debug_log.clone(),
+        approvals: {
+            let mut approvals = settings.approvals.clone();
+            approvals.approve_all |= args.yolo;
+            approvals
+        },
+        approval_timeout_secs: ((!args.oneshot && crate::approval::available())
+            || settings.approvals.answers_without_a_person()
+            || args.yolo)
             .then_some(settings.approval_timeout_secs),
         terminal_local: settings.terminal_local,
+        terminal_env: settings.terminal_env,
         clarify_timeout_secs: settings.clarify_timeout_secs,
         mcp_servers: settings.mcp_servers,
         web: settings.web,
@@ -259,7 +280,12 @@ where
         emit(Event::Stderr(warning));
     }
     let mcp = tokio::sync::Mutex::new(clients);
+    let journal = match &request.debug_log {
+        Some(path) => Some(hermes_runtime::journal::Journal::open(Path::new(path))?),
+        None => None,
+    };
     let options = TurnOptions {
+        journal: journal.as_ref(),
         mcp: Some(&mcp),
         web: Some(&request.web),
         browser: Some(&request.browser),
@@ -271,6 +297,7 @@ where
         max_turns: request.max_turns,
         approval_timeout_secs: request.approval_timeout_secs,
         terminal_local: request.terminal_local,
+        terminal_env: Some(&request.terminal_env),
         clarify_timeout_secs: request.clarify_timeout_secs,
     };
     block_in_place(|| history.capture_prompt(&options, &request.prompt, &primary));
@@ -411,6 +438,8 @@ pub async fn run_text(
         base_url: env("HERMES_BASE_URL"),
         model: model.or_else(|| env("HERMES_MODEL")),
         api_key: env("HERMES_API_KEY"),
+        yolo: false,
+        debug_log: None,
     };
     let mut request = prepare(home, args)?;
     request.tools = hermes_runtime::config::load_tool_policy(home, platform)?;
@@ -429,4 +458,10 @@ pub async fn run_text(
     )
     .await?;
     Ok((text, code))
+}
+
+impl ChatRequest {
+    pub fn approvals(&self) -> &hermes_runtime::approval_policy::ApprovalSettings {
+        &self.approvals
+    }
 }

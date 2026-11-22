@@ -20,7 +20,7 @@ mod search;
 pub(crate) use search::{search_schema, SEARCH_FILES};
 
 const READ_LIMIT: u64 = 10_000_000;
-const WRITE_LIMIT: usize = 65_536;
+const WRITE_LIMIT: usize = 1_048_576;
 pub(crate) const WRITE_FILE: &str = "write_file";
 pub(crate) const PATCH: &str = "patch";
 
@@ -371,8 +371,13 @@ impl<'a> FileWorkspace<'a> {
             let Some(target) = plan.target.path.to_str() else {
                 return json!({"error": "The target path must be UTF-8 to display it for approval"});
             };
+            let created = plan.target.directories_to_create();
             let request = ApprovalRequest {
-                target: target.to_owned(),
+                target: if created.is_empty() {
+                    target.to_owned()
+                } else {
+                    format!("{target} (creates directories: {})", created.join(", "))
+                },
                 content: plan.content.clone(),
                 action: if plan.before.is_some() {
                     ApprovalAction::ReplaceFile
@@ -403,7 +408,17 @@ impl<'a> FileWorkspace<'a> {
                         result.insert("resolved_path".into(), json!(resolved));
                         Value::Object(result)
                     } else {
-                        json!({"success": true, "path": plan.display_path, "bytes_written": plan.content.len(), "verified": true})
+                        let resolved = plan.target.path.display().to_string();
+                        let mut result = serde_json::Map::new();
+                        result.insert("bytes_written".into(), json!(plan.content.len()));
+                        result.insert("dirs_created".into(), json!(!created.is_empty()));
+                        result.insert("verified".into(), json!(true));
+                        if let Some(lint) = plan.lint {
+                            result.insert("lint".into(), lint);
+                        }
+                        result.insert("resolved_path".into(), json!(resolved));
+                        result.insert("files_modified".into(), json!([resolved]));
+                        Value::Object(result)
                     }
                 }
                 Err(error) => json!({"error": error}),
@@ -427,10 +442,16 @@ impl<'a> FileWorkspace<'a> {
         let args: Arguments = serde_json::from_str(arguments)
             .map_err(|_| "write_file expects a path and UTF-8 text content")?;
         if args.content.len() > WRITE_LIMIT || args.content.contains('\0') {
-            return Err("write_file accepts text up to 64 KiB".into());
+            return Err("write_file accepts text up to 1 MiB".into());
         }
         let target = self.write_target(&args.path)?;
-        let before = target.inspect()?;
+        let previous = target.read_version()?;
+        let before = previous.as_ref().map(|(stamp, _)| *stamp);
+        let lint = crate::syntax_lint::lint_delta(
+            &args.path,
+            previous.as_ref().map(|(_, text)| text.as_str()),
+            &args.content,
+        );
         if let Some(stamp) = before {
             if !self
                 .observed
@@ -443,10 +464,10 @@ impl<'a> FileWorkspace<'a> {
             }
         }
         Ok(linux::WritePlan {
+            lint: Some(lint),
             target,
             content: args.content,
             before,
-            display_path: args.path,
             patch: None,
         })
     }
@@ -552,7 +573,7 @@ impl<'a> FileWorkspace<'a> {
             content.clone()
         };
         if written.len() > WRITE_LIMIT {
-            return Err("The patched file would exceed 64 KiB".into());
+            return Err("The patched file would exceed 1 MiB".into());
         }
         let lint = crate::syntax_lint::lint_delta(&args.path, Some(&original), &content);
         let path_text = target.path.display().to_string();
@@ -564,10 +585,10 @@ impl<'a> FileWorkspace<'a> {
         );
         self.patch_failures.remove(&target.path);
         Ok(Prepared::Plan(Box::new(linux::WritePlan {
+            lint: None,
             target,
             content: written,
             before: Some(before),
-            display_path: args.path,
             patch: Some((notes, diff, lint)),
         })))
     }
@@ -756,13 +777,8 @@ where
 }
 
 pub(crate) fn write_schema() -> Value {
-    json!({"type": "function", "function": {
-        "name": WRITE_FILE,
-        "description": "Create or replace a UTF-8 text file in the working directory after human approval. For an existing file, read the entire file first. The parent directory must exist.",
-        "parameters": {"type": "object", "properties": {
-            "path": {"type": "string"}, "content": {"type": "string"}
-        }, "required": ["path", "content"], "additionalProperties": false}
-    }})
+    json!({"type": "function", "function":
+        serde_json::from_str::<Value>(include_str!("schemas/write_file.json")).unwrap_or_default()})
 }
 
 pub(crate) fn patch_schema() -> Value {
@@ -877,5 +893,62 @@ mod tests {
         assert!(third["_warning"].as_str().unwrap().contains("3 times"));
         let fourth = workspace.search(r#"{"pattern": "alpha", "limit": 2}"#);
         assert_eq!(fourth["guardrail_refusal"], true);
+    }
+
+    #[tokio::test]
+    async fn write_file_creates_directories_and_accepts_large_text() {
+        use super::{ApprovalDecision, ApprovalRequest, FileWorkspace, WRITE_FILE};
+        use serde_json::json;
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut workspace = FileWorkspace::new(directory.path(), None);
+        let shown = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorder = std::sync::Arc::clone(&shown);
+        let mut approve = move |request: ApprovalRequest| {
+            recorder.lock().unwrap().push(request.target.clone());
+            async { ApprovalDecision::Approved }
+        };
+        let big = "x".repeat(300_000);
+        let arguments = json!({"path": "new/deep/file.json", "content": "{\"a\": 1}"}).to_string();
+        let result = workspace
+            .edit(WRITE_FILE, &arguments, Some(5), &mut approve)
+            .await;
+        assert_eq!(result["dirs_created"], true, "{result}");
+        assert_eq!(result["verified"], true);
+        assert_eq!(result["lint"]["status"], "ok");
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("new/deep/file.json")).unwrap(),
+            "{\"a\": 1}"
+        );
+        let arguments = json!({"path": "new/big.txt", "content": big}).to_string();
+        let result = workspace
+            .edit(WRITE_FILE, &arguments, Some(5), &mut approve)
+            .await;
+        assert_eq!(result["bytes_written"], 300_000, "{result}");
+        assert_eq!(result["dirs_created"], false);
+        let seen = shown.lock().unwrap().clone();
+        assert!(
+            seen[0].contains("creates directories: new, new/deep"),
+            "{seen:?}"
+        );
+        // Broken JSON is flagged by the syntax check, not refused.
+        let mut approve = |_: ApprovalRequest| async { ApprovalDecision::Approved };
+        let arguments = json!({"path": "bad.json", "content": "{oops"}).to_string();
+        let result = workspace
+            .edit(WRITE_FILE, &arguments, Some(5), &mut approve)
+            .await;
+        assert_eq!(result["lint"]["status"], "error");
+        // The workspace stays the limit: a path that climbs out is still refused.
+        let arguments = json!({"path": "../escape.txt", "content": "x"}).to_string();
+        let result = workspace
+            .edit(WRITE_FILE, &arguments, Some(5), &mut approve)
+            .await;
+        assert!(result["error"].is_string(), "{result}");
+        assert!(!directory
+            .path()
+            .parent()
+            .unwrap()
+            .join("escape.txt")
+            .exists());
     }
 }

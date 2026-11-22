@@ -46,6 +46,8 @@ pub struct ChatSettings {
     pub compression: CompactionSettings,
     pub approval_timeout_secs: u32,
     pub terminal_local: bool,
+    pub terminal_env: crate::terminal::TerminalSettings,
+    pub approvals: crate::approval_policy::ApprovalSettings,
     /// `clarify.timeout`, else `agent.clarify_timeout`, else 90; 0 or less waits without limit.
     pub clarify_timeout_secs: u32,
     pub mcp_servers: Vec<McpServerConfig>,
@@ -84,6 +86,8 @@ impl Default for ChatSettings {
             compression: CompactionSettings::default(),
             approval_timeout_secs: 300,
             terminal_local: true,
+            terminal_env: crate::terminal::TerminalSettings::default(),
+            approvals: crate::approval_policy::ApprovalSettings::default(),
             clarify_timeout_secs: 90,
             mcp_servers: Vec::new(),
             web: WebSettings::default(),
@@ -388,6 +392,8 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.tools = ToolPolicy::from_config(&config);
     settings.clarify_timeout_secs = clarify_timeout(&config);
     settings.prompt.memory_tool = settings.tools.allows("memory");
+    settings.terminal_env = crate::terminal::TerminalSettings::from_config(&config);
+    settings.approvals = crate::approval_policy::ApprovalSettings::from_config(&config);
     settings.terminal_local = match &config["terminal"]["backend"] {
         serde_yaml::Value::Null => terminal_env.as_deref().map_or_else(
             || {

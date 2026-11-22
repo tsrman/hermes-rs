@@ -233,10 +233,14 @@ pub struct TurnOptions<'a> {
     pub max_turns: u32,
     pub approval_timeout_secs: Option<u32>,
     pub terminal_local: bool,
+    /// Which environment variables commands see.
+    pub terminal_env: Option<&'a crate::terminal::TerminalSettings>,
     /// Seconds to wait for an answer to `clarify`; 0 waits without limit.
     pub clarify_timeout_secs: u32,
     /// Tools the profile's toolset configuration allows.
     pub tools: &'a ToolPolicy,
+    /// Where to record what the turn sent, received and ran, when asked.
+    pub journal: Option<&'a crate::journal::Journal>,
 }
 
 impl TurnOptions<'_> {
@@ -294,6 +298,9 @@ where
     for _ in 0..options.max_turns {
         let result = loop {
             let request = chat_request(&route.model, &messages, &tools);
+            if let Some(journal) = options.journal {
+                journal.record("request", json!({"body": request}));
+            }
             let mut emitted_text = false;
             let result = route
                 .provider
@@ -303,8 +310,25 @@ where
                 })
                 .await;
             match result {
-                Ok(result) => break result,
+                Ok(result) => {
+                    if let Some(journal) = options.journal {
+                        journal.record(
+                            "response",
+                            json!({
+                                "content": result.content,
+                                "finish_reason": result.finish_reason,
+                                "tool_calls": result.tool_calls.iter().map(|call| json!({
+                                    "id": call.id, "name": call.name, "arguments": call.arguments
+                                })).collect::<Vec<_>>(),
+                            }),
+                        );
+                    }
+                    break result;
+                }
                 Err(error) => {
+                    if let Some(journal) = options.journal {
+                        journal.record("provider_error", json!({"error": format!("{error:?}")}));
+                    }
                     if emitted_text || !error.allows_fallback() {
                         return Err(TurnError::Provider(error));
                     }
@@ -359,6 +383,7 @@ where
                 };
             let through_bridge = name != call.name;
             on_event(TurnEvent::ToolStarted(&name));
+            let started = std::time::Instant::now();
             let mcp_tool = match options.mcp {
                 Some(mcp) if name.starts_with("mcp_") && !through_bridge => {
                     let mcp = mcp.lock().await;
@@ -402,6 +427,16 @@ where
             let succeeded = structured.get("error").is_none_or(Value::is_null)
                 && structured["success"].as_bool() != Some(false)
                 && (name != TERMINAL || structured["exit_code"].as_i64() == Some(0));
+            if let Some(journal) = options.journal {
+                journal.record(
+                    "tool",
+                    json!({
+                        "id": call.id, "name": name, "via": call.name, "arguments": arguments,
+                        "output": content, "succeeded": succeeded,
+                        "millis": started.elapsed().as_millis() as u64,
+                    }),
+                );
+            }
             messages.push(json!({"role": "tool", "tool_call_id": call.id, "content": content}));
             on_event(TurnEvent::ToolFinished {
                 name: &name,

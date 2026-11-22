@@ -98,6 +98,7 @@ async fn run() -> Result<u8, String> {
         }
         Command::Chat(args) => {
             let request = chat::prepare(home, args)?;
+            approval::install(request.approvals().clone());
             #[cfg(unix)]
             if let Some(home) = home {
                 if let Some(connection) = owner::connect(home).await? {

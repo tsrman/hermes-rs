@@ -489,3 +489,65 @@ class TerminalToolTest(ToolTestCase):
                     time.sleep(0.02)
                 else:
                     self.fail(f"child {child} remained active")
+
+
+@unittest.skipUnless(sys.platform == "linux", "requires Linux file approvals")
+class UnattendedWorkTest(ToolTestCase):
+    """What makes a long task workable: approval rules, the user's environment, a remembered
+    directory, directories created on write, and a journal of the run."""
+
+    def run_tool(self, tool, arguments, *flags, config=""):
+        if config:
+            (self.profile / "config.yaml").write_text(self.config + config, encoding="utf-8")
+        command = [*self.command(tool=tool, arguments=arguments), "--oneshot", *flags]
+        run = subprocess.run(command, cwd=self.root, env=self.env, stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True, timeout=30)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        return self.last_tool_result()
+
+    def test_yolo_approves_work_without_a_terminal_and_the_deny_list_still_blocks(self):
+        result, _ = self.run_tool(
+            "write_file", {"path": "made/by/yolo.txt", "content": "hello"}, "--yolo")
+        self.assertTrue(result["dirs_created"], result)
+        self.assertEqual((self.root / "made/by/yolo.txt").read_text(), "hello")
+        denied, _ = self.run_tool(
+            "terminal", {"command": "rm -rf precious"}, "--yolo",
+            config="  deny: ['rm -rf*']\n")
+        self.assertEqual(denied["status"], "approval_denied")
+        ran, _ = self.run_tool("terminal", {"command": "echo ok"}, "--yolo")
+        self.assertEqual(ran["output"], "ok\n")
+
+    def test_configured_allow_list_needs_no_person_but_a_chain_is_refused(self):
+        config = "  allow: ['echo *']\n"
+        ran, requests = self.run_tool("terminal", {"command": "echo fine"}, config=config)
+        self.assertEqual(ran["output"], "fine\n", ran)
+        chained, _ = self.run_tool("terminal", {"command": "echo a; echo b"}, config=config)
+        self.assertEqual(chained["status"], "approval_unavailable")
+
+    def test_commands_see_the_toolchain_environment_and_keep_the_directory(self):
+        (self.root / "sub").mkdir()
+        self.env["HERMES_FIXTURE_TOOL"] = "visible"
+        (self.profile / "config.yaml").write_text(
+            self.config + "terminal:\n  env_passthrough: [HERMES_FIXTURE_TOOL]\n", encoding="utf-8")
+        result, _ = self.run_tool(
+            "terminal",
+            {"command": "echo $HERMES_FIXTURE_TOOL; echo ${HERMES_API_KEY:-withheld}; command -v git cargo sh | head -1; cd sub"},
+            "--yolo")
+        lines = result["output"].splitlines()
+        self.assertEqual(lines[:2], ["visible", "withheld"])
+        self.assertTrue(lines[2].startswith("/"), lines)
+        self.assertEqual(result["cwd"], str(self.root / "sub"))
+
+    def test_the_debug_journal_records_requests_responses_and_tools_redacted(self):
+        journal = self.root / "journal.jsonl"
+        self.env["HERMES_DEBUG_LOG"] = str(journal)
+        key = "ghp_abcdefghijklmnop1234567890"
+        self.run_tool("terminal", {"command": f"echo {key}"}, "--yolo")
+        events = [json.loads(line) for line in journal.read_text().splitlines()]
+        kinds = [event["event"] for event in events]
+        self.assertEqual(kinds[0], "request")
+        self.assertIn("response", kinds)
+        tool = next(event for event in events if event["event"] == "tool")
+        self.assertEqual(tool["name"], "terminal")
+        self.assertNotIn(key, journal.read_text())
+        self.assertEqual(oct(journal.stat().st_mode & 0o777), "0o600")

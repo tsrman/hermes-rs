@@ -12,7 +12,36 @@ pub fn available() -> bool {
     }
 }
 
+use std::sync::OnceLock;
+
+use hermes_runtime::approval_policy::{ApprovalPolicy, ApprovalSettings, Verdict};
+
+static POLICY: OnceLock<ApprovalPolicy> = OnceLock::new();
+
+/// Set the rules that decide before the person is asked. The first call wins.
+pub fn install(settings: ApprovalSettings) {
+    let _ = POLICY.set(ApprovalPolicy::new(settings));
+}
+
 pub async fn prompt(request: ApprovalRequest) -> ApprovalDecision {
+    if let Some(policy) = POLICY.get() {
+        match policy.decide(&request) {
+            Verdict::Allow => return ApprovalDecision::Approved,
+            Verdict::Deny => return ApprovalDecision::Denied,
+            Verdict::Ask => {}
+        }
+    }
+    let (decision, always) = ask_person(&request).await;
+    if always && matches!(decision, ApprovalDecision::Approved) {
+        if let Some(policy) = POLICY.get() {
+            policy.remember(&request);
+        }
+    }
+    decision
+}
+
+/// The person's answer, and whether it was "always".
+async fn ask_person(request: &ApprovalRequest) -> (ApprovalDecision, bool) {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use std::time::Duration;
@@ -21,34 +50,37 @@ pub async fn prompt(request: ApprovalRequest) -> ApprovalDecision {
 
         if matches!(request.action, ApprovalAction::Clarify) {
             // A limit of 0 waits for as long as the person takes.
-            let asking = terminal::ask_questions(&request);
+            let asking = terminal::ask_questions(request);
             let outcome = if request.timeout_secs == 0 {
                 Ok(asking.await)
             } else {
                 tokio::time::timeout(Duration::from_secs(u64::from(request.timeout_secs)), asking)
                     .await
             };
-            return match outcome {
-                Ok(Ok(decision)) => decision,
-                Ok(Err(_)) => ApprovalDecision::Unavailable,
-                Err(_) => ApprovalDecision::TimedOut,
-            };
+            return (
+                match outcome {
+                    Ok(Ok(decision)) => decision,
+                    Ok(Err(_)) => ApprovalDecision::Unavailable,
+                    Err(_) => ApprovalDecision::TimedOut,
+                },
+                false,
+            );
         }
         match tokio::time::timeout(
             Duration::from_secs(u64::from(request.timeout_secs)),
-            terminal::ask(&request),
+            terminal::ask(request),
         )
         .await
         {
-            Ok(Ok(decision)) => decision,
-            Ok(Err(_)) => ApprovalDecision::Unavailable,
-            Err(_) => ApprovalDecision::TimedOut,
+            Ok(Ok(answer)) => answer,
+            Ok(Err(_)) => (ApprovalDecision::Unavailable, false),
+            Err(_) => (ApprovalDecision::TimedOut, false),
         }
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = request;
-        ApprovalDecision::Unavailable
+        (ApprovalDecision::Unavailable, false)
     }
 }
 
@@ -111,7 +143,7 @@ mod terminal {
         Ok(OsStr::from_bytes(path.to_bytes()).into())
     }
 
-    pub(super) async fn ask(request: &ApprovalRequest) -> io::Result<ApprovalDecision> {
+    pub(super) async fn ask(request: &ApprovalRequest) -> io::Result<(ApprovalDecision, bool)> {
         let tty = open()?;
         // SAFETY: tcflush clears pending terminal input on a live descriptor.
         if unsafe { libc::tcflush(tty.as_raw_fd(), libc::TCIFLUSH) } != 0 {
@@ -125,9 +157,28 @@ mod terminal {
             ApprovalAction::ManageSkills => ("Change skills in", "Changes"),
             ApprovalAction::Clarify => return Err(io::Error::from(io::ErrorKind::InvalidInput)),
         };
+        // A command is shown whole; a large file is shown in part, since the person approves
+        // the place and the change, not a megabyte of text.
+        let shown = if matches!(request.action, ApprovalAction::RunCommand)
+            || request.content.chars().count() <= 6000
+        {
+            format!("{:?}", request.content)
+        } else {
+            let head: String = request.content.chars().take(6000).collect();
+            format!(
+                "{:?} … ({} more characters)",
+                head,
+                request.content.chars().count() - 6000
+            )
+        };
+        let always = if matches!(request.action, ApprovalAction::RunCommand) {
+            "Answer a to always allow this exact command in this conversation."
+        } else {
+            "Answer a to always allow file changes in this conversation."
+        };
         let prompt = format!(
-            "\n{action} {:?}\n{preview} (escaped)\n{:?}\nApprove once? [y/N] ",
-            request.target, request.content
+            "\n{action} {:?}\n{preview} (escaped)\n{shown}\n{always}\nApprove once? [y/N] ",
+            request.target
         );
         let mut remaining = prompt.as_bytes();
         while !remaining.is_empty() {
@@ -145,24 +196,29 @@ mod terminal {
         loop {
             let mut ready = tty.readable().await?;
             match ready.try_io(|fd| fd.get_ref().read(&mut bytes)) {
-                Ok(Ok(0)) => return Ok(ApprovalDecision::Denied),
+                Ok(Ok(0)) => return Ok((ApprovalDecision::Denied, false)),
                 Ok(Ok(count)) => {
                     let received = &bytes[..count];
                     if let Some(end) = received.iter().position(|&byte| byte == b'\n') {
                         answer.extend_from_slice(&received[..end]);
-                        let confirmed = std::str::from_utf8(&answer).ok().is_some_and(|answer| {
-                            let answer = answer.trim();
-                            answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes")
-                        });
-                        return Ok(if confirmed {
-                            ApprovalDecision::Approved
-                        } else {
-                            ApprovalDecision::Denied
-                        });
+                        let text = std::str::from_utf8(&answer)
+                            .unwrap_or("")
+                            .trim()
+                            .to_lowercase();
+                        let always = matches!(text.as_str(), "a" | "always");
+                        let confirmed = always || matches!(text.as_str(), "y" | "yes");
+                        return Ok((
+                            if confirmed {
+                                ApprovalDecision::Approved
+                            } else {
+                                ApprovalDecision::Denied
+                            },
+                            always,
+                        ));
                     }
                     answer.extend_from_slice(received);
                     if answer.len() >= bytes.len() {
-                        return Ok(ApprovalDecision::Denied);
+                        return Ok((ApprovalDecision::Denied, false));
                     }
                 }
                 Ok(Err(error)) => return Err(error),

@@ -5,16 +5,17 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
-use rustix::fs::{openat, renameat, renameat_with, Mode, OFlags, RenameFlags};
+use rustix::fs::{mkdirat, openat, renameat, renameat_with, Mode, OFlags, RenameFlags};
 use rustix::io::Errno;
 
 use super::{directory::open_directory, fingerprint, WRITE_LIMIT};
 
 pub(super) struct WritePlan {
+    /// The syntax check of a whole-file write.
+    pub(super) lint: Option<serde_json::Value>,
     pub(super) target: Target,
     pub(super) content: String,
     pub(super) before: Option<Stamp>,
-    pub(super) display_path: String,
     pub(super) patch: Option<(Vec<String>, String, serde_json::Value)>,
 }
 
@@ -31,6 +32,8 @@ pub(super) struct Target {
     root: PathBuf,
     parent: File,
     filename: OsString,
+    /// Directories on the way to the file that do not exist yet, created at commit time.
+    pending: Vec<OsString>,
 }
 
 impl Target {
@@ -42,14 +45,42 @@ impl Target {
         let Some(Component::Normal(filename)) = components.next_back() else {
             return Err("A file name is required".into());
         };
-        let parent = open_directory(root, &root.join(components.as_path()))?;
+        let (parent, pending) = open_existing_prefix(root, components.as_path())?;
         let canonical_path = root.join(relative.components().as_path());
         Ok(Self {
             path: canonical_path,
             root: root.to_owned(),
             parent,
             filename: filename.to_owned(),
+            pending,
         })
+    }
+
+    /// Directories this write will create, as paths relative to the workspace.
+    pub(super) fn directories_to_create(&self) -> Vec<String> {
+        let existing = self
+            .path
+            .strip_prefix(&self.root)
+            .ok()
+            .map(|relative| {
+                relative
+                    .components()
+                    .count()
+                    .saturating_sub(1 + self.pending.len())
+            })
+            .unwrap_or(0);
+        let mut base: PathBuf = self
+            .path
+            .strip_prefix(&self.root)
+            .map(|relative| relative.components().take(existing).collect())
+            .unwrap_or_default();
+        self.pending
+            .iter()
+            .map(|name| {
+                base.push(name);
+                base.display().to_string()
+            })
+            .collect()
     }
 
     pub(super) fn inspect(&self) -> Result<Option<Stamp>, String> {
@@ -58,6 +89,9 @@ impl Target {
     }
 
     pub(super) fn read_version(&self) -> Result<Option<(Stamp, String)>, String> {
+        if !self.pending.is_empty() {
+            return Ok(None);
+        }
         read_version(&self.parent, &self.filename)
     }
 
@@ -68,6 +102,24 @@ impl Target {
     }
 
     pub(super) fn commit(&self, content: &str, before: Option<Stamp>) -> Result<(), String> {
+        if !self.pending.is_empty() {
+            // Make the missing directories one at a time, never following a link, then write
+            // through a fresh handle on the finished path.
+            let mut directory = self.parent.try_clone().map_err(error)?;
+            for name in &self.pending {
+                match mkdirat(&directory, name, Mode::from_raw_mode(0o755)) {
+                    Ok(()) | Err(Errno::EXIST) => {}
+                    Err(err) => return Err(error(err)),
+                }
+                directory =
+                    File::from(openat(&directory, name, DIRECTORY, Mode::empty()).map_err(error)?);
+            }
+            let finished = Self::open(&self.root, &self.path)?;
+            if !finished.pending.is_empty() {
+                return Err("The target directory could not be created".into());
+            }
+            return finished.commit(content, None);
+        }
         // Serialize approved writes in one directory across local CLI processes.
         // The lock is held only during the write, never while waiting for approval.
         self.parent.try_lock().map_err(|err| err.to_string())?;
@@ -121,6 +173,38 @@ impl Target {
     }
 }
 
+const DIRECTORY: OFlags = OFlags::RDONLY
+    .union(OFlags::DIRECTORY)
+    .union(OFlags::NOFOLLOW)
+    .union(OFlags::CLOEXEC);
+
+/// The deepest existing directory of `relative` under `root`, and the names after it.
+fn open_existing_prefix(root: &Path, relative: &Path) -> Result<(File, Vec<OsString>), String> {
+    let mut directory = open_directory(root, root)?;
+    let mut components = relative.components();
+    let mut pending: Vec<OsString> = Vec::new();
+    while let Some(component) = components.next() {
+        let Component::Normal(name) = component else {
+            return Err("A path without parent traversal is required".into());
+        };
+        match openat(&directory, name, DIRECTORY, Mode::empty()) {
+            Ok(next) => directory = File::from(next),
+            Err(Errno::NOENT) => {
+                pending.push(name.to_owned());
+                for rest in components.by_ref() {
+                    let Component::Normal(rest) = rest else {
+                        return Err("A path without parent traversal is required".into());
+                    };
+                    pending.push(rest.to_owned());
+                }
+                break;
+            }
+            Err(err) => return Err(error(err)),
+        }
+    }
+    Ok((directory, pending))
+}
+
 fn read_version(parent: &File, name: &OsStr) -> Result<Option<(Stamp, String)>, String> {
     let file = match open_file(parent, name) {
         Ok(file) => File::from(file),
@@ -130,14 +214,14 @@ fn read_version(parent: &File, name: &OsStr) -> Result<Option<(Stamp, String)>, 
     };
     let metadata = file.metadata().map_err(error)?;
     if !metadata.is_file() || metadata.len() > WRITE_LIMIT as u64 {
-        return Err("The target must be a regular text file no larger than 64 KiB".into());
+        return Err("The target must be a regular text file no larger than 1 MiB".into());
     }
     let mut content = String::new();
     file.take(WRITE_LIMIT as u64 + 1)
         .read_to_string(&mut content)
         .map_err(error)?;
     if content.len() > WRITE_LIMIT || content.contains('\0') {
-        return Err("The target must be a UTF-8 text file no larger than 64 KiB".into());
+        return Err("The target must be a UTF-8 text file no larger than 1 MiB".into());
     }
     let stamp = Stamp {
         content: fingerprint(content.as_bytes()),

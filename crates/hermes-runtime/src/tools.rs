@@ -152,7 +152,19 @@ fn terminal_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFutur
         let background = (cx.options.tools.allows(PROCESS_MANAGE)
             && !cx.options.tools.is_deferred(PROCESS_MANAGE))
         .then(|| cx.options.session_id.unwrap_or("default"));
-        terminal::execute(cx.files, args, timeout, background, &mut cx.approve).await
+        let defaults = terminal::TerminalSettings::default();
+        let settings = cx.options.terminal_env.unwrap_or(&defaults);
+        let session = cx.options.session_id.unwrap_or("default");
+        terminal::execute(
+            cx.files,
+            args,
+            timeout,
+            background,
+            settings,
+            session,
+            &mut cx.approve,
+        )
+        .await
     })
 }
 
@@ -548,6 +560,7 @@ mod tests {
             "skills_list",
             "web_extract",
             "web_search",
+            "write_file",
         ];
         for ours in offered_schemas(&env) {
             let name = ours["function"]["name"].as_str().unwrap();
