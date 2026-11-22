@@ -409,7 +409,7 @@ fn rewrite_resolved_hermes_home(command: &str, env: &HomeEnv) -> String {
 
 // ---- normalization ------------------------------------------------------------------------
 
-fn nfkc(text: &str) -> String {
+pub fn nfkc(text: &str) -> String {
     ComposingNormalizerBorrowed::new_nfkc()
         .normalize(text)
         .into_owned()

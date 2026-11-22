@@ -9,14 +9,20 @@
 //! Ported: `budget` (scan work bound), `shell_scan` (quote/escape state machine, substitution ends,
 //! `substitution_depth`), `ansi_c` (`$'...'` expansion), `normalize` (detection-time normalization;
 //! POSIX home folding only, see its header), `shell_words` (word reader, literal-substitution
-//! deobfuscator), `wrappers` (wrapper tables, partial) and `command_starts` (command positions).
+//! deobfuscator), `wrappers` (wrapper tables), `command_starts` (command positions), `wrapper_prefix`
+//! (wrapper peeling, literal heredoc bodies, `rm` dequoting), `env_split` (`env -S`), `text_masks`
+//! (quoted-newline masking, parser limits) and `patterns` (`_CMDPOS`).
 
 pub mod ansi_c;
 pub mod budget;
 pub mod command_starts;
+pub mod env_split;
 pub mod normalize;
+pub mod patterns;
 pub mod shell_scan;
 pub mod shell_words;
+pub mod text_masks;
+pub mod wrapper_prefix;
 pub mod wrappers;
 
 /// Python's `str.isspace` / regex `\s` for `str`: Unicode White_Space plus the separators

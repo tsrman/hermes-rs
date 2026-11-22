@@ -206,7 +206,7 @@ fn replace_simple_shell_expansions(word: &str) -> Result<String, BudgetExceeded>
     Ok(DEFAULT.replace_all(&word, "$1").into_owned())
 }
 
-fn strip_shell_word_syntax(word: &str) -> Result<String, BudgetExceeded> {
+pub fn strip_shell_word_syntax(word: &str) -> Result<String, BudgetExceeded> {
     let text = Text::new(word);
     let mut out = String::new();
     for step in scan_shell(&text, 0, None, ScanOpts::default()) {

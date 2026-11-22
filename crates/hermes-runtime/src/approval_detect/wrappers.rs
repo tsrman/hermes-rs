@@ -201,3 +201,88 @@ pub fn is_query_option(base: &str, word: &str) -> bool {
             .chars()
             .any(|c| queries.contains(&format!("-{c}").as_str()))
 }
+
+/// `approval_wrappers._WRAPPER_WORDS`: the wrappers the hardline peel strips.
+pub const PEEL_WRAPPER_WORDS: [&str; 14] = [
+    "sudo", "doas", "env", "exec", "nohup", "setsid", "time", "command", "builtin", "nice",
+    "ionice", "stdbuf", "timeout", "xargs",
+];
+
+/// sudo's no-operand long options (getopt_long accepts any unambiguous prefix).
+pub const SUDO_LONG_FLAGS: [&str; 14] = [
+    "--askpass",
+    "--background",
+    "--bell",
+    "--preserve-env",
+    "--edit",
+    "--set-home",
+    "--help",
+    "--login",
+    "--reset-timestamp",
+    "--non-interactive",
+    "--preserve-groups",
+    "--stdin",
+    "--shell",
+    "--version",
+];
+
+/// The full name of an abbreviated sudo long option (`--chd=x` -> `--chdir=x`).
+pub fn long_option(base: &str, word: &str) -> String {
+    let (name, rest) = match word.find('=') {
+        Some(k) => (&word[..k], &word[k..]),
+        None => (word, ""),
+    };
+    if base != "sudo" || !name.starts_with("--") {
+        return word.to_owned();
+    }
+    let mut known: Vec<&str> = Vec::new();
+    for list in [
+        str_operand("sudo"),
+        num_operand("sudo"),
+        query_options("sudo"),
+        &SUDO_LONG_FLAGS[..],
+    ] {
+        for option in list {
+            if option.starts_with("--") && !known.contains(option) {
+                known.push(option);
+            }
+        }
+    }
+    let hits: Vec<&&str> = known.iter().filter(|o| o.starts_with(name)).collect();
+    if !known.contains(&name) && hits.len() == 1 {
+        format!("{}{rest}", hits[0])
+    } else {
+        word.to_owned()
+    }
+}
+
+/// `'str'` / `'num'` when `word` is an option of `base` owning the NEXT word.
+pub fn option_kind(base: &str, word: &str) -> Option<&'static str> {
+    let option = if word.starts_with("--") {
+        word.to_owned()
+    } else {
+        let (_, option, attached) = short_bundle(base, word);
+        if option.is_none() || !attached.is_empty() {
+            return None;
+        }
+        option?
+    };
+    if str_operand(base).contains(&option.as_str()) {
+        Some("str")
+    } else if num_operand(base).contains(&option.as_str()) {
+        Some("num")
+    } else {
+        None
+    }
+}
+
+/// `_is_env_split_option`.
+pub fn is_env_split_option(base: &str, word: &str) -> bool {
+    if base != "env" {
+        return false;
+    }
+    if word.starts_with("--") {
+        return word.split('=').next() == Some("--split-string");
+    }
+    short_bundle(base, word).1.as_deref() == Some("-S")
+}
