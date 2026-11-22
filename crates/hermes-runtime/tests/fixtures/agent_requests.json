@@ -566,7 +566,6 @@
    "body": {
     "model": "fixture",
     "store": false,
-    "prompt_cache_key": "pck_94790d691e03086f5ce12620",
     "reasoning": {
      "effort": "medium",
      "summary": "auto"
@@ -583,7 +582,6 @@
    "body": {
     "model": "fixture",
     "store": false,
-    "prompt_cache_key": "pck_4594379b524fa634c42d57b4",
     "reasoning": {
      "effort": "medium",
      "summary": "auto"
@@ -603,7 +601,6 @@
    "body": {
     "model": "fixture",
     "store": false,
-    "prompt_cache_key": "pck_6f4a829b7f33aab542a8e082",
     "reasoning": {
      "effort": "medium",
      "summary": "auto"
@@ -623,7 +620,6 @@
    "body": {
     "model": "fixture",
     "store": false,
-    "prompt_cache_key": "pck_3d1b25b994be2e475952b6c5",
     "reasoning": {
      "effort": "medium",
      "summary": "auto"
@@ -643,7 +639,6 @@
    "body": {
     "model": "fixture",
     "store": false,
-    "prompt_cache_key": "pck_d51bf57c28399be363042b6d",
     "reasoning": {
      "effort": "medium",
      "summary": "auto"
@@ -663,7 +658,6 @@
    "body": {
     "model": "fixture",
     "store": false,
-    "prompt_cache_key": "pck_96cba6a5065190519e108e1b",
     "reasoning": {
      "effort": "medium",
      "summary": "auto"
@@ -680,7 +674,6 @@
    "body": {
     "model": "fixture",
     "store": false,
-    "prompt_cache_key": "pck_30dd44dab5bf246ef0c92cfa",
     "reasoning": {
      "effort": "medium",
      "summary": "auto"
@@ -697,7 +690,6 @@
    "body": {
     "model": "fixture",
     "store": false,
-    "prompt_cache_key": "pck_ab70c37d4d9bd22931a8b6e1",
     "reasoning": {
      "effort": "medium",
      "summary": "auto"
@@ -714,7 +706,6 @@
    "body": {
     "model": "fixture",
     "store": false,
-    "prompt_cache_key": "pck_069cb9639aef0c77cf9234d8",
     "reasoning": {
      "effort": "high",
      "summary": "auto"
@@ -723,6 +714,1098 @@
      "reasoning.encrypted_content"
     ],
     "timeout": 1800.0
+   }
+  }
+ ],
+ "custom_profile": [
+  {
+   "base_url": "http://127.0.0.1:8000/v1",
+   "config": {
+    "enabled": true,
+    "effort": "minimal"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "minimal"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:8000/v1",
+   "config": {
+    "enabled": true,
+    "effort": "low"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:8000/v1",
+   "config": {
+    "enabled": true,
+    "effort": "medium"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:8000/v1",
+   "config": {
+    "enabled": true,
+    "effort": "high"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:8000/v1",
+   "config": {
+    "enabled": true,
+    "effort": "xhigh"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "xhigh"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:8000/v1",
+   "config": {
+    "enabled": true,
+    "effort": "max"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:8000/v1",
+   "config": {
+    "enabled": true,
+    "effort": "ultra"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:8000/v1",
+   "config": {
+    "enabled": true,
+    "effort": "fast"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "fast"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:8000/v1",
+   "config": {
+    "enabled": false
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "base_url": "https://api.groq.com/openai/v1",
+   "config": {
+    "enabled": true,
+    "effort": "minimal"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "default"
+   }
+  },
+  {
+   "base_url": "https://api.groq.com/openai/v1",
+   "config": {
+    "enabled": true,
+    "effort": "low"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "default"
+   }
+  },
+  {
+   "base_url": "https://api.groq.com/openai/v1",
+   "config": {
+    "enabled": true,
+    "effort": "medium"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "default"
+   }
+  },
+  {
+   "base_url": "https://api.groq.com/openai/v1",
+   "config": {
+    "enabled": true,
+    "effort": "high"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "default"
+   }
+  },
+  {
+   "base_url": "https://api.groq.com/openai/v1",
+   "config": {
+    "enabled": true,
+    "effort": "xhigh"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "default"
+   }
+  },
+  {
+   "base_url": "https://api.groq.com/openai/v1",
+   "config": {
+    "enabled": true,
+    "effort": "max"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "default"
+   }
+  },
+  {
+   "base_url": "https://api.groq.com/openai/v1",
+   "config": {
+    "enabled": true,
+    "effort": "ultra"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "default"
+   }
+  },
+  {
+   "base_url": "https://api.groq.com/openai/v1",
+   "config": {
+    "enabled": true,
+    "effort": "fast"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "default"
+   }
+  },
+  {
+   "base_url": "https://api.groq.com/openai/v1",
+   "config": {
+    "enabled": false
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "base_url": "https://eu.api.groq.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "minimal"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "default"
+   }
+  },
+  {
+   "base_url": "https://eu.api.groq.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "low"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "default"
+   }
+  },
+  {
+   "base_url": "https://eu.api.groq.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "medium"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "default"
+   }
+  },
+  {
+   "base_url": "https://eu.api.groq.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "high"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "default"
+   }
+  },
+  {
+   "base_url": "https://eu.api.groq.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "xhigh"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "default"
+   }
+  },
+  {
+   "base_url": "https://eu.api.groq.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "max"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "default"
+   }
+  },
+  {
+   "base_url": "https://eu.api.groq.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "ultra"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "default"
+   }
+  },
+  {
+   "base_url": "https://eu.api.groq.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "fast"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "default"
+   }
+  },
+  {
+   "base_url": "https://eu.api.groq.com/v1",
+   "config": {
+    "enabled": false
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "base_url": "https://notgroq.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "minimal"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "minimal"
+   }
+  },
+  {
+   "base_url": "https://notgroq.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "low"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "base_url": "https://notgroq.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "medium"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "base_url": "https://notgroq.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "high"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "base_url": "https://notgroq.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "xhigh"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "xhigh"
+   }
+  },
+  {
+   "base_url": "https://notgroq.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "max"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "https://notgroq.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "ultra"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "https://notgroq.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "fast"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "fast"
+   }
+  },
+  {
+   "base_url": "https://notgroq.com/v1",
+   "config": {
+    "enabled": false
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "base_url": "http://localhost:11434/v1",
+   "config": {
+    "enabled": true,
+    "effort": "minimal"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "minimal"
+   }
+  },
+  {
+   "base_url": "http://localhost:11434/v1",
+   "config": {
+    "enabled": true,
+    "effort": "low"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "base_url": "http://localhost:11434/v1",
+   "config": {
+    "enabled": true,
+    "effort": "medium"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "base_url": "http://localhost:11434/v1",
+   "config": {
+    "enabled": true,
+    "effort": "high"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "base_url": "http://localhost:11434/v1",
+   "config": {
+    "enabled": true,
+    "effort": "xhigh"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "xhigh"
+   }
+  },
+  {
+   "base_url": "http://localhost:11434/v1",
+   "config": {
+    "enabled": true,
+    "effort": "max"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "http://localhost:11434/v1",
+   "config": {
+    "enabled": true,
+    "effort": "ultra"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "http://localhost:11434/v1",
+   "config": {
+    "enabled": true,
+    "effort": "fast"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "fast"
+   }
+  },
+  {
+   "base_url": "http://localhost:11434/v1",
+   "config": {
+    "enabled": false
+   },
+   "extra_body": {
+    "think": false
+   },
+   "top_level": {
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:11434/v1",
+   "config": {
+    "enabled": true,
+    "effort": "minimal"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "minimal"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:11434/v1",
+   "config": {
+    "enabled": true,
+    "effort": "low"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:11434/v1",
+   "config": {
+    "enabled": true,
+    "effort": "medium"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:11434/v1",
+   "config": {
+    "enabled": true,
+    "effort": "high"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:11434/v1",
+   "config": {
+    "enabled": true,
+    "effort": "xhigh"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "xhigh"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:11434/v1",
+   "config": {
+    "enabled": true,
+    "effort": "max"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:11434/v1",
+   "config": {
+    "enabled": true,
+    "effort": "ultra"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:11434/v1",
+   "config": {
+    "enabled": true,
+    "effort": "fast"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "fast"
+   }
+  },
+  {
+   "base_url": "http://127.0.0.1:11434/v1",
+   "config": {
+    "enabled": false
+   },
+   "extra_body": {
+    "think": false
+   },
+   "top_level": {
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "base_url": "https://ollama.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "minimal"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "minimal"
+   }
+  },
+  {
+   "base_url": "https://ollama.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "low"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "base_url": "https://ollama.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "medium"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "base_url": "https://ollama.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "high"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "base_url": "https://ollama.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "xhigh"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "xhigh"
+   }
+  },
+  {
+   "base_url": "https://ollama.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "max"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "https://ollama.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "ultra"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "https://ollama.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "fast"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "fast"
+   }
+  },
+  {
+   "base_url": "https://ollama.com/v1",
+   "config": {
+    "enabled": false
+   },
+   "extra_body": {
+    "think": false
+   },
+   "top_level": {
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "base_url": "https://api.ollama.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "minimal"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "minimal"
+   }
+  },
+  {
+   "base_url": "https://api.ollama.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "low"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "base_url": "https://api.ollama.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "medium"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "base_url": "https://api.ollama.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "high"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "base_url": "https://api.ollama.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "xhigh"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "xhigh"
+   }
+  },
+  {
+   "base_url": "https://api.ollama.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "max"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "https://api.ollama.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "ultra"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "https://api.ollama.com/v1",
+   "config": {
+    "enabled": true,
+    "effort": "fast"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "fast"
+   }
+  },
+  {
+   "base_url": "https://api.ollama.com/v1",
+   "config": {
+    "enabled": false
+   },
+   "extra_body": {
+    "think": false
+   },
+   "top_level": {
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "base_url": "http://ollama.internal:8080/v1",
+   "config": {
+    "enabled": true,
+    "effort": "minimal"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "minimal"
+   }
+  },
+  {
+   "base_url": "http://ollama.internal:8080/v1",
+   "config": {
+    "enabled": true,
+    "effort": "low"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "base_url": "http://ollama.internal:8080/v1",
+   "config": {
+    "enabled": true,
+    "effort": "medium"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "base_url": "http://ollama.internal:8080/v1",
+   "config": {
+    "enabled": true,
+    "effort": "high"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "base_url": "http://ollama.internal:8080/v1",
+   "config": {
+    "enabled": true,
+    "effort": "xhigh"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "xhigh"
+   }
+  },
+  {
+   "base_url": "http://ollama.internal:8080/v1",
+   "config": {
+    "enabled": true,
+    "effort": "max"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "http://ollama.internal:8080/v1",
+   "config": {
+    "enabled": true,
+    "effort": "ultra"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "http://ollama.internal:8080/v1",
+   "config": {
+    "enabled": true,
+    "effort": "fast"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "fast"
+   }
+  },
+  {
+   "base_url": "http://ollama.internal:8080/v1",
+   "config": {
+    "enabled": false
+   },
+   "extra_body": {
+    "think": false
+   },
+   "top_level": {
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "base_url": "http://my.ollama/v1",
+   "config": {
+    "enabled": true,
+    "effort": "minimal"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "minimal"
+   }
+  },
+  {
+   "base_url": "http://my.ollama/v1",
+   "config": {
+    "enabled": true,
+    "effort": "low"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "base_url": "http://my.ollama/v1",
+   "config": {
+    "enabled": true,
+    "effort": "medium"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "base_url": "http://my.ollama/v1",
+   "config": {
+    "enabled": true,
+    "effort": "high"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "base_url": "http://my.ollama/v1",
+   "config": {
+    "enabled": true,
+    "effort": "xhigh"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "xhigh"
+   }
+  },
+  {
+   "base_url": "http://my.ollama/v1",
+   "config": {
+    "enabled": true,
+    "effort": "max"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "http://my.ollama/v1",
+   "config": {
+    "enabled": true,
+    "effort": "ultra"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "http://my.ollama/v1",
+   "config": {
+    "enabled": true,
+    "effort": "fast"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "fast"
+   }
+  },
+  {
+   "base_url": "http://my.ollama/v1",
+   "config": {
+    "enabled": false
+   },
+   "extra_body": {
+    "think": false
+   },
+   "top_level": {
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "base_url": "https://x-ollama-y.example.test/v1",
+   "config": {
+    "enabled": true,
+    "effort": "minimal"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "minimal"
+   }
+  },
+  {
+   "base_url": "https://x-ollama-y.example.test/v1",
+   "config": {
+    "enabled": true,
+    "effort": "low"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "base_url": "https://x-ollama-y.example.test/v1",
+   "config": {
+    "enabled": true,
+    "effort": "medium"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "base_url": "https://x-ollama-y.example.test/v1",
+   "config": {
+    "enabled": true,
+    "effort": "high"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "base_url": "https://x-ollama-y.example.test/v1",
+   "config": {
+    "enabled": true,
+    "effort": "xhigh"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "xhigh"
+   }
+  },
+  {
+   "base_url": "https://x-ollama-y.example.test/v1",
+   "config": {
+    "enabled": true,
+    "effort": "max"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "https://x-ollama-y.example.test/v1",
+   "config": {
+    "enabled": true,
+    "effort": "ultra"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "base_url": "https://x-ollama-y.example.test/v1",
+   "config": {
+    "enabled": true,
+    "effort": "fast"
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "fast"
+   }
+  },
+  {
+   "base_url": "https://x-ollama-y.example.test/v1",
+   "config": {
+    "enabled": false
+   },
+   "extra_body": {},
+   "top_level": {
+    "reasoning_effort": "none"
    }
   }
  ]

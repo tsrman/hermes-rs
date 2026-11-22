@@ -37,6 +37,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": "unknown endpoint"})
 
     def do_POST(self):
+        if self.path == "/v1/responses":
+            # No Responses scenario exists: record the request for tests that look at its body, then refuse.
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+            except (ValueError, UnicodeDecodeError):
+                body = None
+            if isinstance(body, dict):
+                self.server.requests.append(body)
+            self.send_json(404, {"error": "responses are only recorded"})
+            return
         if self.path != "/v1/chat/completions":
             self.send_json(404, {"error": "unknown endpoint"})
             return

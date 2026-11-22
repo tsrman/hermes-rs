@@ -8,9 +8,7 @@
 
 use serde_yaml::Value as Yaml;
 
-const VALID_EFFORTS: [&str; 7] = [
-    "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
-];
+const VALID_EFFORTS: [&str; 7] = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 const KNOWN_PROVIDERS: [&str; 12] = [
     "anthropic",
     "openai",
@@ -100,10 +98,7 @@ fn echoes_reasoning(model: &str, base_url: &str) -> bool {
     {
         return true;
     }
-    let rest = base_url.split_once("://").map_or(base_url, |(_, rest)| rest);
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host = authority.rsplit('@').next().unwrap_or("");
-    let host = host.split(':').next().unwrap_or("").to_lowercase();
+    let (host, _) = host_and_port(base_url);
     [
         "api.kimi.com",
         "moonshot.ai",
@@ -113,7 +108,43 @@ fn echoes_reasoning(model: &str, base_url: &str) -> bool {
         "xiaomimimo.com",
     ]
     .iter()
-    .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+    .any(|domain| host_matches(&host, domain))
+}
+
+/// The lowercased host (no trailing dot) and the port of a base URL.
+fn host_and_port(base_url: &str) -> (String, Option<u16>) {
+    let rest = base_url
+        .trim()
+        .split_once("://")
+        .map_or(base_url.trim(), |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let authority = authority.rsplit('@').next().unwrap_or("");
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if !host.ends_with(']') || host.starts_with('[') => {
+            (host, port.parse().ok())
+        }
+        _ => (authority, None),
+    };
+    (host.to_lowercase().trim_end_matches('.').to_owned(), port)
+}
+
+/// `base_url_host_matches`: the host is the domain or one of its subdomains.
+fn host_matches(host: &str, domain: &str) -> bool {
+    host == domain || host.ends_with(&format!(".{domain}"))
+}
+
+/// The reference's `is_xai_responses`: the `xai` provider or the host `api.x.ai`. Its Responses
+/// endpoint rejects unknown top-level fields such as `text`.
+pub fn is_xai_responses(provider: &str, base_url: &str) -> bool {
+    matches!(provider, "xai" | "xai-oauth") || host_and_port(base_url).0 == "api.x.ai"
+}
+
+/// `_looks_like_ollama_endpoint`: port 11434, ollama.com, or an `ollama` label in the host.
+fn looks_like_ollama(base_url: &str) -> bool {
+    let (host, port) = host_and_port(base_url);
+    port == Some(11434)
+        || host_matches(&host, "ollama.com")
+        || host.split('.').any(|label| label == "ollama")
 }
 
 fn digit(c: Option<char>) -> bool {
@@ -273,17 +304,39 @@ impl ReasoningSettings {
         }
     }
 
-    /// The effort to send on the request, or `None` to leave the field off. Deliberate difference
-    /// from the reference: with nothing configured, a model on a route that insists on its reasoning
-    /// being echoed back (DeepSeek, Kimi, MiMo) gets no default `medium`. The reference pads those
-    /// replays with `reasoning_content: " "`; the port does not replay reasoning at all, so asking
-    /// such a route to think could end a tool turn in a 400. A configured level is always sent.
-    pub fn custom_effort_for(&self, model: &str, base_url: &str) -> Option<String> {
+    /// The fields the `custom` profile adds to a chat-completions request for `model` at `base_url`
+    /// (its `build_api_kwargs_extras`): `reasoning_effort`, which Groq accepts only as `default` or
+    /// `none`, and `think: false` when reasoning is off on an Ollama endpoint.
+    ///
+    /// Deliberate differences from the reference, both for the case where nothing is configured and
+    /// so the reference would send `medium`: the field is left off (a) on routes that insist on
+    /// their reasoning being echoed back (DeepSeek, Kimi, MiMo), because the reference pads those
+    /// replays with `reasoning_content: " "` and the port does not replay reasoning at all, so
+    /// asking such a route to think could end a tool turn in a 400; (b) on Ollama endpoints, where
+    /// the reference sends nothing for a model without the `thinking` capability and the port
+    /// cannot probe `/api/show`. A configured level is always sent.
+    pub fn custom_fields(
+        &self,
+        model: &str,
+        base_url: &str,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let mut fields = serde_json::Map::new();
         let configured = self.per_model(model).or_else(|| parse_effort(&self.effort));
-        if configured.is_none() && echoes_reasoning(model, base_url) {
-            return None;
+        let ollama = looks_like_ollama(base_url);
+        if configured.is_none() && (ollama || echoes_reasoning(model, base_url)) {
+            return fields;
         }
-        Some(self.custom_effort(model))
+        let (host, _) = host_and_port(base_url);
+        let mut effort = self.custom_effort(model);
+        if effort == "none" {
+            if ollama {
+                fields.insert("think".into(), false.into());
+            }
+        } else if host_matches(&host, "api.groq.com") {
+            effort = "default".to_owned();
+        }
+        fields.insert("reasoning_effort".into(), effort.into());
+        fields
     }
 
     /// `agent.text_verbosity` when it is low, medium or high, for the Responses `text` field.

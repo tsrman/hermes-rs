@@ -174,6 +174,24 @@ class CliTest(unittest.TestCase):
         _, recorded = self.chat_with_profile()
         self.assertEqual(recorded[0]["reasoning_effort"], "medium")
 
+    def responses_body(self, agent):
+        # The server only records /v1/responses; the run itself ends in an error we do not look at.
+        config = "  api_mode: codex_responses\n" + agent
+        _, recorded = self.chat_with_profile(extra_config=config)
+        self.assertEqual(len(recorded), 1)
+        return recorded[0]
+
+    def test_text_verbosity_is_sent_on_the_responses_route(self):
+        body = self.responses_body("agent:\n  text_verbosity: HIGH\n")
+        self.assertEqual(body["text"], {"verbosity": "high"})
+
+    def test_an_unknown_text_verbosity_sends_nothing(self):
+        self.assertNotIn("text", self.responses_body("agent:\n  text_verbosity: bogus\n"))
+
+    def test_text_verbosity_never_reaches_chat_completions(self):
+        _, recorded = self.chat_with_profile(extra_config="agent:\n  text_verbosity: high\n")
+        self.assertNotIn("text", recorded[0])
+
     def test_a_model_on_a_must_echo_route_gets_no_default_effort(self):
         # Deliberate difference from the reference: the port does not replay reasoning.
         _, recorded = self.chat_with_profile(args=("--model", "deepseek-flash-1017"))

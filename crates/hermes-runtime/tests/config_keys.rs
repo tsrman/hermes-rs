@@ -191,11 +191,16 @@ fn the_custom_route_asks_for_the_effort_the_reference_asks_for() {
 #[test]
 fn routes_that_want_reasoning_echoed_get_no_default_effort_but_keep_a_configured_one() {
     let local = "http://127.0.0.1:1/v1";
+    let effort =
+        |settings: &hermes_runtime::reasoning::ReasoningSettings, model: &str, url: &str| {
+            settings
+                .custom_fields(model, url)
+                .get("reasoning_effort")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        };
     let unset = reasoning("{}");
-    assert_eq!(
-        unset.custom_effort_for("fixture", local).as_deref(),
-        Some("medium")
-    );
+    assert_eq!(effort(&unset, "fixture", local).as_deref(), Some("medium"));
     for (model, url) in [
         ("deepseek-flash-1017", local),
         ("DeepSeek-V4", local),
@@ -203,26 +208,77 @@ fn routes_that_want_reasoning_echoed_get_no_default_effort_but_keep_a_configured
         ("fixture", "https://api.deepseek.com/v1"),
         ("fixture", "https://api.moonshot.ai/v1"),
         ("fixture", "https://eu.api.kimi.com/v1"),
+        // Ollama: the port cannot ask the server whether the model thinks.
+        ("fixture", "http://localhost:11434/v1"),
+        ("fixture", "https://ollama.com/v1"),
+        ("fixture", "http://ollama.internal:8080/v1"),
     ] {
-        assert_eq!(unset.custom_effort_for(model, url), None, "{model} {url}");
+        assert_eq!(effort(&unset, model, url), None, "{model} {url}");
     }
     // A host that only contains the name is not that vendor.
-    assert_eq!(
-        unset
-            .custom_effort_for("fixture", "https://notapi.deepseek.com.example.test/v1")
-            .as_deref(),
-        Some("medium")
-    );
+    for url in [
+        "https://notapi.deepseek.com.example.test/v1",
+        "https://x-ollama-y.example.test/v1",
+    ] {
+        assert_eq!(
+            effort(&unset, "fixture", url).as_deref(),
+            Some("medium"),
+            "{url}"
+        );
+    }
     let high = reasoning("{reasoning_effort: high}");
     assert_eq!(
-        high.custom_effort_for("deepseek-flash-1017", local).as_deref(),
+        effort(&high, "deepseek-flash-1017", local).as_deref(),
+        Some("high")
+    );
+    assert_eq!(
+        effort(&high, "fixture", "http://localhost:11434/v1").as_deref(),
         Some("high")
     );
     let off = reasoning("{reasoning_overrides: {deepseek-flash-1017: none}}");
     assert_eq!(
-        off.custom_effort_for("deepseek-flash-1017", local).as_deref(),
+        effort(&off, "deepseek-flash-1017", local).as_deref(),
         Some("none")
     );
+}
+
+#[test]
+fn the_custom_profile_maps_a_reasoning_config_to_wire_fields_like_the_reference() {
+    // Recorded by calling `CustomProfile.build_api_kwargs_extras` on loopback, Groq, Ollama and
+    // look-alike hosts: Groq takes only `default` or `none`, Ollama gets `think: false` when off.
+    let mut wrong = Vec::new();
+    for row in agent_requests()["custom_profile"].as_array().unwrap() {
+        let url = row["base_url"].as_str().unwrap();
+        let section = if row["config"]["enabled"] == false {
+            "{reasoning_effort: false}".to_owned()
+        } else {
+            format!(
+                "{{reasoning_effort: {{effort: {}}}}}",
+                row["config"]["effort"]
+            )
+        };
+        let mut want = row["top_level"].as_object().unwrap().clone();
+        want.extend(row["extra_body"].as_object().unwrap().clone());
+        let got = reasoning(&section).custom_fields("fixture", url);
+        if got != want {
+            wrong.push(format!(
+                "{section} at {url}: ours {got:?}, reference {want:?}"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn the_xai_responses_route_is_recognised_like_the_reference() {
+    use hermes_runtime::reasoning::is_xai_responses;
+    assert!(is_xai_responses("xai", "https://example.test/v1"));
+    assert!(is_xai_responses("custom", "https://api.x.ai/v1"));
+    assert!(!is_xai_responses(
+        "custom",
+        "https://api.x.ai.example.test/v1"
+    ));
+    assert!(!is_xai_responses("openai", "https://api.openai.com/v1"));
 }
 
 #[test]

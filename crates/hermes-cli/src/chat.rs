@@ -370,7 +370,9 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         extras.body = profile.default_body();
     }
     // `agent.text_verbosity` is a Responses field; the reference's xAI route rejects it.
-    if settings.responses && settings.provider != "xai" {
+    if settings.responses
+        && !hermes_runtime::reasoning::is_xai_responses(settings.provider, &base_url)
+    {
         if let Some(verbosity) = settings.reasoning.verbosity() {
             extras
                 .body
@@ -383,9 +385,9 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
             // `agent.reasoning_effort` or `agent.reasoning_overrides` say otherwise) on
             // chat completions; the endpoint's own `extra_body` wins over it.
             if !settings.responses {
-                if let Some(effort) = settings.reasoning.custom_effort_for(model, &base_url) {
-                    extras.body.insert("reasoning_effort".into(), effort.into());
-                }
+                extras
+                    .body
+                    .extend(settings.reasoning.custom_fields(model, &base_url));
             }
             let mut body = extras.body;
             if let Some(own) = hermes_runtime::config::custom_extra_body(

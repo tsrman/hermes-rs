@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Record the request body the Python reference builds for given `agent.*` settings.
 
-Usage: create_request_fixture.py <reference checkout> <output.json>
-Run it with the reference interpreter. For every case the reference agent (CLI platform, `custom`
+Usage: <reference venv>/bin/python -I compat/create_request_fixture.py <reference checkout> <output.json>
+(from the repository root). For every case the reference agent (CLI platform, `custom`
 provider, a loopback base URL) builds the arguments of its first request with `_build_api_kwargs`;
 the fixture keeps every top-level field except `messages`, `tools` and `stream_options`. The
 reasoning config is resolved the way the CLI does it (`resolve_reasoning_config` over the loaded
@@ -16,7 +16,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-from create_reference_fixture import REFERENCE_COMMIT
+# `-I` leaves this script's directory off the path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from create_reference_fixture import REFERENCE_COMMIT  # noqa: E402
 
 # (agent section as YAML, model)
 CASES = [
@@ -95,7 +97,28 @@ RESPONSES_CASES = [
     ("{service_tier: fast}", "fixture"),
     ("{reasoning_effort: high}", "fixture"),
 ]
-DROPPED = {"messages", "tools", "stream_options", "input", "instructions", "tool_choice", "parallel_tool_calls"}
+# The `custom` profile's own mapping of a reasoning config to wire fields, per endpoint, called
+# directly (no agent, no network): `build_api_kwargs_extras(reasoning_config=..., base_url=...)`.
+PROFILE_CONFIGS = [
+    {"enabled": True, "effort": level}
+    for level in ("minimal", "low", "medium", "high", "xhigh", "max", "ultra", "fast")
+] + [{"enabled": False}]
+PROFILE_URLS = [
+    "http://127.0.0.1:8000/v1",
+    "https://api.groq.com/openai/v1",
+    "https://eu.api.groq.com/v1",
+    "https://notgroq.com/v1",
+    "http://localhost:11434/v1",
+    "http://127.0.0.1:11434/v1",
+    "https://ollama.com/v1",
+    "https://api.ollama.com/v1",
+    "http://ollama.internal:8080/v1",
+    "http://my.ollama/v1",
+    "https://x-ollama-y.example.test/v1",
+]
+# `prompt_cache_key` is derived from a random session id.
+DROPPED = {"messages", "tools", "stream_options", "input", "instructions", "tool_choice", "parallel_tool_calls",
+           "prompt_cache_key"}
 
 
 def main():
@@ -133,8 +156,18 @@ def main():
                 agent.close()
         return rows
 
+    from providers import get_provider_profile
+
+    custom = get_provider_profile("custom")
+    profile = []
+    for url in PROFILE_URLS:
+        for config in PROFILE_CONFIGS:
+            extra_body, top_level = custom.build_api_kwargs_extras(reasoning_config=config, base_url=url)
+            profile.append({"base_url": url, "config": config, "extra_body": extra_body, "top_level": top_level})
+
     result = {"chat_completions": record(CASES, "chat_completions"),
-              "codex_responses": record(RESPONSES_CASES, "codex_responses")}
+              "codex_responses": record(RESPONSES_CASES, "codex_responses"),
+              "custom_profile": profile}
     output.write_text(json.dumps(result, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     print({key: len(rows) for key, rows in result.items()})
 
