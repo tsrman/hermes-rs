@@ -284,6 +284,19 @@ pub(crate) fn read_config(path: &Path) -> Result<serde_yaml::Value, String> {
     if !config.is_mapping() && !config.is_null() {
         return Err("profile config.yaml must be a mapping".into());
     }
+    let mut config = config;
+    if let Some(Ok(entries)) = path
+        .parent()
+        .map(|home| home.join(".env"))
+        .filter(|env| env.exists())
+        .map(|env| {
+            dotenvy::from_path_iter(env).map(|iter| iter.flatten().collect::<HashMap<_, _>>())
+        })
+    {
+        expand_config(&mut config, &entries);
+    } else {
+        expand_config(&mut config, &HashMap::new());
+    }
     Ok(config)
 }
 
@@ -308,39 +321,63 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
             .unwrap_or(300),
         ..ChatSettings::default()
     };
+    settings.custom_providers = custom_providers(&config);
+    let mut named_key_env = None;
     if let Some(model) = config.get("model") {
         if let Some(name) = model.as_str() {
             settings.model = Some(name.to_owned());
         } else if model.is_mapping() {
             let name = model.get("provider").and_then(serde_yaml::Value::as_str);
-            let Some((provider, profile_responses)) = resolve_provider(name.unwrap_or("")) else {
-                return Err(format!(
-                    "provider '{}' is not supported",
-                    name.unwrap_or("")
-                ));
+            let name = name.unwrap_or("");
+            let resolved = resolve_provider(name).map(|found| (found, None));
+            let Some(((provider, profile_responses), named)) = resolved.or_else(|| {
+                // A key or name from `providers:`: the endpoint is the entry's.
+                named_provider(&settings.custom_providers, name)
+                    .map(|entry| (("custom", false), Some(entry.clone())))
+            }) else {
+                return Err(format!("provider '{name}' is not supported"));
             };
+            if let Some(entry) = named.as_ref().filter(|entry| !entry.enabled) {
+                return Err(format!(
+                    "provider '{}' is disabled in config (providers.{}.enabled: false)",
+                    name, entry.key
+                ));
+            }
             settings.provider = provider;
-            let api_mode = model.get("api_mode").and_then(serde_yaml::Value::as_str);
+            let configured_mode = named
+                .as_ref()
+                .and_then(|entry| entry.api_mode.as_deref())
+                .or_else(|| model.get("api_mode").and_then(serde_yaml::Value::as_str));
             settings.responses = provider != "anthropic"
-                && match api_mode {
+                && match configured_mode {
                     Some("codex_responses") => true,
                     Some("chat_completions") => false,
                     _ => profile_responses,
                 };
-            settings.model = model
-                .get("default")
-                .and_then(serde_yaml::Value::as_str)
-                .map(str::to_owned);
-            settings.config_api_key = model
-                .get("api_key")
-                .and_then(serde_yaml::Value::as_str)
-                .map(str::trim)
-                .filter(|key| !key.is_empty())
-                .map(str::to_owned);
-            settings.base_url = model
-                .get("base_url")
-                .and_then(serde_yaml::Value::as_str)
-                .map(str::to_owned);
+            if configured_mode == Some("anthropic_messages") && named.is_some() {
+                settings.provider = "anthropic";
+            }
+            let text = |field: &str| {
+                model
+                    .get(field)
+                    .and_then(serde_yaml::Value::as_str)
+                    .map(str::to_owned)
+            };
+            settings.model = text("default")
+                .or_else(|| named.as_ref().map(|entry| entry.model.clone()))
+                .filter(|model| !model.is_empty());
+            // The entry's endpoint and key win over `model.base_url` and `model.api_key`.
+            settings.config_api_key = named
+                .as_ref()
+                .and_then(|entry| entry.api_key.clone())
+                .or_else(|| text("api_key"))
+                .map(|key| key.trim().to_owned())
+                .filter(|key| !key.is_empty());
+            named_key_env = named.as_ref().and_then(|entry| entry.key_env.clone());
+            settings.base_url = named
+                .as_ref()
+                .map(|entry| entry.base_url.clone())
+                .or_else(|| text("base_url"));
             if settings.base_url.as_deref().is_none_or(str::is_empty) {
                 settings.base_url = default_base_url(provider).map(str::to_owned);
             }
@@ -394,12 +431,20 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
             }
         }
     }
+    if settings.config_api_key.is_none() {
+        settings.config_api_key = named_key_env
+            .and_then(|name| {
+                std::env::var(&name)
+                    .ok()
+                    .or_else(|| secrets.get(&name).cloned())
+            })
+            .filter(|key| !key.trim().is_empty());
+    }
     settings.api_key = secrets.get("HERMES_API_KEY").cloned();
     settings.openai_api_key = secrets.get("OPENAI_API_KEY").cloned();
     settings.openai_base_url = secrets.get("OPENAI_BASE_URL").cloned();
     settings.anthropic_api_key = secrets.get("ANTHROPIC_API_KEY").cloned();
     settings.anthropic_base_url = secrets.get("ANTHROPIC_BASE_URL").cloned();
-    settings.custom_providers = custom_providers(&config);
     settings.mcp_servers = mcp_servers(&config, &secrets);
     settings.web = WebSettings::from_config(&config, &secrets);
     settings.browser = BrowserSettings::from_config(&config, &secrets);
@@ -603,35 +648,71 @@ fn mcp_servers(
         .collect()
 }
 
-/// Replace `${NAME}` from the profile `.env` or the process environment.
-/// Unknown names stay as written so a missing secret is visible in the failure.
+/// Replace `${NAME}` and `${env:NAME}` from the profile `.env` or the process environment.
+/// Unknown names, other secret sources (`${vault:X}`) and an empty name stay as written, so a
+/// missing secret is visible in the failure.
 fn expand_env(text: &str, secrets: &HashMap<String, String>) -> String {
     let mut out = String::new();
     let mut rest = text;
     while let Some(start) = rest.find("${") {
         out.push_str(&rest[..start]);
         let after = &rest[start + 2..];
-        match after.find('}') {
-            Some(end) => {
-                let name = &after[..end];
-                match secrets
+        let Some(end) = after.find('}') else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let inner = after[..end].trim();
+        let name = match inner.strip_prefix("env:") {
+            Some(name) => name.trim(),
+            None if is_other_source(inner) => "",
+            None => inner,
+        };
+        let value = (!name.is_empty())
+            .then(|| {
+                secrets
                     .get(name)
                     .cloned()
                     .or_else(|| std::env::var(name).ok())
-                {
-                    Some(value) => out.push_str(&value),
-                    None => out.push_str(&rest[start..start + 3 + end]),
-                }
-                rest = &after[end + 1..];
-            }
-            None => {
-                out.push_str(&rest[start..]);
-                rest = "";
-            }
+            })
+            .flatten();
+        match value {
+            Some(value) => out.push_str(&value),
+            None => out.push_str(&rest[start..start + 3 + end]),
         }
+        rest = &after[end + 1..];
     }
     out.push_str(rest);
     out
+}
+
+/// `bitwarden:FOO`, `vault:path`: a source other than the environment.
+fn is_other_source(reference: &str) -> bool {
+    reference.split_once(':').is_some_and(|(source, _)| {
+        source.starts_with(|c: char| c.is_ascii_lowercase())
+            && source
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    })
+}
+
+/// Expand references in every string value of the config; keys are left alone.
+fn expand_config(value: &mut serde_yaml::Value, secrets: &HashMap<String, String>) {
+    match value {
+        serde_yaml::Value::String(text) if text.contains("${") => {
+            *text = expand_env(text, secrets);
+        }
+        serde_yaml::Value::Sequence(items) => {
+            items
+                .iter_mut()
+                .for_each(|item| expand_config(item, secrets));
+        }
+        serde_yaml::Value::Mapping(map) => {
+            map.iter_mut()
+                .for_each(|(_, item)| expand_config(item, secrets));
+        }
+        serde_yaml::Value::Tagged(tagged) => expand_config(&mut tagged.value, secrets),
+        _ => {}
+    }
 }
 
 /// The tool policy of a platform for the profile at `home` (all tools without a profile).
@@ -715,10 +796,33 @@ mod clarify_timeout_tests {
 /// One endpoint declared under `providers:` (or the legacy `custom_providers:` list).
 #[derive(Clone, Debug, PartialEq)]
 pub struct CustomProvider {
+    /// Names this entry answers to as `model.provider`: its key and its `name`, normalized.
+    ids: Vec<String>,
+    key: String,
+    enabled: bool,
     base_url: String,
     model: String,
     catalog: Vec<String>,
-    extra_body: serde_json::Map<String, serde_json::Value>,
+    api_key: Option<String>,
+    key_env: Option<String>,
+    api_mode: Option<String>,
+    extra_body: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// How the reference compares provider names: lower case, spaces as hyphens.
+fn provider_id(name: &str) -> String {
+    name.trim().to_lowercase().replace(' ', "-")
+}
+
+fn canonical_api_mode(mode: &str) -> String {
+    match mode.trim().to_lowercase().as_str() {
+        "openai" | "openai_chat" | "openai-chat" | "chat-completions" | "chatcompletions" => {
+            "chat_completions".into()
+        }
+        "responses" | "openai_responses" | "openai-responses" => "codex_responses".into(),
+        "anthropic" | "anthropic-messages" | "messages" => "anthropic_messages".into(),
+        _ => mode.trim().to_owned(),
+    }
 }
 
 fn custom_providers(config: &serde_yaml::Value) -> Vec<CustomProvider> {
@@ -729,13 +833,6 @@ fn custom_providers(config: &serde_yaml::Value) -> Vec<CustomProvider> {
     let current = match config.get("providers") {
         Some(serde_yaml::Value::Mapping(entries)) => entries
             .iter()
-            .filter(|(_, entry)| {
-                !matches!(entry.get("enabled"), Some(flag)
-                    if flag.as_bool() == Some(false)
-                        || flag.as_str().is_some_and(|word| matches!(
-                            word.trim().to_lowercase().as_str(),
-                            "false" | "0" | "no" | "off")))
-            })
             .map(|(key, entry)| (key.as_str().map(str::to_owned), entry))
             .collect(),
         _ => Vec::new(),
@@ -758,11 +855,26 @@ fn custom_provider(key: Option<&str>, entry: &serde_yaml::Value) -> Option<Custo
     };
     let base_url = text(&["base_url", "url", "api"])?;
     // A provider needs a name, from the entry or its key.
-    text(&["name"]).or(key.map(str::trim).filter(|key| !key.is_empty()))?;
-    let extra_body = match serde_json::to_value(entry.get("extra_body")?).ok()? {
-        serde_json::Value::Object(map) if !map.is_empty() => map,
-        _ => return None,
+    let key = key.map(str::trim).filter(|key| !key.is_empty());
+    let name = text(&["name"]).or(key)?;
+    let enabled = match entry.get("enabled") {
+        Some(flag) => flag.as_bool().unwrap_or_else(|| {
+            !flag.as_str().is_some_and(|word| {
+                matches!(
+                    word.trim().to_lowercase().as_str(),
+                    "false" | "0" | "no" | "off"
+                )
+            })
+        }),
+        None => true,
     };
+    let extra_body = entry
+        .get("extra_body")
+        .and_then(|body| serde_json::to_value(body).ok())
+        .and_then(|body| match body {
+            serde_json::Value::Object(map) if !map.is_empty() => Some(map),
+            _ => None,
+        });
     let catalog = match entry.get("models") {
         Some(serde_yaml::Value::Mapping(models)) => models
             .keys()
@@ -776,12 +888,31 @@ fn custom_provider(key: Option<&str>, entry: &serde_yaml::Value) -> Option<Custo
             .collect(),
         _ => Vec::new(),
     };
+    let mut ids = vec![provider_id(name)];
+    if let Some(key) = key {
+        ids.push(provider_id(key));
+    }
     Some(CustomProvider {
+        ids,
+        key: key.unwrap_or(name).to_owned(),
+        enabled,
         base_url: base_url.trim_end_matches('/').to_owned(),
         model: text(&["model", "default_model"]).unwrap_or("").to_owned(),
         catalog,
+        api_key: text(&["api_key"]).map(str::to_owned),
+        key_env: text(&["key_env", "api_key_env"]).map(str::to_owned),
+        api_mode: text(&["api_mode", "transport"]).map(canonical_api_mode),
         extra_body,
     })
+}
+
+/// The entry a `model.provider` of `name` or `custom:name` selects.
+fn named_provider<'a>(entries: &'a [CustomProvider], provider: &str) -> Option<&'a CustomProvider> {
+    let id = provider_id(provider);
+    let id = id.strip_prefix("custom:").unwrap_or(&id);
+    entries
+        .iter()
+        .find(|entry| entry.ids.iter().any(|known| known == id))
 }
 
 /// The `extra_body` for the `custom` provider at `base_url` running `model`: the first entry
@@ -795,13 +926,48 @@ pub fn custom_extra_body(
     let model = model.trim().to_lowercase();
     let mut fallback = None;
     for entry in entries.iter().filter(|entry| entry.base_url == target) {
+        let Some(extra_body) = entry.extra_body.as_ref().filter(|_| entry.enabled) else {
+            continue;
+        };
         if entry.model.is_empty() {
-            fallback.get_or_insert(&entry.extra_body);
+            fallback.get_or_insert(extra_body);
         } else if entry.catalog.contains(&model) || entry.model.to_lowercase() == model {
-            return Some(entry.extra_body.clone());
+            return Some(extra_body.clone());
         }
     }
     fallback.cloned()
+}
+
+#[cfg(test)]
+mod expansion_tests {
+    use super::*;
+
+    #[test]
+    fn references_expand_like_the_reference() {
+        let secrets = HashMap::from([("KEY".to_owned(), "v".to_owned())]);
+        let cases = [
+            ("a-${KEY}-b", "a-v-b"),
+            ("${env:KEY}", "v"),
+            ("${ env:KEY }", "v"),
+            ("${ KEY }", "v"),
+            ("${NOPE_X}", "${NOPE_X}"),
+            ("${env:NOPE_X}", "${env:NOPE_X}"),
+            ("${vault:KEY}", "${vault:KEY}"),
+            ("${env:}", "${env:}"),
+            ("${}", "${}"),
+            ("${KEY", "${KEY"),
+            ("$KEY", "$KEY"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(expand_env(input, &secrets), expected, "{input}");
+        }
+        let mut config: serde_yaml::Value =
+            serde_yaml::from_str("${KEY}: ${KEY}\nlist: ['${KEY}', 3]\n").unwrap();
+        expand_config(&mut config, &secrets);
+        assert_eq!(config["${KEY}"], "v");
+        assert_eq!(config["list"][0], "v");
+        assert_eq!(config["list"][1], 3);
+    }
 }
 
 #[cfg(test)]
@@ -817,7 +983,7 @@ mod custom_provider_tests {
         let providers = entries(
             "providers:\n  a:\n    base_url: https://x/v1/\n    model: Qwen\n    extra_body: {k: 1}\n  b:\n    base_url: https://x/v1\n    extra_body: {k: 2}\n  off:\n    enabled: false\n    base_url: https://y/v1\n    extra_body: {k: 3}\n",
         );
-        assert_eq!(providers.len(), 2);
+        assert_eq!(providers.len(), 3);
         let k = |url: &str, model: &str| {
             custom_extra_body(&providers, url, model).map(|body| body["k"].clone())
         };
@@ -825,5 +991,50 @@ mod custom_provider_tests {
         assert_eq!(k("https://x/v1/", "other"), Some(2.into()));
         assert_eq!(k("https://y/v1", "m"), None);
         assert_eq!(k("https://z/v1", "m"), None);
+    }
+}
+
+#[cfg(test)]
+mod named_provider_tests {
+    use super::*;
+
+    /// Cases recorded from the reference's `resolve_runtime_provider`.
+    #[test]
+    fn named_providers_resolve_like_the_reference() {
+        let cases: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../tests/fixtures/named_providers.json")).unwrap();
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            std::fs::write(
+                home.path().join("config.yaml"),
+                case["config"].as_str().unwrap(),
+            )
+            .unwrap();
+            std::fs::write(home.path().join(".env"), "MYK=from-env\n").unwrap();
+            let expected = &case["expected"];
+            let loaded = load_chat_settings(Some(home.path()));
+            if expected.get("error").is_some() {
+                assert!(loaded.is_err(), "{name}: the reference refuses this config");
+                continue;
+            }
+            let settings = loaded.unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                settings.base_url.as_deref(),
+                expected["base_url"].as_str(),
+                "{name}"
+            );
+            assert_eq!(
+                settings.config_api_key.as_deref(),
+                expected["api_key"].as_str(),
+                "{name}"
+            );
+            let mode = match (settings.provider, settings.responses) {
+                ("anthropic", _) => "anthropic_messages",
+                (_, true) => "codex_responses",
+                _ => "chat_completions",
+            };
+            assert_eq!(mode, expected["api_mode"].as_str().unwrap(), "{name}");
+        }
     }
 }

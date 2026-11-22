@@ -17,6 +17,9 @@ Every fix below starts with a reference fixture (`compat/create_*.py`) or a refe
 | `providers.<name>.extra_body` / `custom_providers[].extra_body` was ignored | Merged into chat-completions bodies for `provider: custom`. Matching as in `_custom_provider_extra_body_for_agent`: same base URL (trailing `/` ignored), entry `model`/`default_model` equals the model or is in `models`, entry without a model is the fallback, `enabled: false` skipped. Nested objects merge, other values replace. |
 | Compression summary must not carry the provider `extra_body` | The reference sends only `auxiliary.compression.extra_body` there [code]. The port's summary call uses `complete_plain`. The iteration-limit summary is a main-agent call and keeps it. |
 
+| `${VAR}` / `${env:VAR}` only in `mcp_servers` | Expanded in every string value of `config.yaml` (not keys), from the profile `.env`, then the process environment. Unset names, `${vault:X}` and empty names stay literal. Checked against `_expand_env_vars` on 11 inputs (unit test) and end to end (`base_url: ${SERVER}/v1`). |
+| Named providers refused (`provider: llm-api`, `custom:llm-api`) | Resolved from `providers:` / `custom_providers:` by key or `name` (lower case, spaces as hyphens). The entry's `base_url` (also `url`, `api`), `api_key`, `key_env`/`api_key_env`, `api_mode`/`transport` (with the reference's aliases) and `model`/`default_model` are used, and win over `model.base_url`/`model.api_key`. `enabled: false` is an error. 15 cases recorded from `resolve_runtime_provider` (`compat/create_named_provider_fixture.py`, `tests/fixtures/named_providers.json`). Items 1–4 below are done. |
+
 Known limits of that fix: only the Chat Completions transport gets `extra_body` (Responses and Anthropic
 routes ignore it); `auxiliary.compression.extra_body` is not read; fallback routes get no `extra_body`.
 
@@ -24,19 +27,19 @@ routes ignore it); `auxiliary.compression.extra_body` is not read; fallback rout
 
 ### P1: a valid config silently does the wrong thing or is refused
 
-1. **Named providers are refused.** `model.provider: llm-api` or `custom:llm-api` (a key of `providers:`)
+1. **(done) Named providers are refused.** `model.provider: llm-api` or `custom:llm-api` (a key of `providers:`)
    fails with `provider '…' is not supported` [run]. The reference resolves them from
    `providers`/`custom_providers` (base URL, key, `api_mode`, model). Plan: resolve the name against the
    compat list built by `custom_providers()`; take `base_url`, `model`, `api_key`/`key_env`/`key_cmd`,
    `api_mode`/`transport` from the entry; fixture from `resolve_runtime_provider`.
-2. **`${VAR}` / `${env:VAR}` is expanded only in `mcp_servers`.** The reference expands every string value
+2. **(done) `${VAR}` / `${env:VAR}` is expanded only in `mcp_servers`.** The reference expands every string value
    in the loaded config [code], so `model.api_key: ${MY_KEY}` or `base_url: ${HOST}/v1` reaches the port
    as literal text. Plan: expand once after parsing, for all values (not keys), from the profile `.env`
    then the process environment; unset variables stay literal as in the reference; test against
    `_expand_env_vars`.
-3. **`api_key_env` / `key_env` / `key_cmd` of the primary model and of `providers:` entries** are not
+3. **(done except `key_cmd`) `api_key_env` / `key_env` / `key_cmd` of the primary model and of `providers:` entries** are not
    read for the primary route (only for `fallback_providers`) [code]. Same fix as item 1.
-4. **`model.api_mode`** is honoured, but `providers.*.api_mode`/`transport` is not, so a Responses-only
+4. **(done) `model.api_mode`** is honoured, but `providers.*.api_mode`/`transport` is not, so a Responses-only
    endpoint declared under `providers:` is called with Chat Completions [code].
 5. **`providers.*.extra_headers`, `ssl_verify`, `ssl_ca_cert`, `session_affinity_header`** are ignored
    [keys]. Headers carry credentials for some gateways; never log them. Plan: send, redact in journal.
@@ -120,3 +123,12 @@ for these inputs: `model:` as a list, `providers:` as a list, `custom_providers:
 
 A default config (no keys) must keep producing the requests it produces now; the existing recorded
 fixtures in `crates/hermes-runtime/tests/fixtures` and the 134 compat tests guard that.
+
+## Notes on the named-provider work
+
+- `key_cmd` (a command that prints the key) is not run; an entry that relies on it has no key.
+- For `api_mode: anthropic_messages` on a named provider the port selects its Anthropic transport and
+  names the provider `anthropic` in the system prompt; the reference calls it `custom`. Check the prompt
+  text if that matters for such a setup.
+- The reference refuses an unknown provider with its own message; the port says `provider '…' is not
+  supported`. Both are errors; only that an error occurs is compared.

@@ -724,3 +724,15 @@ class CustomEndpointConfigTest(ToolTestCase):
     def test_a_disabled_provider_adds_nothing(self):
         request = self.ask(extra="  second:\n    enabled: false\n    base_url: x\n")[0]
         self.assertEqual(request["chat_template_kwargs"], {"enable_thinking": True})
+
+    def test_references_in_any_config_value_expand_from_the_profile_env(self):
+        (self.profile / ".env").write_text(f"SERVER={self.url}\nMODEL_KEY=sk-from-env\n", encoding="utf-8")
+        (self.profile / "config.yaml").write_text(
+            "model:\n  api_key: ${env:MODEL_KEY}\n  base_url: ${SERVER}/v1\n  default: qwen-flash\n"
+            "  provider: custom\n", encoding="utf-8")
+        env = {key: value for key, value in self.env.items() if key != "HERMES_API_KEY"}
+        run = subprocess.run(self.command(oneshot=True), cwd=self.root, env=env, stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True, timeout=30)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        with urlopen(self.url + "/requests", timeout=4) as response:
+            self.assertEqual(json.load(response)[0]["model"], "qwen-flash")

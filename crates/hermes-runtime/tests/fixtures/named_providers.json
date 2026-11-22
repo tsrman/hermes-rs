@@ -1,0 +1,133 @@
+[
+ {
+  "name": "named_key",
+  "config": "model: {provider: llm-api, default: m}\nproviders:\n  llm-api: {base_url: 'https://a/v1', api_key: ck, model: m}\n",
+  "expected": {
+   "api_mode": "chat_completions",
+   "base_url": "https://a/v1",
+   "api_key": "ck"
+  }
+ },
+ {
+  "name": "custom_colon",
+  "config": "model: {provider: 'custom:llm-api', default: m}\nproviders:\n  llm-api: {base_url: 'https://a/v1', api_key: ck}\n",
+  "expected": {
+   "api_mode": "chat_completions",
+   "base_url": "https://a/v1",
+   "api_key": "ck"
+  }
+ },
+ {
+  "name": "key_env",
+  "config": "model: {provider: llm-api, default: m}\nproviders:\n  llm-api: {base_url: 'https://a/v1', key_env: MYK}\n",
+  "expected": {
+   "api_mode": "chat_completions",
+   "base_url": "https://a/v1",
+   "api_key": "from-env"
+  }
+ },
+ {
+  "name": "api_key_env",
+  "config": "model: {provider: llm-api, default: m}\nproviders:\n  llm-api: {base_url: 'https://a/v1', api_key_env: MYK}\n",
+  "expected": {
+   "api_mode": "chat_completions",
+   "base_url": "https://a/v1",
+   "api_key": "from-env"
+  }
+ },
+ {
+  "name": "api_mode",
+  "config": "model: {provider: llm-api, default: m}\nproviders:\n  llm-api: {base_url: 'https://a/v1', api_key: ck, api_mode: codex_responses}\n",
+  "expected": {
+   "api_mode": "codex_responses",
+   "base_url": "https://a/v1",
+   "api_key": "ck"
+  }
+ },
+ {
+  "name": "transport",
+  "config": "model: {provider: llm-api, default: m}\nproviders:\n  llm-api: {base_url: 'https://a/v1', api_key: ck, transport: anthropic_messages}\n",
+  "expected": {
+   "api_mode": "anthropic_messages",
+   "base_url": "https://a/v1",
+   "api_key": "ck"
+  }
+ },
+ {
+  "name": "legacy_list",
+  "config": "model: {provider: 'custom:old', default: m}\ncustom_providers:\n  - {name: old, base_url: 'https://o/v1', api_key: ok}\n",
+  "expected": {
+   "api_mode": "chat_completions",
+   "base_url": "https://o/v1",
+   "api_key": "ok"
+  }
+ },
+ {
+  "name": "name_field",
+  "config": "model: {provider: 'custom:pretty-name', default: m}\nproviders:\n  k1: {name: Pretty Name, base_url: 'https://a/v1', api_key: ck}\n",
+  "expected": {
+   "api_mode": "chat_completions",
+   "base_url": "https://a/v1",
+   "api_key": "ck"
+  }
+ },
+ {
+  "name": "model_url_wins",
+  "config": "model: {provider: llm-api, default: m, base_url: 'https://override/v1'}\nproviders:\n  llm-api: {base_url: 'https://a/v1', api_key: ck}\n",
+  "expected": {
+   "api_mode": "chat_completions",
+   "base_url": "https://a/v1",
+   "api_key": "ck"
+  }
+ },
+ {
+  "name": "model_key_wins",
+  "config": "model: {provider: llm-api, default: m, api_key: mk}\nproviders:\n  llm-api: {base_url: 'https://a/v1', api_key: ck}\n",
+  "expected": {
+   "api_mode": "chat_completions",
+   "base_url": "https://a/v1",
+   "api_key": "ck"
+  }
+ },
+ {
+  "name": "disabled",
+  "config": "model: {provider: llm-api, default: m}\nproviders:\n  llm-api: {enabled: false, base_url: 'https://a/v1', api_key: ck}\n",
+  "expected": {
+   "error": "ValueError: provider 'llm-api' is disabled in config (providers.llm-api.enabled: false)"
+  }
+ },
+ {
+  "name": "unknown",
+  "config": "model: {provider: nothere, default: m}\nproviders:\n  llm-api: {base_url: 'https://a/v1', api_key: ck}\n",
+  "expected": {
+   "error": "AuthError: Unknown provider 'nothere'. Check 'hermes model' for available providers, or run 'hermes doctor' to diagnose config issues."
+  }
+ },
+ {
+  "name": "url_alias",
+  "config": "model: {provider: llm-api, default: m}\nproviders:\n  llm-api: {api: 'https://a/v1', api_key: ck}\n",
+  "expected": {
+   "api_mode": "chat_completions",
+   "base_url": "https://a/v1",
+   "api_key": "ck"
+  }
+ },
+ {
+  "name": "entry_model_default",
+  "config": "model: {provider: llm-api}\nproviders:\n  llm-api: {base_url: 'https://a/v1', api_key: ck, default_model: dm}\n",
+  "expected": {
+   "api_mode": "chat_completions",
+   "base_url": "https://a/v1",
+   "api_key": "ck"
+  }
+ },
+ {
+  "name": "case",
+  "config": "model: {provider: LLM-API, default: m}\nproviders:\n  llm-api: {base_url: 'https://a/v1', api_key: ck}\n",
+  "expected": {
+   "api_mode": "chat_completions",
+   "base_url": "https://a/v1",
+   "api_key": "ck"
+  }
+ }
+]
