@@ -329,7 +329,7 @@ fn osascript_program(args: &str, value_options: &[&str]) -> Result<Program, Budg
         if step.kind == Kind::Char
             && step.quote.is_none()
             && chars[i] == '<'
-            && !(chars.get(i + 1) == Some(&'<'))
+            && chars.get(i + 1) != Some(&'<')
             && !(i > 0 && chars[i - 1] == '<')
         {
             opaque = true;
@@ -434,9 +434,12 @@ fn classify_reading(text: &str) -> Result<BTreeSet<&'static str>, BudgetExceeded
         let segment = shell_command_segment(&parsed, start)?;
         let args: String = segment.chars().skip(end - start).collect();
         let Some(value_options) = program_value_options(&name) else {
-            if expands(&word)? && (mentions_osascript(&segment) || word.starts_with(['$', '`'])) {
-                found.insert(OPAQUE_DESCRIPTION);
-            } else if mentions_osascript(&args) && runs_its_arguments(&name, &args) {
+            // The executable is chosen at run time (`X=osascript; $X`), or a carrier runs a program
+            // that names osascript (`sh -c "osascript ..."`, `xargs osascript`).
+            let chosen_at_run_time =
+                expands(&word)? && (mentions_osascript(&segment) || word.starts_with(['$', '`']));
+            if chosen_at_run_time || (mentions_osascript(&args) && runs_its_arguments(&name, &args))
+            {
                 found.insert(OPAQUE_DESCRIPTION);
             }
             continue;
