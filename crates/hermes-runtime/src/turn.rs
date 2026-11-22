@@ -150,6 +150,7 @@ impl TurnHistory {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn compact(
         &mut self,
         profile: Option<&Path>,
@@ -157,6 +158,7 @@ impl TurnHistory {
         prompt: &PromptSettings,
         settings: &CompactionSettings,
         route: &ModelRoute,
+        summarizer: Option<&ModelRoute>,
         trigger: CompactionTrigger<'_>,
     ) -> CompactionOutcome {
         if !settings.enabled() || self.messages.is_empty() {
@@ -177,10 +179,20 @@ impl TurnHistory {
             return CompactionOutcome::Unchanged;
         };
         let middle = &self.messages[range.clone()];
-        let Some(request) = settings.request(&route.model, middle) else {
+        let summary_route = summarizer.unwrap_or(route);
+        let Some(request) = settings.request(&summary_route.model, middle) else {
             return CompactionOutcome::Skipped;
         };
-        let Ok(result) = route.provider.complete_plain(&request, |_| {}).await else {
+        // A configured summary route carries its own body fields; the main route's are left out.
+        let sent = if summarizer.is_some() {
+            summary_route.provider.complete(&request, |_| {}).await
+        } else {
+            summary_route
+                .provider
+                .complete_plain(&request, |_| {})
+                .await
+        };
+        let Ok(result) = sent else {
             return CompactionOutcome::Skipped;
         };
         if result.finish_reason.as_deref() != Some("stop") || !result.tool_calls.is_empty() {

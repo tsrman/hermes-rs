@@ -45,7 +45,7 @@ routes ignore it); `auxiliary.compression.extra_body` is not read; fallback rout
    [keys]. Headers carry credentials for some gateways; never log them. Plan: send, redact in journal.
 6. **(transports done, fallbacks not) `extra_body` for non-chat transports and for fallbacks**; the reference applies
    `request_overrides` to every transport.
-7. **`auxiliary.<task>.*` is not read at all** (`provider`, `model`, `base_url`, `api_key`, `timeout`,
+7. **(compression done) `auxiliary.<task>.*` is not read at all** (`provider`, `model`, `base_url`, `api_key`, `timeout`,
    `extra_body`, `reasoning_effort`) [keys]. The port runs compression on the main route. Plan: read
    `auxiliary.compression` and route the summary call through it; other tasks (vision, approval, title…)
    have no counterpart in the port yet and are listed under P3.
@@ -57,7 +57,7 @@ routes ignore it); `auxiliary.compression.extra_body` is not read; fallback rout
    `target_ratio`, `tail_mode`, `min_tail_user_messages`, `max_attempts`, `abort_on_summary_failure`,
    `model_thresholds`, `proactive_prune_*`, `micro_compact*`, `idle_compact_after_seconds`. Each needs a
    check of whether the reference code path exists in a one-shot CLI before porting.
-9. **`model.context_length` scoping.** The reference drops it when the startup runtime differs from the
+9. **(provider window done; scoping deliberately not) `model.context_length` scoping.** The reference drops it when the startup runtime differs from the
    configured default (`_scope_context_length_to_default_runtime`), and reads `providers.*.context_length`
    [code]. The port applies it unconditionally and ignores the per-provider value.
 10. **`model.max_concurrency`** is ignored. Harmless today (one model request at a time except
@@ -151,3 +151,25 @@ fixtures in `crates/hermes-runtime/tests/fixtures` and the 134 compat tests guar
   `ssl_ca_cert` option needs the same review. `session_affinity_header` is not read either.
 - **Not done:** fallback routes get no `extra_body`/headers (the reference's rule for fallbacks was not
   recorded yet).
+
+## Notes on `auxiliary.compression` and context windows (done)
+
+- `auxiliary.compression` (`provider`, `model`, `base_url`, `api_key`, `key_env`/`api_key_env`,
+  `api_mode`, `timeout`, `extra_body`) decides where the compression summary is made. Nothing set, or
+  `provider`/`model: auto`, means the main route with the main model, as in the reference. Only a
+  `base_url` means `custom`. A summary on another endpoint than the main one needs `model` (the port
+  has no per-provider default auxiliary model table); on the same endpoint the key, URL and transport
+  are inherited. Its `extra_body` goes only to the summary request, never the provider entry's, and
+  matching `extra_headers` apply. Other tasks (`vision`, `approval`, `title_generation`, ...) have no
+  counterpart in the port yet.
+- `providers.<entry>.context_length` (entry-wide) and `providers.<entry>.models.<model>.context_length`
+  (per model, name compared as written, case-sensitive like the reference) now set the compression
+  window when `model.context_length` is not set. Checked against `get_custom_provider_context_length`.
+- **Not done on purpose:** dropping `model.context_length` when the run uses another model than
+  `model.default` (`--model`, `/model`). The reference then looks the window up from model metadata;
+  the port has none, and without any window compression would turn off entirely, overflow recovery
+  included. The configured window is kept instead; a `providers` entry window for the active model
+  is only used when `model.context_length` is absent.
+- Still open in item 8: `target_ratio`, `tail_mode`, `min_tail_user_messages`, `max_attempts`,
+  `abort_on_summary_failure`, `model_thresholds`, proactive pruning and micro-compaction. Each changes
+  which messages are summarized, so each needs the reference's boundary selection recorded first.

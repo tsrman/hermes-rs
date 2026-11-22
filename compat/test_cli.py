@@ -148,6 +148,35 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("chat_template_kwargs", summary)
         self.assertEqual(answer["chat_template_kwargs"], {"enable_thinking": True})
 
+    def test_auxiliary_compression_picks_the_summary_model_and_body_fields(self):
+        session, _, original, config = self.seed_compression_history()
+        config += ("auxiliary:\n  compression:\n    model: summarizer\n    timeout: 30\n"
+                   "    extra_body: {summary_only: true}\n")
+        result, recorded = self.chat_with_profile(extra_config=config, args=("--resume", session), query="New task")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summary, answer = recorded[len(original):]
+        self.assertEqual(summary["model"], "summarizer")
+        self.assertTrue(summary.get("summary_only"), sorted(summary))
+        self.assertEqual(answer["model"], "primary")
+        self.assertNotIn("summary_only", answer)
+
+    def test_a_provider_entry_context_length_limits_what_the_summary_request_may_hold(self):
+        session, _, original, _ = self.seed_compression_history()
+        config = ("compression:\n  threshold_tokens: '450'\n  protect_first_n: 2\n  protect_last_n: 2\n"
+                  f"providers:\n  p:\n    base_url: {self.base}/v1\n    context_length: 5000\n")
+        result, recorded = self.chat_with_profile(extra_config=config, args=("--resume", session), query="New task")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The history to summarize is larger than 85% of the declared window, so no summary is asked for.
+        self.assertIn("Context compression skipped", result.stderr)
+        self.assertEqual(len(recorded) - len(original), 1)
+
+    def test_auxiliary_compression_on_another_endpoint_needs_a_model(self):
+        session, _, _, config = self.seed_compression_history()
+        config += "auxiliary:\n  compression:\n    base_url: https://elsewhere.example/v1\n    provider: custom\n"
+        result, _ = self.chat_with_profile(extra_config=config, args=("--resume", session), query="New task")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("auxiliary.compression.model is required", result.stderr)
+
     def test_resume_compacts_history_and_refreshes_memory_atomically(self):
         session, database, original, config = self.seed_compression_history()
         result, recorded = self.chat_with_profile(extra_config=config, args=("--resume", session), query="New task")

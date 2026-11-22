@@ -17,6 +17,12 @@ const SUMMARIZER: &str = "Summarize completed conversation history for a model c
 pub struct CompactionSettings {
     threshold: Option<usize>,
     context_length: Option<usize>,
+    /// `compression.threshold` and `compression.threshold_tokens`, kept to recompute the
+    /// threshold when the window becomes known later.
+    #[serde(default)]
+    ratio: f64,
+    #[serde(default)]
+    absolute: Option<usize>,
     protect_first: usize,
     protect_last: usize,
 }
@@ -46,9 +52,23 @@ impl CompactionSettings {
         Self {
             threshold,
             context_length,
+            ratio,
+            absolute,
             protect_first: count(&compression["protect_first_n"]).unwrap_or(3),
             protect_last: count(&compression["protect_last_n"]).unwrap_or(20),
         }
+    }
+
+    /// Use `window` when the config gave no `model.context_length` (a provider entry's value).
+    pub fn set_context_length_if_unset(&mut self, window: usize) {
+        if self.context_length.is_some() || window <= 1 || self.ratio <= 0.0 {
+            return;
+        }
+        self.context_length = Some(window);
+        self.threshold = [Some(ratio_threshold(window, self.ratio)), self.absolute]
+            .into_iter()
+            .flatten()
+            .min();
     }
 
     pub(crate) fn select(&self, history: &[Value], input_bytes: usize) -> Option<Range<usize>> {

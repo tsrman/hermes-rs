@@ -43,6 +43,8 @@ pub struct ChatSettings {
     pub config_api_key: Option<String>,
     /// `model.provider` named an entry of `providers:`.
     pub named_custom: bool,
+    /// `auxiliary.compression`: where the compression summary is made.
+    pub compression_route: AuxiliaryRoute,
     /// `model.default_headers`.
     pub default_headers: Vec<(String, String)>,
     /// `providers` / `custom_providers` entries that may carry an `extra_body`.
@@ -72,6 +74,60 @@ pub struct ChatSettings {
     anthropic_base_url: Option<String>,
 }
 
+/// `auxiliary.<task>` as written: which model and endpoint a side task uses.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AuxiliaryRoute {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub key_env: Option<String>,
+    pub api_mode: Option<String>,
+    pub timeout_secs: Option<u64>,
+    pub extra_body: serde_json::Map<String, serde_json::Value>,
+}
+
+impl AuxiliaryRoute {
+    /// Nothing is configured: the task runs on the main route.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    fn from_config(config: &serde_yaml::Value, task: &str) -> Self {
+        let section = &config["auxiliary"][task];
+        let text = |field: &str, auto_is_unset: bool| {
+            section
+                .get(field)
+                .and_then(serde_yaml::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .filter(|value| !(auto_is_unset && value.eq_ignore_ascii_case("auto")))
+                .map(str::to_owned)
+        };
+        Self {
+            provider: text("provider", true),
+            model: text("model", true),
+            base_url: text("base_url", false),
+            api_key: text("api_key", false),
+            key_env: text("key_env", false).or_else(|| text("api_key_env", false)),
+            api_mode: text("api_mode", false).map(|mode| canonical_api_mode(&mode)),
+            timeout_secs: section
+                .get("timeout")
+                .and_then(serde_yaml::Value::as_f64)
+                .filter(|seconds| *seconds > 0.0)
+                .map(|seconds| seconds.ceil() as u64),
+            extra_body: section
+                .get("extra_body")
+                .and_then(|body| serde_json::to_value(body).ok())
+                .and_then(|body| match body {
+                    serde_json::Value::Object(map) => Some(map),
+                    _ => None,
+                })
+                .unwrap_or_default(),
+        }
+    }
+}
+
 pub struct FallbackSettings {
     pub model: String,
     pub provider: &'static str,
@@ -90,6 +146,7 @@ impl Default for ChatSettings {
             api_key: None,
             config_api_key: None,
             named_custom: false,
+            compression_route: AuxiliaryRoute::default(),
             default_headers: Vec::new(),
             custom_providers: Vec::new(),
             api_max_attempts: 3,
@@ -138,6 +195,14 @@ impl ChatSettings {
             &["anthropic.com"],
             base_url,
         )
+    }
+
+    /// An environment variable, else a profile `.env` value; empty values count as unset.
+    pub fn secret(&self, name: &str) -> Option<String> {
+        std::env::var(name)
+            .ok()
+            .or_else(|| self.secrets.get(name).cloned())
+            .filter(|value| !value.trim().is_empty())
     }
 
     /// The key of a named provider: only to its own host or to the endpoint override paired with it.
@@ -462,6 +527,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.openai_base_url = secrets.get("OPENAI_BASE_URL").cloned();
     settings.anthropic_api_key = secrets.get("ANTHROPIC_API_KEY").cloned();
     settings.anthropic_base_url = secrets.get("ANTHROPIC_BASE_URL").cloned();
+    settings.compression_route = AuxiliaryRoute::from_config(&config, "compression");
     settings.mcp_servers = mcp_servers(&config, &secrets);
     settings.web = WebSettings::from_config(&config, &secrets);
     settings.browser = BrowserSettings::from_config(&config, &secrets);
@@ -550,7 +616,7 @@ fn fallback_settings(
     })
 }
 
-fn default_base_url(provider: &str) -> Option<&'static str> {
+pub fn default_base_url(provider: &str) -> Option<&'static str> {
     match provider {
         "openai" => Some("https://api.openai.com/v1"),
         "anthropic" => Some("https://api.anthropic.com/v1"),
@@ -559,7 +625,7 @@ fn default_base_url(provider: &str) -> Option<&'static str> {
 }
 
 /// The canonical provider name and whether it speaks the Responses API by default.
-fn resolve_provider(name: &str) -> Option<(&'static str, bool)> {
+pub fn resolve_provider(name: &str) -> Option<(&'static str, bool)> {
     match name.trim() {
         "" | "auto" | "custom" => Some(("custom", false)),
         "openai" => Some(("openai", false)),
@@ -820,6 +886,8 @@ pub struct CustomProvider {
     base_url: String,
     model: String,
     catalog: Vec<String>,
+    context_length: Option<usize>,
+    model_context: Vec<(String, usize)>,
     api_key: Option<String>,
     key_env: Option<String>,
     api_mode: Option<String>,
@@ -917,6 +985,19 @@ fn custom_provider(key: Option<&str>, entry: &serde_yaml::Value) -> Option<Custo
         base_url: base_url.trim_end_matches('/').to_owned(),
         model: text(&["model", "default_model"]).unwrap_or("").to_owned(),
         catalog,
+        context_length: entry.get("context_length").and_then(positive),
+        model_context: match entry.get("models") {
+            Some(serde_yaml::Value::Mapping(models)) => models
+                .iter()
+                .filter_map(|(name, settings)| {
+                    Some((
+                        name.as_str()?.trim().to_owned(),
+                        positive(settings.get("context_length")?)?,
+                    ))
+                })
+                .collect(),
+            _ => Vec::new(),
+        },
         api_key: text(&["api_key"]).map(str::to_owned),
         key_env: text(&["key_env", "api_key_env"]).map(str::to_owned),
         api_mode: text(&["api_mode", "transport"]).map(canonical_api_mode),
@@ -954,6 +1035,38 @@ fn named_provider<'a>(entries: &'a [CustomProvider], provider: &str) -> Option<&
     entries
         .iter()
         .find(|entry| entry.ids.iter().any(|known| known == id))
+}
+
+fn positive(value: &serde_yaml::Value) -> Option<usize> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str()?.trim().parse().ok())
+        .filter(|window| *window > 0)
+        .and_then(|window| usize::try_from(window).ok())
+}
+
+/// The context window an entry for `base_url` declares for `model`: a per-model value first,
+/// then the entry's own.
+pub fn custom_context_length(
+    entries: &[CustomProvider],
+    base_url: &str,
+    model: &str,
+) -> Option<usize> {
+    let target = base_url.trim().trim_end_matches('/');
+    let model = model.trim();
+    let matching = || {
+        entries
+            .iter()
+            .filter(move |entry| entry.enabled && entry.base_url == target)
+    };
+    matching()
+        .find_map(|entry| {
+            entry
+                .model_context
+                .iter()
+                .find_map(|(name, window)| (*name == model).then_some(*window))
+        })
+        .or_else(|| matching().find_map(|entry| entry.context_length))
 }
 
 /// `extra_headers` of the first enabled entry for `base_url` that declares any.
@@ -1088,5 +1201,52 @@ mod named_provider_tests {
             };
             assert_eq!(mode, expected["api_mode"].as_str().unwrap(), "{name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod auxiliary_tests {
+    use super::*;
+
+    #[test]
+    fn the_compression_route_reads_its_fields() {
+        let config: serde_yaml::Value = serde_yaml::from_str(
+            "auxiliary:\n  compression:\n    provider: auto\n    model: summarizer\n    timeout: 30\n    extra_body: {summary_only: true}\n",
+        )
+        .unwrap();
+        let route = AuxiliaryRoute::from_config(&config, "compression");
+        assert_eq!(route.provider, None);
+        assert_eq!(route.model.as_deref(), Some("summarizer"));
+        assert_eq!(route.timeout_secs, Some(30));
+        assert_eq!(route.extra_body["summary_only"], true);
+        assert!(AuxiliaryRoute::from_config(&config, "vision").is_default());
+    }
+}
+
+#[cfg(test)]
+mod context_length_tests {
+    use super::*;
+
+    #[test]
+    fn a_provider_entry_declares_the_window_per_model_or_for_all() {
+        let config: serde_yaml::Value = serde_yaml::from_str(
+            "providers:\n  a:\n    base_url: https://x/v1\n    context_length: 100000\n    models:\n      Big: {context_length: 900000}\n      plain: {}\n",
+        )
+        .unwrap();
+        let entries = custom_providers(&config);
+        assert_eq!(
+            custom_context_length(&entries, "https://x/v1/", "Big"),
+            Some(900_000)
+        );
+        // Model names are compared as written, so the entry-wide value applies.
+        assert_eq!(
+            custom_context_length(&entries, "https://x/v1", "big"),
+            Some(100_000)
+        );
+        assert_eq!(
+            custom_context_length(&entries, "https://x/v1", "plain"),
+            Some(100_000)
+        );
+        assert_eq!(custom_context_length(&entries, "https://y/v1", "big"), None);
     }
 }

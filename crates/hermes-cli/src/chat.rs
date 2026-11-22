@@ -25,6 +25,89 @@ use serde::{Deserialize, Serialize};
 use tokio::task::block_in_place;
 use tokio::time::{interval_at, Instant};
 
+/// The route of the compression summary from `auxiliary.compression`, or `None` when the main
+/// route does the work. Whatever the section leaves out is taken from the main route when the
+/// endpoint is the same, and must be given otherwise.
+fn summary_route(
+    settings: &hermes_runtime::config::ChatSettings,
+    main_url: &str,
+    main_key: &str,
+) -> Result<Option<Route>, String> {
+    use hermes_runtime::config::{default_base_url, resolve_provider};
+    let aux = &settings.compression_route;
+    if aux.is_default() {
+        return Ok(None);
+    }
+    let name = match (&aux.provider, &aux.base_url) {
+        (Some(provider), _) => provider.as_str(),
+        (None, Some(_)) => "custom",
+        (None, None) => settings.provider,
+    };
+    let Some((provider, default_responses)) = resolve_provider(name) else {
+        return Err(format!(
+            "auxiliary.compression.provider '{name}' is not supported"
+        ));
+    };
+    let base_url = aux
+        .base_url
+        .clone()
+        .or_else(|| (provider == settings.provider).then(|| main_url.to_owned()))
+        .or_else(|| default_base_url(provider).map(str::to_owned))
+        .ok_or("auxiliary.compression needs base_url for this provider")?;
+    let same_endpoint = provider == settings.provider
+        && base_url.trim_end_matches('/') == main_url.trim_end_matches('/');
+    let model = match (&aux.model, same_endpoint) {
+        (Some(model), _) => Some(model.clone()),
+        (None, true) => None,
+        (None, false) => {
+            return Err(
+                "auxiliary.compression.model is required when it uses another endpoint".into(),
+            )
+        }
+    };
+    let key_from_env = aux
+        .key_env
+        .as_deref()
+        .and_then(|name| settings.secret(name));
+    let api_key = aux
+        .api_key
+        .clone()
+        .or(key_from_env)
+        .or_else(|| same_endpoint.then(|| main_key.to_owned()))
+        .or_else(|| settings.vendor_key_for(provider, &base_url))
+        .unwrap_or_default();
+    let responses = match aux.api_mode.as_deref() {
+        Some("codex_responses") => true,
+        Some("chat_completions") => false,
+        _ if same_endpoint => settings.responses,
+        _ => default_responses,
+    };
+    let mut extras = hermes_runtime::providers::Extras {
+        body: aux.extra_body.clone(),
+        headers: Vec::new(),
+    };
+    if same_endpoint {
+        extras.headers = settings.default_headers.clone();
+    }
+    for (name, value) in
+        hermes_runtime::config::custom_extra_headers(&settings.custom_providers, &base_url)
+    {
+        extras
+            .headers
+            .retain(|(known, _)| !known.eq_ignore_ascii_case(&name));
+        extras.headers.push((name, value));
+    }
+    Ok(Some(Route {
+        model,
+        provider: provider.into(),
+        responses,
+        base_url,
+        api_key,
+        extras,
+        timeout_secs: aux.timeout_secs,
+    }))
+}
+
 /// What to do when the provider is not set up yet.
 const SETUP_HINT: &str = "Set it once with `hermes config set model.provider custom`, `hermes config set model.base_url <url>`, `hermes config set model.default <model>` and put the key in the profile .env as HERMES_API_KEY (or in config.yaml as model.api_key); --base-url, --model and --api-key do the same for one run.";
 
@@ -64,6 +147,9 @@ pub struct ChatArgs {
 pub struct ChatRequest {
     #[serde(default)]
     state_scope: Option<String>,
+    /// Where the compression summary is made; the main route when unset.
+    #[serde(default)]
+    summary: Option<Route>,
     root: OsString,
     query: String,
     resume: Option<String>,
@@ -119,6 +205,8 @@ struct Route {
     api_key: String,
     #[serde(default)]
     extras: hermes_runtime::providers::Extras,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
 }
 
 impl Route {
@@ -132,7 +220,7 @@ impl Route {
                 None => return Err("unsupported provider".into()),
             },
         };
-        let timeout = Duration::from_secs(120);
+        let timeout = Duration::from_secs(self.timeout_secs.unwrap_or(120));
         let setup = |error| format!("provider setup failed: {error:?}");
         let provider = if provider_name == "anthropic" {
             Provider::Anthropic(
@@ -196,7 +284,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
             .ok_or("no saved session to continue")?;
         args.resume = Some(latest.id);
     }
-    let settings = load_chat_settings(home)?;
+    let mut settings = load_chat_settings(home)?;
     let base_url = args
         .base_url
         .or_else(|| settings.base_url.clone())
@@ -206,10 +294,19 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
     let api_key = args
         .api_key
         .or(settings.config_api_key.clone())
-        .or(settings.api_key)
+        .or(settings.api_key.clone())
         .or(vendor_api_key)
         .filter(|value| !value.is_empty())
         .ok_or(format!("API key is required. {SETUP_HINT}"))?;
+    if let Some(model) = args.model.as_deref().or(settings.model.as_deref()) {
+        if let Some(window) = hermes_runtime::config::custom_context_length(
+            &settings.custom_providers,
+            &base_url,
+            model,
+        ) {
+            settings.compression.set_context_length_if_unset(window);
+        }
+    }
     let mut extras = hermes_runtime::providers::Extras::default();
     if let Some(model) = args.model.as_deref().or(settings.model.as_deref()) {
         if settings.provider == "custom" || settings.named_custom {
@@ -231,8 +328,10 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
             .retain(|(known, _)| !known.eq_ignore_ascii_case(&name));
         extras.headers.push((name, value));
     }
+    let summary = summary_route(&settings, &base_url, &api_key)?;
     Ok(ChatRequest {
         state_scope: None,
+        summary,
         root: std::env::current_dir()
             .map_err(|error| error.to_string())?
             .into_os_string(),
@@ -269,6 +368,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
             provider: settings.provider.into(),
             responses: settings.responses,
             extras,
+            timeout_secs: None,
             base_url,
             api_key,
         },
@@ -282,6 +382,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
                 base_url: config.base_url,
                 api_key: config.api_key.unwrap_or_default(),
                 extras: Default::default(),
+                timeout_secs: None,
             })
             .collect(),
     })
@@ -330,7 +431,11 @@ where
     let mut history = writer
         .as_mut()
         .map_or_else(Default::default, SessionWriter::take_history);
-    let primary = request.primary.open(model, request.attempts)?;
+    let primary = request.primary.open(model.clone(), request.attempts)?;
+    let summarizer = match &request.summary {
+        Some(route) => Some(route.open(route.model.clone().unwrap_or(model), request.attempts)?),
+        None => None,
+    };
     let (clients, warnings) = McpClients::start(&request.mcp_servers).await;
     for warning in warnings {
         emit(Event::Stderr(warning));
@@ -379,6 +484,7 @@ where
                     &request.prompt,
                     &request.compression,
                     &primary,
+                    summarizer.as_ref(),
                     CompactionTrigger::Estimate {
                         query: &request.query,
                     },
@@ -423,6 +529,7 @@ where
                         &request.prompt,
                         &request.compression,
                         &primary,
+                        summarizer.as_ref(),
                         CompactionTrigger::Overflow,
                     )
                     .await;
