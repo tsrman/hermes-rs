@@ -40,6 +40,8 @@ class CliTest(unittest.TestCase):
             "test_skill_index_uses_profile_and_opted_in_project_roots": "skill",
             "test_skill_view_resolves_exact_paths_and_refuses_ambiguous_names": "skill",
             "test_cancel_interrupts_pending_provider_request": "stall",
+            "test_a_killed_first_turn_leaves_no_database_and_a_rerun_saves_it": "stall_on_resume",
+            "test_a_killed_resume_leaves_the_session_intact_and_recoverable_after_the_lease_expires": "stall_on_resume",
             "test_incomplete_tool_stream_stops_before_dispatch": "partial_tool",
             "test_retries_after_tool_result_without_repeating_tool_call": "tool_retry",
             "test_retries_rate_limit_after_tool_result": "tool_rate_limit",
@@ -912,6 +914,92 @@ class CliTest(unittest.TestCase):
         retry, _ = self.chat_with_profile(args=("--resume", session))
         self.assertEqual(retry.returncode, 0, retry.stderr)
 
+    @unittest.skipUnless(os.name == "posix", "requires SIGKILL")
+    def test_a_killed_resume_leaves_the_session_intact_and_recoverable_after_the_lease_expires(self):
+        session, database, process = self.begin_stalled_resume()
+        process.kill()
+        process.communicate(timeout=5)
+        self.assertEqual(process.returncode, -signal.SIGKILL)
+        with sqlite3.connect(database) as db:
+            self.assertEqual(db.execute("PRAGMA integrity_check").fetchone(), ("ok",))
+            self.assertEqual(db.execute("SELECT count(*) FROM messages").fetchone(), (4,))
+            # A crash cannot release the lease, so it stays until it expires.
+            self.assertEqual(db.execute("SELECT count(*) FROM session_turn_leases").fetchone(), (1,))
+        with urlopen(self.base + "/release", timeout=5):
+            pass
+        blocked, _ = self.chat_with_profile(args=("--resume", session))
+        self.assertEqual(blocked.returncode, 1)
+        self.assertIn("already has an active turn", blocked.stderr)
+        with sqlite3.connect(database) as db:
+            db.execute("UPDATE session_turn_leases SET expires_at = 0")
+        retry, _ = self.chat_with_profile(args=("--resume", session))
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        self.assertEqual(retry.stdout, "Ответ модели\n")
+        with sqlite3.connect(database) as db:
+            self.assertEqual(db.execute("PRAGMA integrity_check").fetchone(), ("ok",))
+            self.assertEqual(db.execute("SELECT count(*) FROM messages").fetchone(), (6,))
+            self.assertEqual(db.execute("SELECT count(*) FROM session_turn_leases").fetchone(), (0,))
+
+    @unittest.skipUnless(os.name == "posix", "requires SIGKILL")
+    def test_a_killed_first_turn_leaves_no_database_and_a_rerun_saves_it(self):
+        home = self.workdir / "hermes"
+        env = {"PATH": os.environ.get("PATH", ""), "HERMES_HOME": str(home), "HERMES_API_KEY": "fixture"}
+        process = subprocess.Popen(
+            [str(BINARY), "chat", "-q", "hold resume", "--base-url", self.base + "/v1", "--model", "fixture", "--save-session"],
+            cwd=self.workdir, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        self.addCleanup(lambda: process.kill() if process.poll() is None else None)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            with urlopen(self.base + "/requests", timeout=5) as response:
+                if json.load(response):
+                    break
+            time.sleep(0.05)
+        else:
+            self.fail("provider did not receive request")
+        process.kill()
+        process.communicate(timeout=5)
+        self.assertFalse((home / "state.db").exists())
+        with urlopen(self.base + "/release", timeout=5):
+            pass
+        rerun = subprocess.run(
+            [str(BINARY), "chat", "-q", "hold resume", "--base-url", self.base + "/v1", "--model", "fixture", "--save-session"],
+            cwd=self.workdir, env=env, capture_output=True, text=True, timeout=45,
+        )
+        self.assertEqual(rerun.returncode, 0, rerun.stderr)
+        session = rerun.stderr.splitlines()[-1].removeprefix("Session: ")
+        with sqlite3.connect(home / "state.db") as db:
+            self.assertEqual(db.execute("PRAGMA integrity_check").fetchone(), ("ok",))
+            # the query, the tool call, its result and the answer
+            self.assertEqual(db.execute("SELECT count(*) FROM messages WHERE session_id = ?", (session,)).fetchone(), (4,))
+
+    def test_sessions_of_one_profile_are_invisible_to_another_and_cannot_be_resumed_there(self):
+        result, _ = self.chat_with_profile(args=("--save-session",), query="Isolatedword exchange")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        session = result.stderr.splitlines()[-1].removeprefix("Session: ")
+        other = self.workdir / "other-profile"
+        other.mkdir()
+        (other / "config.yaml").write_text(
+            f"model:\n  default: primary\n  provider: custom\n  base_url: {self.base}/v1\n", encoding="utf-8")
+        env = {"PATH": os.environ.get("PATH", ""), "HERMES_HOME": str(other), "HERMES_API_KEY": "fixture"}
+        run = lambda *args: subprocess.run([str(BINARY), *args], cwd=self.workdir, env=env,
+                                           capture_output=True, text=True, timeout=45)
+        listed = run("sessions", "list")
+        self.assertNotIn(session, listed.stdout + listed.stderr)
+        found = run("sessions", "search", "Isolatedword")
+        self.assertNotIn("Isolatedword", found.stdout)
+        shown = run("sessions", "show", session)
+        self.assertNotEqual(shown.returncode, 0)
+        self.assertNotIn("Isolatedword", shown.stdout)
+        resumed = run("chat", "-q", "continue", "--resume", session)
+        self.assertNotEqual(resumed.returncode, 0)
+        self.assertFalse((other / "state.db").exists())
+        # The profile that owns it still sees it.
+        mine = subprocess.run([str(BINARY), "sessions", "search", "Isolatedword"], cwd=self.workdir,
+                              env={**env, "HERMES_HOME": str(self.workdir / "hermes")},
+                              capture_output=True, text=True, timeout=45)
+        self.assertIn("Isolatedword", mine.stdout)
+
     def test_interrupted_saved_turn_does_not_create_database(self):
         result, requests = self.chat_with_profile(args=("--save-session",))
         self.assertEqual(result.returncode, 1)
@@ -996,7 +1084,7 @@ class CliTest(unittest.TestCase):
         database = home / "state.db"
         with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM sessions").fetchone(), (2,))
-            self.assertEqual(db.execute("SELECT count(*) FROM messages").fetchone(), (8,))
+            self.assertEqual(db.execute("SELECT count(*) FROM messages").fetchone(), (6,))
             persisted = db.execute("SELECT content FROM messages WHERE role = 'user'").fetchall()
             self.assertCountEqual(persisted, [(prompt,) for prompt in prompts])
 
