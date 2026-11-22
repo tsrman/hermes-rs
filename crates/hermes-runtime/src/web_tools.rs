@@ -29,6 +29,7 @@ pub enum Backend {
     Tavily,
     Searxng,
     BraveFree,
+    Perplexity,
     /// A backend of the Python agent that this crate does not implement.
     Unsupported(String),
 }
@@ -41,6 +42,8 @@ pub struct WebSettings {
     pub tavily_base: Option<String>,
     pub searxng_url: Option<String>,
     pub brave_key: Option<String>,
+    pub perplexity_key: Option<String>,
+    pub perplexity_base: Option<String>,
     pub char_limit: Option<usize>,
     pub allow_private_urls: bool,
 }
@@ -93,6 +96,7 @@ impl WebSettings {
                 "tavily" => Backend::Tavily,
                 "searxng" => Backend::Searxng,
                 "brave-free" => Backend::BraveFree,
+                "perplexity" => Backend::Perplexity,
                 // The managed subscription is served by Firecrawl.
                 "nous" => Backend::Unsupported("firecrawl".into()),
                 other => Backend::Unsupported(other.to_owned()),
@@ -119,6 +123,8 @@ impl WebSettings {
             tavily_base: env("TAVILY_BASE_URL"),
             searxng_url: env("SEARXNG_URL"),
             brave_key: env("BRAVE_SEARCH_API_KEY"),
+            perplexity_key: env("PERPLEXITY_API_KEY"),
+            perplexity_base: env("PERPLEXITY_BASE_URL"),
             char_limit: web
                 .and_then(|web| web.get("extract_char_limit"))
                 .and_then(serde_yaml::Value::as_u64)
@@ -216,6 +222,7 @@ pub async fn search(settings: &WebSettings, arguments: &str) -> Value {
         Backend::Tavily => tavily_search(settings, query, limit).await,
         Backend::Searxng => searxng_search(settings, query, limit).await,
         Backend::BraveFree => brave_search(settings, query, limit).await,
+        Backend::Perplexity => perplexity_search(settings, query, limit).await,
         Backend::Unsupported(name) => failure(unsupported(name)),
         Backend::None => {
             failure("No web search provider configured. Run `hermes tools` to set one up.")
@@ -226,7 +233,7 @@ pub async fn search(settings: &WebSettings, arguments: &str) -> Value {
 
 fn unsupported(name: &str) -> String {
     format!(
-        "The web backend '{name}' is not supported by the Rust CLI yet. Set web.backend to tavily, searxng (search only) or brave-free (search only)."
+        "The web backend '{name}' is not supported by the Rust CLI yet. Set web.backend to tavily, perplexity, searxng (search only) or brave-free (search only)."
     )
 }
 
@@ -395,6 +402,152 @@ async fn brave_search(settings: &WebSettings, query: &str, limit: usize) -> Valu
     search_ok(titled_rows(results.take(limit), "description"))
 }
 
+const PERPLEXITY_KEY_URL: &str = "https://www.perplexity.ai/account/api";
+
+/// POST to Perplexity. A missing key or a non-2xx status is an `Err` carrying the text the
+/// model should see (the response body, so the vendor's own error reaches it verbatim).
+async fn perplexity_request(
+    settings: &WebSettings,
+    endpoint: &str,
+    payload: &Value,
+) -> Result<Value, String> {
+    let Some(key) = settings.perplexity_key.as_deref() else {
+        return Err(format!(
+            "PERPLEXITY_API_KEY is not set. Get a key at {PERPLEXITY_KEY_URL}"
+        ));
+    };
+    let base = settings
+        .perplexity_base
+        .as_deref()
+        .unwrap_or("https://api.perplexity.ai")
+        .trim_end_matches('/');
+    let response = client(Duration::from_secs(60))?
+        .post(format!("{base}/{}", endpoint.trim_start_matches('/')))
+        .bearer_auth(key)
+        .header("HTTP-Referer", "https://hermes-agent.nousresearch.com")
+        .header("X-Title", "Hermes Agent")
+        .header("X-Pplx-Integration", "hermes-agent")
+        .json(payload)
+        .send()
+        .await
+        .map_err(|error| error.without_url().to_string())?;
+    let status = response.status();
+    let body = read_body(response).await?;
+    if status.as_u16() >= 400 {
+        let text = String::from_utf8_lossy(&body).trim().to_owned();
+        return Err(if text.is_empty() {
+            format!("HTTP {}", status.as_u16())
+        } else {
+            text
+        });
+    }
+    serde_json::from_slice(&body).map_err(|error| error.to_string())
+}
+
+async fn perplexity_search(settings: &WebSettings, query: &str, limit: usize) -> Value {
+    let payload = json!({
+        "query": query,
+        "max_results": limit.clamp(1, SEARCH_LIMIT_CAP),
+        "search_context_size": "low"
+    });
+    match perplexity_request(settings, "search", &payload).await {
+        Ok(response) => search_ok(
+            response["results"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .map(|(index, hit)| {
+                    row(
+                        &text_of_or_empty(&hit["title"]),
+                        &text_of_or_empty(&hit["url"]),
+                        &text_of_or_empty(&hit["snippet"]),
+                        index + 1,
+                    )
+                })
+                .collect(),
+        ),
+        Err(message) => failure(message),
+    }
+}
+
+/// `text_of` for Python's `value or ""`: null, false, 0 and empty strings become "".
+fn text_of_or_empty(value: &Value) -> String {
+    match value {
+        Value::Bool(false) => String::new(),
+        Value::Number(number) if number.as_f64() == Some(0.0) => String::new(),
+        other => text_of(other),
+    }
+}
+
+/// Words of the URL paths as the relevance query (`/bloom-filter` becomes `bloom filter`).
+fn perplexity_query(urls: &[String]) -> String {
+    let mut words: Vec<String> = Vec::new();
+    for url in urls {
+        let (host, path) = match reqwest::Url::parse(url) {
+            Ok(parsed) => (
+                parsed.host_str().unwrap_or("").to_owned(),
+                parsed.path().to_owned(),
+            ),
+            Err(_) => (String::new(), String::new()),
+        };
+        for token in path.replace(['-', '_', '/'], " ").split_whitespace() {
+            let lower = token.to_lowercase();
+            if !words.contains(&lower) && !token.chars().all(|c| c.is_ascii_digit()) {
+                words.push(lower);
+            }
+        }
+        if path.trim_matches('/').is_empty() {
+            words.push(host);
+        }
+    }
+    let joined: String = words.join(" ").chars().take(500).collect();
+    if joined.is_empty() {
+        urls.join(" ").chars().take(500).collect()
+    } else {
+        joined
+    }
+}
+
+async fn perplexity_extract(settings: &WebSettings, urls: &[String]) -> Vec<Value> {
+    let payload = json!({
+        "query": perplexity_query(urls),
+        "urls": urls,
+        "max_tokens": 16384,
+        "max_tokens_per_page": 4096
+    });
+    let response = match perplexity_request(settings, "sdk/content/snippets", &payload).await {
+        Ok(response) => response,
+        Err(message) => return urls.iter().map(|url| entry(url, Some(&message))).collect(),
+    };
+    let found: Vec<&Value> = response["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|result| result.is_object())
+        .collect();
+    urls.iter()
+        .map(|url| {
+            // The last result for a URL wins, like the reference's dict.
+            let result = found
+                .iter()
+                .rev()
+                .find(|result| result["url"].as_str().unwrap_or("") == url);
+            let text = result.map_or(String::new(), |r| text_of_or_empty(&r["text"]));
+            let error = result
+                .map(|r| &r["error"])
+                .filter(|error| !text_of_or_empty(error).is_empty())
+                .map(text_of);
+            let error = match (error, text.is_empty()) {
+                (Some(error), _) => Some(error),
+                (None, true) => Some("no content returned".to_owned()),
+                (None, false) => None,
+            };
+            json!({"url": url, "title": "", "content": text, "error": error})
+        })
+        .collect()
+}
+
 fn titled_rows<'a>(results: impl Iterator<Item = &'a Value>, description: &str) -> Vec<Value> {
     results
         .enumerate()
@@ -531,6 +684,7 @@ pub async fn extract(settings: &WebSettings, arguments: &str) -> Value {
         let urls: Vec<String> = safe.iter().map(|(_, url)| url.clone()).collect();
         fetched = match &settings.extract {
             Backend::Tavily => tavily_extract(settings, &urls).await,
+            Backend::Perplexity => perplexity_extract(settings, &urls).await,
             Backend::Searxng | Backend::BraveFree => {
                 let name = if settings.extract == Backend::Searxng {
                     "SearXNG"

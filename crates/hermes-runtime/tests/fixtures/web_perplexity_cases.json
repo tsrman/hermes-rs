@@ -1,0 +1,1326 @@
+[
+ {
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 200,
+   "body": {
+    "results": [
+     {
+      "title": "A",
+      "url": "http://127.0.0.1/x",
+      "snippet": "alpha"
+     },
+     {
+      "title": null,
+      "url": "http://127.0.0.1/",
+      "snippet": ""
+     },
+     {
+      "url": "http://127.0.0.1/"
+     }
+    ]
+   }
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "max_results": 5,
+     "search_context_size": "low"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "A",
+      "url": "http://127.0.0.1/x",
+      "description": "alpha",
+      "position": 1
+     },
+     {
+      "title": "",
+      "url": "http://127.0.0.1/",
+      "description": "",
+      "position": 2
+     },
+     {
+      "title": "",
+      "url": "http://127.0.0.1/",
+      "description": "",
+      "position": 3
+     }
+    ]
+   }
+  }
+ },
+ {
+  "kind": "search",
+  "query": "q",
+  "limit": 1,
+  "answer": {
+   "status": 200,
+   "body": {
+    "results": [
+     {
+      "title": "A",
+      "url": "http://127.0.0.1/x",
+      "snippet": "alpha"
+     },
+     {
+      "title": null,
+      "url": "http://127.0.0.1/",
+      "snippet": ""
+     },
+     {
+      "url": "http://127.0.0.1/"
+     }
+    ]
+   }
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "q",
+     "max_results": 1,
+     "search_context_size": "low"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "A",
+      "url": "http://127.0.0.1/x",
+      "description": "alpha",
+      "position": 1
+     },
+     {
+      "title": "",
+      "url": "http://127.0.0.1/",
+      "description": "",
+      "position": 2
+     },
+     {
+      "title": "",
+      "url": "http://127.0.0.1/",
+      "description": "",
+      "position": 3
+     }
+    ]
+   }
+  }
+ },
+ {
+  "kind": "search",
+  "query": "many",
+  "limit": 50,
+  "answer": {
+   "status": 200,
+   "body": {
+    "results": [
+     {
+      "title": "A",
+      "url": "http://127.0.0.1/x",
+      "snippet": "alpha"
+     },
+     {
+      "title": null,
+      "url": "http://127.0.0.1/",
+      "snippet": ""
+     },
+     {
+      "url": "http://127.0.0.1/"
+     }
+    ]
+   }
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "many",
+     "max_results": 20,
+     "search_context_size": "low"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "A",
+      "url": "http://127.0.0.1/x",
+      "description": "alpha",
+      "position": 1
+     },
+     {
+      "title": "",
+      "url": "http://127.0.0.1/",
+      "description": "",
+      "position": 2
+     },
+     {
+      "title": "",
+      "url": "http://127.0.0.1/",
+      "description": "",
+      "position": 3
+     }
+    ]
+   }
+  }
+ },
+ {
+  "kind": "search",
+  "query": "zero",
+  "limit": 0,
+  "answer": {
+   "status": 200,
+   "body": {
+    "results": [
+     {
+      "title": "A",
+      "url": "http://127.0.0.1/x",
+      "snippet": "alpha"
+     },
+     {
+      "title": null,
+      "url": "http://127.0.0.1/",
+      "snippet": ""
+     },
+     {
+      "url": "http://127.0.0.1/"
+     }
+    ]
+   }
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "zero",
+     "max_results": 1,
+     "search_context_size": "low"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "A",
+      "url": "http://127.0.0.1/x",
+      "description": "alpha",
+      "position": 1
+     },
+     {
+      "title": "",
+      "url": "http://127.0.0.1/",
+      "description": "",
+      "position": 2
+     },
+     {
+      "title": "",
+      "url": "http://127.0.0.1/",
+      "description": "",
+      "position": 3
+     }
+    ]
+   }
+  }
+ },
+ {
+  "kind": "search",
+  "query": "é ü",
+  "limit": 3,
+  "answer": {
+   "status": 200,
+   "body": {
+    "results": [
+     {
+      "title": "A",
+      "url": "http://127.0.0.1/x",
+      "snippet": "alpha"
+     },
+     {
+      "title": null,
+      "url": "http://127.0.0.1/",
+      "snippet": ""
+     },
+     {
+      "url": "http://127.0.0.1/"
+     }
+    ]
+   }
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "é ü",
+     "max_results": 3,
+     "search_context_size": "low"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "A",
+      "url": "http://127.0.0.1/x",
+      "description": "alpha",
+      "position": 1
+     },
+     {
+      "title": "",
+      "url": "http://127.0.0.1/",
+      "description": "",
+      "position": 2
+     },
+     {
+      "title": "",
+      "url": "http://127.0.0.1/",
+      "description": "",
+      "position": 3
+     }
+    ]
+   }
+  }
+ },
+ {
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 200,
+   "body": {}
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "max_results": 5,
+     "search_context_size": "low"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "kind": "search",
+  "query": "q",
+  "limit": 1,
+  "answer": {
+   "status": 200,
+   "body": {}
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "q",
+     "max_results": 1,
+     "search_context_size": "low"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 200,
+   "body": {
+    "results": []
+   }
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "max_results": 5,
+     "search_context_size": "low"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "kind": "search",
+  "query": "q",
+  "limit": 1,
+  "answer": {
+   "status": 200,
+   "body": {
+    "results": []
+   }
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "q",
+     "max_results": 1,
+     "search_context_size": "low"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 429,
+   "text": "rate limited"
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "max_results": 5,
+     "search_context_size": "low"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "rate limited"
+  }
+ },
+ {
+  "kind": "search",
+  "query": "q",
+  "limit": 1,
+  "answer": {
+   "status": 429,
+   "text": "rate limited"
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "q",
+     "max_results": 1,
+     "search_context_size": "low"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "rate limited"
+  }
+ },
+ {
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 401,
+   "text": ""
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "max_results": 5,
+     "search_context_size": "low"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "HTTP 401"
+  }
+ },
+ {
+  "kind": "search",
+  "query": "q",
+  "limit": 1,
+  "answer": {
+   "status": 401,
+   "text": ""
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "q",
+     "max_results": 1,
+     "search_context_size": "low"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "HTTP 401"
+  }
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/bloom-filter",
+   "http://127.0.0.1/2024/x_y",
+   "http://127.0.0.1/missing"
+  ],
+  "answer": {
+   "status": 200,
+   "body": {
+    "results": [
+     {
+      "url": "http://127.0.0.1/bloom-filter",
+      "text": "alpha text"
+     },
+     {
+      "url": "http://127.0.0.1/2024/x_y",
+      "text": "",
+      "error": "blocked"
+     },
+     "junk"
+    ]
+   }
+  },
+  "requests": [
+   {
+    "path": "/sdk/content/snippets",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "bloom filter x y missing",
+     "urls": [
+      "http://127.0.0.1/bloom-filter",
+      "http://127.0.0.1/2024/x_y",
+      "http://127.0.0.1/missing"
+     ],
+     "max_tokens": 16384,
+     "max_tokens_per_page": 4096
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/bloom-filter",
+    "title": "",
+    "content": "alpha text",
+    "raw_content": "alpha text",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/bloom-filter"
+    }
+   },
+   {
+    "url": "http://127.0.0.1/2024/x_y",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/2024/x_y"
+    },
+    "error": "blocked"
+   },
+   {
+    "url": "http://127.0.0.1/missing",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/missing"
+    },
+    "error": "no content returned"
+   }
+  ]
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/dup"
+  ],
+  "answer": {
+   "status": 200,
+   "body": {
+    "results": [
+     {
+      "url": "http://127.0.0.1/bloom-filter",
+      "text": "alpha text"
+     },
+     {
+      "url": "http://127.0.0.1/2024/x_y",
+      "text": "",
+      "error": "blocked"
+     },
+     "junk"
+    ]
+   }
+  },
+  "requests": [
+   {
+    "path": "/sdk/content/snippets",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "dup",
+     "urls": [
+      "http://127.0.0.1/dup"
+     ],
+     "max_tokens": 16384,
+     "max_tokens_per_page": 4096
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/dup",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/dup"
+    },
+    "error": "no content returned"
+   }
+  ]
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/"
+  ],
+  "answer": {
+   "status": 200,
+   "body": {
+    "results": [
+     {
+      "url": "http://127.0.0.1/bloom-filter",
+      "text": "alpha text"
+     },
+     {
+      "url": "http://127.0.0.1/2024/x_y",
+      "text": "",
+      "error": "blocked"
+     },
+     "junk"
+    ]
+   }
+  },
+  "requests": [
+   {
+    "path": "/sdk/content/snippets",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "127.0.0.1",
+     "urls": [
+      "http://127.0.0.1/"
+     ],
+     "max_tokens": 16384,
+     "max_tokens_per_page": 4096
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/"
+    },
+    "error": "no content returned"
+   }
+  ]
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/a-b",
+   "http://127.0.0.1/A_B/9"
+  ],
+  "answer": {
+   "status": 200,
+   "body": {
+    "results": [
+     {
+      "url": "http://127.0.0.1/bloom-filter",
+      "text": "alpha text"
+     },
+     {
+      "url": "http://127.0.0.1/2024/x_y",
+      "text": "",
+      "error": "blocked"
+     },
+     "junk"
+    ]
+   }
+  },
+  "requests": [
+   {
+    "path": "/sdk/content/snippets",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "a b",
+     "urls": [
+      "http://127.0.0.1/a-b",
+      "http://127.0.0.1/A_B/9"
+     ],
+     "max_tokens": 16384,
+     "max_tokens_per_page": 4096
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/a-b",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/a-b"
+    },
+    "error": "no content returned"
+   },
+   {
+    "url": "http://127.0.0.1/A_B/9",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/A_B/9"
+    },
+    "error": "no content returned"
+   }
+  ]
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/bloom-filter",
+   "http://127.0.0.1/2024/x_y",
+   "http://127.0.0.1/missing"
+  ],
+  "answer": {
+   "status": 200,
+   "body": {
+    "results": [
+     {
+      "url": "http://127.0.0.1/dup",
+      "text": "one"
+     },
+     {
+      "url": "http://127.0.0.1/dup",
+      "text": "two"
+     }
+    ]
+   }
+  },
+  "requests": [
+   {
+    "path": "/sdk/content/snippets",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "bloom filter x y missing",
+     "urls": [
+      "http://127.0.0.1/bloom-filter",
+      "http://127.0.0.1/2024/x_y",
+      "http://127.0.0.1/missing"
+     ],
+     "max_tokens": 16384,
+     "max_tokens_per_page": 4096
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/bloom-filter",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/bloom-filter"
+    },
+    "error": "no content returned"
+   },
+   {
+    "url": "http://127.0.0.1/2024/x_y",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/2024/x_y"
+    },
+    "error": "no content returned"
+   },
+   {
+    "url": "http://127.0.0.1/missing",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/missing"
+    },
+    "error": "no content returned"
+   }
+  ]
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/dup"
+  ],
+  "answer": {
+   "status": 200,
+   "body": {
+    "results": [
+     {
+      "url": "http://127.0.0.1/dup",
+      "text": "one"
+     },
+     {
+      "url": "http://127.0.0.1/dup",
+      "text": "two"
+     }
+    ]
+   }
+  },
+  "requests": [
+   {
+    "path": "/sdk/content/snippets",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "dup",
+     "urls": [
+      "http://127.0.0.1/dup"
+     ],
+     "max_tokens": 16384,
+     "max_tokens_per_page": 4096
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/dup",
+    "title": "",
+    "content": "two",
+    "raw_content": "two",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/dup"
+    }
+   }
+  ]
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/"
+  ],
+  "answer": {
+   "status": 200,
+   "body": {
+    "results": [
+     {
+      "url": "http://127.0.0.1/dup",
+      "text": "one"
+     },
+     {
+      "url": "http://127.0.0.1/dup",
+      "text": "two"
+     }
+    ]
+   }
+  },
+  "requests": [
+   {
+    "path": "/sdk/content/snippets",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "127.0.0.1",
+     "urls": [
+      "http://127.0.0.1/"
+     ],
+     "max_tokens": 16384,
+     "max_tokens_per_page": 4096
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/"
+    },
+    "error": "no content returned"
+   }
+  ]
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/a-b",
+   "http://127.0.0.1/A_B/9"
+  ],
+  "answer": {
+   "status": 200,
+   "body": {
+    "results": [
+     {
+      "url": "http://127.0.0.1/dup",
+      "text": "one"
+     },
+     {
+      "url": "http://127.0.0.1/dup",
+      "text": "two"
+     }
+    ]
+   }
+  },
+  "requests": [
+   {
+    "path": "/sdk/content/snippets",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "a b",
+     "urls": [
+      "http://127.0.0.1/a-b",
+      "http://127.0.0.1/A_B/9"
+     ],
+     "max_tokens": 16384,
+     "max_tokens_per_page": 4096
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/a-b",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/a-b"
+    },
+    "error": "no content returned"
+   },
+   {
+    "url": "http://127.0.0.1/A_B/9",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/A_B/9"
+    },
+    "error": "no content returned"
+   }
+  ]
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/bloom-filter",
+   "http://127.0.0.1/2024/x_y",
+   "http://127.0.0.1/missing"
+  ],
+  "answer": {
+   "status": 200,
+   "body": {}
+  },
+  "requests": [
+   {
+    "path": "/sdk/content/snippets",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "bloom filter x y missing",
+     "urls": [
+      "http://127.0.0.1/bloom-filter",
+      "http://127.0.0.1/2024/x_y",
+      "http://127.0.0.1/missing"
+     ],
+     "max_tokens": 16384,
+     "max_tokens_per_page": 4096
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/bloom-filter",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/bloom-filter"
+    },
+    "error": "no content returned"
+   },
+   {
+    "url": "http://127.0.0.1/2024/x_y",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/2024/x_y"
+    },
+    "error": "no content returned"
+   },
+   {
+    "url": "http://127.0.0.1/missing",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/missing"
+    },
+    "error": "no content returned"
+   }
+  ]
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/dup"
+  ],
+  "answer": {
+   "status": 200,
+   "body": {}
+  },
+  "requests": [
+   {
+    "path": "/sdk/content/snippets",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "dup",
+     "urls": [
+      "http://127.0.0.1/dup"
+     ],
+     "max_tokens": 16384,
+     "max_tokens_per_page": 4096
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/dup",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/dup"
+    },
+    "error": "no content returned"
+   }
+  ]
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/"
+  ],
+  "answer": {
+   "status": 200,
+   "body": {}
+  },
+  "requests": [
+   {
+    "path": "/sdk/content/snippets",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "127.0.0.1",
+     "urls": [
+      "http://127.0.0.1/"
+     ],
+     "max_tokens": 16384,
+     "max_tokens_per_page": 4096
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/"
+    },
+    "error": "no content returned"
+   }
+  ]
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/a-b",
+   "http://127.0.0.1/A_B/9"
+  ],
+  "answer": {
+   "status": 200,
+   "body": {}
+  },
+  "requests": [
+   {
+    "path": "/sdk/content/snippets",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "a b",
+     "urls": [
+      "http://127.0.0.1/a-b",
+      "http://127.0.0.1/A_B/9"
+     ],
+     "max_tokens": 16384,
+     "max_tokens_per_page": 4096
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/a-b",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/a-b"
+    },
+    "error": "no content returned"
+   },
+   {
+    "url": "http://127.0.0.1/A_B/9",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/A_B/9"
+    },
+    "error": "no content returned"
+   }
+  ]
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/bloom-filter",
+   "http://127.0.0.1/2024/x_y",
+   "http://127.0.0.1/missing"
+  ],
+  "answer": {
+   "status": 500,
+   "text": "boom"
+  },
+  "requests": [
+   {
+    "path": "/sdk/content/snippets",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "bloom filter x y missing",
+     "urls": [
+      "http://127.0.0.1/bloom-filter",
+      "http://127.0.0.1/2024/x_y",
+      "http://127.0.0.1/missing"
+     ],
+     "max_tokens": 16384,
+     "max_tokens_per_page": 4096
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/bloom-filter",
+    "title": "",
+    "content": "",
+    "error": "boom"
+   },
+   {
+    "url": "http://127.0.0.1/2024/x_y",
+    "title": "",
+    "content": "",
+    "error": "boom"
+   },
+   {
+    "url": "http://127.0.0.1/missing",
+    "title": "",
+    "content": "",
+    "error": "boom"
+   }
+  ]
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/dup"
+  ],
+  "answer": {
+   "status": 500,
+   "text": "boom"
+  },
+  "requests": [
+   {
+    "path": "/sdk/content/snippets",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "dup",
+     "urls": [
+      "http://127.0.0.1/dup"
+     ],
+     "max_tokens": 16384,
+     "max_tokens_per_page": 4096
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/dup",
+    "title": "",
+    "content": "",
+    "error": "boom"
+   }
+  ]
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/"
+  ],
+  "answer": {
+   "status": 500,
+   "text": "boom"
+  },
+  "requests": [
+   {
+    "path": "/sdk/content/snippets",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "127.0.0.1",
+     "urls": [
+      "http://127.0.0.1/"
+     ],
+     "max_tokens": 16384,
+     "max_tokens_per_page": 4096
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/",
+    "title": "",
+    "content": "",
+    "error": "boom"
+   }
+  ]
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/a-b",
+   "http://127.0.0.1/A_B/9"
+  ],
+  "answer": {
+   "status": 500,
+   "text": "boom"
+  },
+  "requests": [
+   {
+    "path": "/sdk/content/snippets",
+    "authorization": "Bearer <key>",
+    "body": {
+     "query": "a b",
+     "urls": [
+      "http://127.0.0.1/a-b",
+      "http://127.0.0.1/A_B/9"
+     ],
+     "max_tokens": 16384,
+     "max_tokens_per_page": 4096
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/a-b",
+    "title": "",
+    "content": "",
+    "error": "boom"
+   },
+   {
+    "url": "http://127.0.0.1/A_B/9",
+    "title": "",
+    "content": "",
+    "error": "boom"
+   }
+  ]
+ },
+ {
+  "kind": "search",
+  "query": "nokey",
+  "limit": 5,
+  "answer": null,
+  "requests": [],
+  "result": {
+   "success": false,
+   "error": "PERPLEXITY_API_KEY is not set. Get a key at https://www.perplexity.ai/account/api"
+  },
+  "no_key": true
+ },
+ {
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/p"
+  ],
+  "answer": null,
+  "requests": [],
+  "result": [
+   {
+    "url": "http://127.0.0.1/p",
+    "title": "",
+    "content": "",
+    "error": "PERPLEXITY_API_KEY is not set. Get a key at https://www.perplexity.ai/account/api"
+   }
+  ],
+  "no_key": true
+ }
+]
