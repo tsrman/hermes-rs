@@ -14,6 +14,7 @@ use std::process::{Command, Stdio};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
 /// What the reference's `bool(...)` of a config value gives.
@@ -76,7 +77,7 @@ pub(crate) fn resolved_files(
 ) -> Vec<PathBuf> {
     let candidates: Vec<String> = if !explicit.is_empty() {
         explicit.to_vec()
-    } else if auto_source_bashrc {
+    } else if auto_source_bashrc && !cfg!(windows) {
         ["~/.profile", "~/.bash_profile", "~/.bashrc"]
             .map(str::to_owned)
             .to_vec()
@@ -103,16 +104,17 @@ fn shell_quote(text: &str) -> String {
 }
 
 fn run(bash: &Path, script: &str, base: &[(String, String)]) -> Option<Vec<u8>> {
-    let mut child = Command::new(bash)
+    let mut command = Command::new(bash);
+    command
         .args(["-l", "-c", script])
         .env_clear()
         .envs(base.iter().cloned())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().ok()?;
     let mut stdout = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
         let mut buffer = Vec::new();
