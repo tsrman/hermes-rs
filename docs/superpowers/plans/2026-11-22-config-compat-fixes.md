@@ -173,3 +173,47 @@ fixtures in `crates/hermes-runtime/tests/fixtures` and the 134 compat tests guar
 - Still open in item 8: `target_ratio`, `tail_mode`, `min_tail_user_messages`, `max_attempts`,
   `abort_on_summary_failure`, `model_thresholds`, proactive pruning and micro-compaction. Each changes
   which messages are summarized, so each needs the reference's boundary selection recorded first.
+
+## Finding while recording the default request (item 11): the default system prompt is a different, much shorter text
+
+Recorded by running the reference (`compat/run_reference_turn.py`, model `fixture`, CLI platform) and the
+port against the same local server, then diffing the first request's system message. The reference sends
+about 8200 characters; the port sends about 1340 [run]. The port's identity, tool and platform paragraphs
+are hand-written early text; only the memory paragraph and (when present) skills, SOUL, project
+instructions and memory blocks come from the reference.
+
+What the reference adds that the port lacks (in its order):
+1. Identity paragraph (`Be direct: match the length of your reply…`) instead of the port's one line.
+2. Docs pointer ("For help with Hermes Agent itself…").
+3. `# Finishing the job`, `# Parallel tool calls` (gated by `agent.task_completion_guidance`,
+   `agent.parallel_tool_call_guidance`), the `skill_manage` workflow hint.
+4. `## Mid-turn user steering` (only when the surface can steer; the reference omits it for one-shot runs).
+   The port has no steering channel, so this must stay out.
+5. The coding-agent block ("You are a coding agent pairing with the user…": gather context, change through
+   tools, verify and know when to stop, respect the repo), then the **Workspace** snapshot (root, branch,
+   status, recent commits, project manifest, context file names) taken from git at session start.
+6. The CLI platform hint (the longer "plain terminal" text), the active-profile line, the conversation
+   date, `Model:`, `Provider:`, `Platform:`, and the `# Hermes runtime environment` block (host kind such
+   as WSL, home, cwd, scratch directory).
+7. Model-gated paragraphs: `TOOL_USE_ENFORCEMENT_GUIDANCE` (`agent.tool_use_enforcement`, `auto` picks by
+   model name) and the execution guidance (`agent.execution_guidance`, `auto` includes DeepSeek, Kimi and
+   Qwen class models) with its Google/Gemma extra.
+
+Why it matters: the live suite passes with the short prompt, but the reference behaviour (verify before
+claiming done, never fabricate tool output, batch independent calls, stop after three failed lint fixes)
+comes from these paragraphs, so a profile moved from Python to Rust would behave differently.
+
+Plan (a project of its own, about 2700 lines of reference code in `agent/system_prompt.py` and
+`agent/prompt_builder.py`):
+1. A fixture generator that records each static paragraph and each gate result from the reference for a
+   grid of (model, provider, platform, tool set, config) and the assembled prompts for sample cases.
+2. Port the paragraphs and gates into `hermes-core/src/prompt.rs` and `hermes-runtime/src/prompt.rs`,
+   keeping the resume rule (a saved session keeps its prompt bytes).
+3. Workspace snapshot: git probe with the reference's limits and caching, honouring
+   `agent.coding_context`.
+4. Runtime environment block (WSL/host detection, scratch directory under the profile cache).
+5. Switch the default prompt over in one commit, update the tests that quote prompt text, re-run the live
+   suite on `deepseek-flash-1017` to check nothing regressed.
+
+Decision needed before step 5: the port's prompt is currently shorter, which also costs fewer tokens per
+turn; matching the reference adds about 2000 tokens to every request (more with the workspace block).
