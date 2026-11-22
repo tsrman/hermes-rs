@@ -1113,7 +1113,7 @@ fn highlight(window: &str, terms: &[String]) -> String {
 }
 
 /// `json.dumps(value, ensure_ascii=False)` with Python's default separators.
-fn py_json_dumps(value: &Value) -> String {
+pub(crate) fn py_json_dumps(value: &Value) -> String {
     match value {
         Value::Array(items) => format!(
             "[{}]",

@@ -787,6 +787,14 @@ fn mcp_servers(
                 headers,
                 timeout_secs: seconds("timeout", 120),
                 connect_timeout_secs: seconds("connect_timeout", 60),
+                // `tools.resources: false` hides the resource tools of a server that offers them.
+                resources: truthy(
+                    entry
+                        .get("tools")
+                        .and_then(|tools| tools.get("resources"))
+                        .unwrap_or(&serde_yaml::Value::Null),
+                    true,
+                ),
             })
         })
         .collect()

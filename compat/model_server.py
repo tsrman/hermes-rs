@@ -204,6 +204,16 @@ class Handler(BaseHTTPRequestHandler):
             function = {"name": "mcp_fixture_echo", "arguments": '{"text":"from mcp"}'}
             wants_tool = not any(message.get("role") == "tool" for message in messages)
             call_id = "mcp-call"
+        elif scenario == "mcp_resources":
+            steps = sum(message.get("role") == "tool" for message in messages)
+            wants_tool = steps < 2
+            call_id = f"mcp-resource-{steps}"
+            function = ({"name": "mcp_fixture_list_resources", "arguments": "{}"} if steps == 0 else
+                        {"name": "mcp_fixture_read_resource", "arguments": '{"uri":"mem://plain"}'})
+        elif scenario == "mcp_slow":
+            function = {"name": "mcp_fixture_slow", "arguments": "{}"}
+            wants_tool = not any(message.get("role") == "tool" for message in messages)
+            call_id = "mcp-slow-call"
         elif scenario == "skill":
             last_user = max(i for i, message in enumerate(messages) if message.get("role") == "user")
             wants_tool = not any(message.get("role") == "tool" for message in messages[last_user + 1:])
@@ -293,7 +303,7 @@ def main():
         "text", "tool", "partial_tool", "stall", "tool_retry", "tool_rate_limit",
         "fallback_after_tool", "fallback_auth", "partial_text", "disconnect_once",
         "iteration_limit", "iteration_summary_tool", "partial_after_tool", "stall_on_resume", "burst", "skill",
-        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "overflow_midturn", "pressure_midturn", "mcp", "web", "memory", "cron_failure", "todo", "delegate", "code",
+        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "overflow_midturn", "pressure_midturn", "mcp", "mcp_resources", "mcp_slow", "web", "memory", "cron_failure", "todo", "delegate", "code",
     ), default="text")
     args = parser.parse_args()
     if bool(args.tls_cert) != bool(args.tls_key):

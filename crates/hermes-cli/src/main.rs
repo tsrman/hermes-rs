@@ -119,6 +119,8 @@ async fn run() -> Result<u8, String> {
                 result = chat::execute(home, request, |event| chat::display(event).is_ok(), approval::prompt) => result,
                 signal = tokio::signal::ctrl_c() => {
                     signal.map_err(|error| format!("signal handler failed: {error}"))?;
+                    // The turn was dropped: tell the MCP servers its calls are cancelled.
+                    hermes_runtime::mcp::flush_cancellations().await;
                     eprintln!("interrupted");
                     Ok(130)
                 }

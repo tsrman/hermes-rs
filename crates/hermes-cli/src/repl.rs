@@ -193,6 +193,7 @@ pub async fn run(home: Option<&Path>, request: ChatRequest) -> Result<u8, String
         };
         match outcome {
             None => {
+                hermes_runtime::mcp::flush_cancellations().await;
                 eprintln!("\ninterrupted (the turn is not saved; /retry sends it again)");
                 unsaved = Some(line.to_owned());
             }

@@ -39,6 +39,8 @@ class CliTest(unittest.TestCase):
             "test_memory_tool_writes_the_store_without_changing_the_prompt_snapshot": "memory",
             "test_web_search_uses_the_configured_backend_and_hides_tools_without_one": "web",
             "test_mcp_streamable_http_tool_uses_profile_secrets": "mcp",
+            "test_mcp_resources_are_listed_and_read_for_the_model": "mcp_resources",
+            "test_cancelling_a_turn_cancels_the_mcp_call_and_stops_the_server": "mcp_slow",
             "test_skill_index_uses_profile_and_opted_in_project_roots": "skill",
             "test_skill_view_resolves_exact_paths_and_refuses_ambiguous_names": "skill",
             "test_cancel_interrupts_pending_provider_request": "stall",
@@ -361,6 +363,54 @@ class CliTest(unittest.TestCase):
         self.assertEqual(json.loads(tool_message["content"]), {"result": "from mcp"})
         entries = json.loads(log.read_text(encoding="utf-8"))
         self.assertEqual(entries[-1], {"delete": "fixture-session"})
+
+    def test_mcp_resources_are_listed_and_read_for_the_model(self):
+        server = ROOT / "compat" / "mcp_fixture_server.py"
+        config = (f"mcp_servers:\n  fixture:\n    command: python3\n    args: ['-I', '{server}']\n"
+                  "    env:\n      HERMES_MCP_RESOURCES: '1'\n")
+        result, recorded = self.chat_with_profile(extra_config=config)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        names = [tool["function"]["name"] for tool in recorded[0]["tools"]]
+        self.assertIn("mcp_fixture_list_resources", names)
+        self.assertIn("mcp_fixture_read_resource", names)
+        corpus = json.loads((ROOT / "crates" / "hermes-runtime" / "tests" / "fixtures" / "mcp_reference.json")
+                            .read_text(encoding="utf-8"))["resources"]
+        # The model gets the text the reference's handlers produce (Python's JSON separators).
+        self.assertEqual(recorded[1]["messages"][-1]["content"], corpus["list_output"])
+        self.assertEqual(recorded[2]["messages"][-1]["content"], corpus["reads"]["mem://plain"])
+
+    def test_cancelling_a_turn_cancels_the_mcp_call_and_stops_the_server(self):
+        server = ROOT / "compat" / "mcp_fixture_server.py"
+        log = self.workdir / "mcp.log"
+        home = self.workdir / "hermes"
+        home.mkdir()
+        (home / "config.yaml").write_text(
+            f"model:\n  default: primary\n  provider: custom\n  base_url: {self.base}/v1\n"
+            f"mcp_servers:\n  fixture:\n    command: python3\n    args: ['-I', '{server}']\n"
+            f"    env:\n      HERMES_MCP_LOG: '{log}'\n", encoding="utf-8")
+        env = {"PATH": os.environ.get("PATH", ""), "HERMES_HOME": str(home), "HERMES_API_KEY": "fixture"}
+        process = subprocess.Popen([str(BINARY), "chat", "-q", "slow"], cwd=self.workdir, env=env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: process.kill() if process.poll() is None else None)
+
+        def entries():
+            return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+        deadline = time.monotonic() + 15
+        while not any(e.get("method") == "tools/call" for e in entries()):
+            self.assertLess(time.monotonic(), deadline, "the MCP server did not get the call")
+            time.sleep(0.05)
+        process.send_signal(signal.SIGINT)
+        process.communicate(timeout=10)
+        self.assertEqual(process.returncode, 130)
+        logged = entries()
+        call = next(e for e in logged if e.get("method") == "tools/call")
+        cancel = next(e for e in logged if e.get("method") == "notifications/cancelled")
+        self.assertEqual(cancel["params"], {"requestId": call["id"], "reason": "caller cancelled"})
+        pid = logged[0]["pid"]
+        deadline = time.monotonic() + 5
+        while Path(f"/proc/{pid}").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(Path(f"/proc/{pid}").exists(), "the MCP server outlived the turn")
 
     def test_web_search_uses_the_configured_backend_and_hides_tools_without_one(self):
         seen = []

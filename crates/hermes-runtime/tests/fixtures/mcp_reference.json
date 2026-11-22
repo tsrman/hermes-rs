@@ -1,0 +1,250 @@
+{
+  "mcp_version": "2.3.0",
+  "messages": {
+    "expired_markers": {
+      "Not Found": false,
+      "Request 'tools/call' timed out": false,
+      "SSE stream ended without a response": false,
+      "Server returned an error response": false,
+      "Session terminated": true
+    },
+    "interrupted": "{\"error\": \"MCP call interrupted: user sent a new message\"}",
+    "missing_uri": "{\"error\": \"Missing required parameter 'uri'\"}",
+    "not_connected": "{\"error\": \"MCP server 'srv' is not connected\"}",
+    "session_outcome_uncertain": "The MCP transport session to '{s}' expired while this write-capable call was in flight, so the outcome is UNKNOWN — the operation may or may not have taken effect server-side. It was NOT automatically retried to avoid a duplicate side effect. The connection has {state}. Verify whether the operation took effect (e.g. with a read-only tool) before re-invoking it.",
+    "timeout_template": "raise TimeoutError(f\"MCP call timed out after {time.monotonic() - start_time:.1f}s \" f\"(configured timeout: {float(timeout):.1f}s)\")",
+    "tool_error_example": "{\"error\": \"The MCP transport session to 'srv' expired while this write-capable call was in flight, so the outcome is UNKNOWN — the operation may or may not have taken effect server-side. It was NOT automatically retried to avoid a duplicate side effect. The connection has been re-established. Verify whether the operation took effect (e.g. with a read-only tool) before re-invoking it.\", \"outcome_uncertain\": true, \"server\": \"srv\"}"
+  },
+  "resources": {
+    "advertises_resources": true,
+    "empty_list": "{\"resources\": []}",
+    "empty_read": "{\"result\": \"\"}",
+    "list_output": "{\"resources\": [{\"uri\": \"file:///notes/a.txt\", \"name\": \"a.txt\", \"description\": \"First note\", \"mimeType\": \"text/plain\"}, {\"uri\": \"mem://plain\", \"name\": \"plain\"}, {\"uri\": \"file:///notes/b.bin\", \"name\": \"b.bin\", \"mimeType\": \"application/octet-stream\"}]}",
+    "missing": {
+      "message": "MCP call failed: MCPError: Resource not found: file:///missing",
+      "text": "Resource not found: file:///missing",
+      "type": "MCPError"
+    },
+    "name_example": [
+      "mcp__my_srv__list_resources",
+      "mcp__my_srv__read_resource"
+    ],
+    "reads": {
+      "file:///notes/a.txt": "{\"result\": \"alpha\"}",
+      "file:///notes/b.bin": "{\"result\": \"[MCP resource saved to <path> (application/octet-stream, 4 bytes) — read it with read_file or terminal tools]\"}",
+      "mem://plain": "{\"result\": \"one\\ntwo\"}"
+    },
+    "render_list_cases": {
+      "output": "{\"resources\": [{\"uri\": \"file:///a\", \"name\": \"a\", \"description\": \"d\", \"mimeType\": \"text/plain\"}, {\"uri\": \"file:///b\", \"name\": \"b\"}, {\"uri\": \"http://example.test\", \"name\": \"nxy\"}, {\"uri\": \"file:///über\", \"name\": \"ü\"}]}",
+      "wire": [
+        {
+          "description": "d",
+          "mimeType": "text/plain",
+          "name": "a",
+          "uri": "file:///a"
+        },
+        {
+          "name": "b",
+          "uri": "file:///b"
+        },
+        {
+          "description": "",
+          "name": "nx󠁁y",
+          "uri": "http://example.test"
+        },
+        {
+          "name": "ü",
+          "uri": "file:///über"
+        }
+      ]
+    },
+    "render_read_cases": {
+      "output": "{\"result\": \"onexy\\n[MCP resource saved to <path> (application/octet-stream, 3 bytes) — read it with read_file or terminal tools]\\n\"}",
+      "wire": {
+        "cacheScope": "private",
+        "contents": [
+          {
+            "text": "onex󠁁y",
+            "uri": "file:///a"
+          },
+          {
+            "blob": "AAAA",
+            "mimeType": "application/octet-stream",
+            "uri": "file:///b"
+          },
+          {
+            "text": "",
+            "uri": "file:///c"
+          }
+        ],
+        "resultType": "complete",
+        "ttlMs": 0
+      }
+    },
+    "schemas": [
+      {
+        "description": "List available resources from MCP server '{server}'",
+        "key": "list_resources",
+        "parameters": {
+          "properties": {},
+          "type": "object"
+        }
+      },
+      {
+        "description": "Read a resource by URI from MCP server '{server}'",
+        "key": "read_resource",
+        "parameters": {
+          "properties": {
+            "uri": {
+              "description": "URI of the resource to read",
+              "type": "string"
+            }
+          },
+          "required": [
+            "uri"
+          ],
+          "type": "object"
+        }
+      }
+    ]
+  },
+  "wire": {
+    "_cancel_http_request_id_is_a_number": true,
+    "cancel_http": {
+      "after_call": true,
+      "params_keys": [
+        "reason",
+        "requestId"
+      ],
+      "protocol": "2025-06-18",
+      "reason": "caller cancelled",
+      "session_header": true
+    },
+    "cancel_stdio": {
+      "call_name": "slow",
+      "params_keys": [
+        "reason",
+        "requestId"
+      ],
+      "reason": "caller cancelled"
+    },
+    "drop": {
+      "gets": [],
+      "outcome": {
+        "error": {
+          "message": "MCP call failed: MCPError: SSE stream ended without a response",
+          "text": "SSE stream ended without a response",
+          "type": "MCPError"
+        }
+      }
+    },
+    "resume": {
+      "gets": [
+        {
+          "accept": "application/json, text/event-stream",
+          "last_event_id": "r1",
+          "protocol": "2025-06-18",
+          "session": "fixture-session"
+        }
+      ],
+      "outcome": {
+        "result": [
+          "resumed"
+        ]
+      }
+    },
+    "resume_fail": {
+      "gets": [
+        {
+          "accept": "application/json, text/event-stream",
+          "last_event_id": "r1",
+          "protocol": "2025-06-18",
+          "session": "fixture-session"
+        },
+        {
+          "accept": "application/json, text/event-stream",
+          "last_event_id": "r1",
+          "protocol": "2025-06-18",
+          "session": "fixture-session"
+        }
+      ],
+      "outcome": {
+        "error": {
+          "message": "MCP call failed: MCPError: SSE stream ended and reconnection attempts were exhausted",
+          "text": "SSE stream ended and reconnection attempts were exhausted",
+          "type": "MCPError"
+        }
+      }
+    },
+    "resume_primed": {
+      "gets": [
+        {
+          "accept": "application/json, text/event-stream",
+          "last_event_id": "r0",
+          "protocol": "2025-06-18",
+          "session": "fixture-session"
+        }
+      ],
+      "outcome": {
+        "result": [
+          "resumed"
+        ]
+      }
+    },
+    "resume_thrice": {
+      "gets": [
+        {
+          "accept": "application/json, text/event-stream",
+          "last_event_id": "r1",
+          "protocol": "2025-06-18",
+          "session": "fixture-session"
+        },
+        {
+          "accept": "application/json, text/event-stream",
+          "last_event_id": "r2",
+          "protocol": "2025-06-18",
+          "session": "fixture-session"
+        },
+        {
+          "accept": "application/json, text/event-stream",
+          "last_event_id": "r3",
+          "protocol": "2025-06-18",
+          "session": "fixture-session"
+        }
+      ],
+      "outcome": {
+        "result": [
+          "resumed"
+        ]
+      }
+    },
+    "resume_twice": {
+      "gets": [
+        {
+          "accept": "application/json, text/event-stream",
+          "last_event_id": "r1",
+          "protocol": "2025-06-18",
+          "session": "fixture-session"
+        },
+        {
+          "accept": "application/json, text/event-stream",
+          "last_event_id": "r2",
+          "protocol": "2025-06-18",
+          "session": "fixture-session"
+        }
+      ],
+      "outcome": {
+        "result": [
+          "resumed"
+        ]
+      }
+    },
+    "session_expired": {
+      "error": {
+        "message": "MCP call failed: MCPError: Session terminated",
+        "text": "Session terminated",
+        "type": "MCPError"
+      }
+    }
+  }
+}

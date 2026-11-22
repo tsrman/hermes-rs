@@ -46,3 +46,28 @@ fn emits_empty_data_event_and_ignores_keepalive() {
     let mut decoder = SseDecoder::new();
     assert_eq!(decoder.push(b": ping\n\ndata:\n\n").unwrap(), [""]);
 }
+
+#[test]
+fn tracks_the_last_event_id_and_retry_across_events_and_chunks() {
+    let mut decoder = SseDecoder::new();
+    assert_eq!(decoder.last_event_id(), None);
+    // A priming event has an id and empty data; the id counts once the event ends.
+    assert!(decoder.push(b"id: r0\nretry: 25\n").unwrap().is_empty());
+    assert_eq!(decoder.last_event_id(), None);
+    assert_eq!(decoder.push(b"data:\n\n").unwrap(), [""]);
+    assert_eq!(decoder.last_event_id(), Some("r0"));
+    assert_eq!(decoder.retry_ms(), Some(25));
+    // An event without an id keeps the previous one; an id with a NUL or a bad retry is ignored.
+    assert_eq!(decoder.push(b"data: a\n\n").unwrap(), ["a"]);
+    assert_eq!(decoder.last_event_id(), Some("r0"));
+    assert_eq!(
+        decoder
+            .push(b"id: bad\x00id\nretry: 1x\ndata: b\n\n")
+            .unwrap(),
+        ["b"]
+    );
+    assert_eq!(decoder.last_event_id(), Some("r0"));
+    assert_eq!(decoder.retry_ms(), Some(25));
+    assert_eq!(decoder.push(b"id: r7\r\ndata: c\r\n\r\n").unwrap(), ["c"]);
+    assert_eq!(decoder.last_event_id(), Some("r7"));
+}
