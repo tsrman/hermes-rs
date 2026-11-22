@@ -161,7 +161,7 @@ async fn search_reports_missing_input_and_unsupported_backends() {
     );
     let exa = parsed(
         &search(
-            &settings(Backend::Unsupported("exa".into())),
+            &settings(Backend::Unsupported("keenable".into())),
             r#"{"query":"x"}"#,
         )
         .await,
@@ -169,7 +169,7 @@ async fn search_reports_missing_input_and_unsupported_backends() {
     assert!(exa["error"]
         .as_str()
         .unwrap()
-        .contains("'exa' is not supported"));
+        .contains("'keenable' is not supported"));
 }
 
 #[tokio::test]

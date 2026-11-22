@@ -30,6 +30,8 @@ pub enum Backend {
     Searxng,
     BraveFree,
     Perplexity,
+    Exa,
+    Parallel,
     /// A backend of the Python agent that this crate does not implement.
     Unsupported(String),
 }
@@ -44,6 +46,12 @@ pub struct WebSettings {
     pub brave_key: Option<String>,
     pub perplexity_key: Option<String>,
     pub perplexity_base: Option<String>,
+    pub exa_key: Option<String>,
+    /// Only tests set this: the reference reads no endpoint override for Exa.
+    pub exa_base: Option<String>,
+    pub parallel_key: Option<String>,
+    pub parallel_base: Option<String>,
+    pub parallel_mode: Option<String>,
     pub char_limit: Option<usize>,
     pub allow_private_urls: bool,
 }
@@ -97,6 +105,8 @@ impl WebSettings {
                 "searxng" => Backend::Searxng,
                 "brave-free" => Backend::BraveFree,
                 "perplexity" => Backend::Perplexity,
+                "exa" => Backend::Exa,
+                "parallel" => Backend::Parallel,
                 // The managed subscription is served by Firecrawl.
                 "nous" => Backend::Unsupported("firecrawl".into()),
                 other => Backend::Unsupported(other.to_owned()),
@@ -125,6 +135,11 @@ impl WebSettings {
             brave_key: env("BRAVE_SEARCH_API_KEY"),
             perplexity_key: env("PERPLEXITY_API_KEY"),
             perplexity_base: env("PERPLEXITY_BASE_URL"),
+            exa_key: env("EXA_API_KEY"),
+            exa_base: None,
+            parallel_key: env("PARALLEL_API_KEY"),
+            parallel_base: env("PARALLEL_BASE_URL"),
+            parallel_mode: env("PARALLEL_SEARCH_MODE"),
             char_limit: web
                 .and_then(|web| web.get("extract_char_limit"))
                 .and_then(serde_yaml::Value::as_u64)
@@ -159,7 +174,7 @@ fn pretty(value: &Value) -> Value {
     Value::String(serde_json::to_string_pretty(value).unwrap_or_default())
 }
 
-fn client(timeout: Duration) -> Result<reqwest::Client, String> {
+pub(crate) fn client(timeout: Duration) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .use_rustls_tls()
         .tls_built_in_root_certs(false)
@@ -170,7 +185,7 @@ fn client(timeout: Duration) -> Result<reqwest::Client, String> {
         .map_err(|error| error.without_url().to_string())
 }
 
-async fn read_body(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
+pub(crate) async fn read_body(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
     let mut body = Vec::new();
     while let Some(chunk) = response
         .chunk()
@@ -185,7 +200,7 @@ async fn read_body(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
     Ok(body)
 }
 
-fn failure(error: impl Into<String>) -> Value {
+pub(crate) fn failure(error: impl Into<String>) -> Value {
     json!({"success": false, "error": error.into()})
 }
 
@@ -193,7 +208,7 @@ fn row(title: &str, url: &str, description: &str, position: usize) -> Value {
     json!({"title": title, "url": url, "description": description, "position": position})
 }
 
-fn text_of(value: &Value) -> String {
+pub(crate) fn text_of(value: &Value) -> String {
     match value {
         Value::Null => String::new(),
         Value::String(text) => text.clone(),
@@ -223,6 +238,8 @@ pub async fn search(settings: &WebSettings, arguments: &str) -> Value {
         Backend::Searxng => searxng_search(settings, query, limit).await,
         Backend::BraveFree => brave_search(settings, query, limit).await,
         Backend::Perplexity => perplexity_search(settings, query, limit).await,
+        Backend::Exa => crate::web_vendors::exa_search(settings, query, limit).await,
+        Backend::Parallel => crate::web_vendors::parallel_search(settings, query, limit).await,
         Backend::Unsupported(name) => failure(unsupported(name)),
         Backend::None => {
             failure("No web search provider configured. Run `hermes tools` to set one up.")
@@ -233,11 +250,11 @@ pub async fn search(settings: &WebSettings, arguments: &str) -> Value {
 
 fn unsupported(name: &str) -> String {
     format!(
-        "The web backend '{name}' is not supported by the Rust CLI yet. Set web.backend to tavily, perplexity, searxng (search only) or brave-free (search only)."
+        "The web backend '{name}' is not supported by the Rust CLI yet. Set web.backend to tavily, perplexity, exa, parallel, searxng (search only) or brave-free (search only)."
     )
 }
 
-fn search_ok(rows: Vec<Value>) -> Value {
+pub(crate) fn search_ok(rows: Vec<Value>) -> Value {
     json!({"success": true, "data": {"web": rows}})
 }
 
@@ -621,7 +638,7 @@ fn percent_decoded(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn entry(url: &str, error: Option<&str>) -> Value {
+pub(crate) fn entry(url: &str, error: Option<&str>) -> Value {
     json!({"url": url, "title": "", "content": "", "error": error})
 }
 
@@ -685,6 +702,8 @@ pub async fn extract(settings: &WebSettings, arguments: &str) -> Value {
         fetched = match &settings.extract {
             Backend::Tavily => tavily_extract(settings, &urls).await,
             Backend::Perplexity => perplexity_extract(settings, &urls).await,
+            Backend::Exa => crate::web_vendors::exa_extract(settings, &urls).await,
+            Backend::Parallel => crate::web_vendors::parallel_extract(settings, &urls).await,
             Backend::Searxng | Backend::BraveFree => {
                 let name = if settings.extract == Backend::Searxng {
                     "SearXNG"
@@ -802,6 +821,11 @@ async fn tavily_extract(settings: &WebSettings, urls: &[String]) -> Vec<Value> {
     for url in response["failed_urls"].as_array().into_iter().flatten() {
         pages.push(entry(&text_of(url), Some("extraction failed")));
     }
+    align_pages(urls, pages)
+}
+
+/// Match fetched pages to the requested URLs, in request order.
+pub(crate) fn align_pages(urls: &[String], pages: Vec<Value>) -> Vec<Value> {
     // Providers may omit failures or answer out of order. A page is matched to its request by
     // URL; a page reported under another URL (a redirect) fills the next request left without one.
     let mut used = vec![false; pages.len()];
@@ -969,9 +993,23 @@ mod settings_tests {
             &[("SEARXNG_URL", "http://s"), ("BRAVE_SEARCH_API_KEY", "b")],
         );
         assert_eq!(searx.search, Backend::Searxng);
-        // A key for a backend that is not implemented still wins its slot, so it is never skipped silently.
+        // The reference's order (tavily, perplexity, exa, parallel, keenable, firecrawl, ...) decides
+        // among keys; a key for a backend that is not implemented still wins its slot, so it is
+        // never skipped silently.
         let exa = load("{}", &[("EXA_API_KEY", "e"), ("SEARXNG_URL", "http://s")]);
-        assert_eq!(exa.search, Backend::Unsupported("exa".into()));
+        assert_eq!(exa.search, Backend::Exa);
+        let parallel = load(
+            "{}",
+            &[("PARALLEL_API_KEY", "p"), ("KEENABLE_API_KEY", "k")],
+        );
+        assert_eq!(parallel.search, Backend::Parallel);
+        let perplexity = load("{}", &[("PERPLEXITY_API_KEY", "p"), ("EXA_API_KEY", "e")]);
+        assert_eq!(perplexity.extract, Backend::Perplexity);
+        let keenable = load(
+            "{}",
+            &[("KEENABLE_API_KEY", "k"), ("SEARXNG_URL", "http://s")],
+        );
+        assert_eq!(keenable.search, Backend::Unsupported("keenable".into()));
         // Per-capability pins beat the shared backend.
         let pinned = load(
             "web: {backend: tavily, search_backend: Brave-Free, extract_backend: firecrawl}",

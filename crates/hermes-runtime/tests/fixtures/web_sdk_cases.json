@@ -1,0 +1,1353 @@
+[
+ {
+  "vendor": "exa",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 200,
+   "body": {
+    "requestId": "r",
+    "results": [
+     {
+      "id": "i1",
+      "url": "http://127.0.0.1/a",
+      "title": "A",
+      "highlights": [
+       "one",
+       "two"
+      ]
+     },
+     {
+      "id": "i2",
+      "url": "http://127.0.0.1/b",
+      "title": null,
+      "highlights": null
+     },
+     {
+      "id": "i3",
+      "url": null,
+      "title": "C"
+     }
+    ]
+   },
+   "raw": "{\"requestId\": \"r\", \"results\": [{\"id\": \"i1\", \"url\": \"http://127.0.0.1/a\", \"title\": \"A\", \"highlights\": [\"one\", \"two\"]}, {\"id\": \"i2\", \"url\": \"http://127.0.0.1/b\", \"title\": null, \"highlights\": null}, {\"id\": \"i3\", \"url\": null, \"title\": \"C\"}]}"
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "query": "python asyncio",
+     "contents": {
+      "highlights": true
+     },
+     "numResults": 5
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "url": "http://127.0.0.1/a",
+      "title": "A",
+      "description": "one two",
+      "position": 1
+     },
+     {
+      "url": "http://127.0.0.1/b",
+      "title": "",
+      "description": "",
+      "position": 2
+     },
+     {
+      "url": "",
+      "title": "C",
+      "description": "",
+      "position": 3
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "exa",
+  "kind": "search",
+  "query": "many",
+  "limit": 50,
+  "answer": {
+   "status": 200,
+   "body": {
+    "requestId": "r",
+    "results": [
+     {
+      "id": "i1",
+      "url": "http://127.0.0.1/a",
+      "title": "A",
+      "highlights": [
+       "one",
+       "two"
+      ]
+     },
+     {
+      "id": "i2",
+      "url": "http://127.0.0.1/b",
+      "title": null,
+      "highlights": null
+     },
+     {
+      "id": "i3",
+      "url": null,
+      "title": "C"
+     }
+    ]
+   },
+   "raw": "{\"requestId\": \"r\", \"results\": [{\"id\": \"i1\", \"url\": \"http://127.0.0.1/a\", \"title\": \"A\", \"highlights\": [\"one\", \"two\"]}, {\"id\": \"i2\", \"url\": \"http://127.0.0.1/b\", \"title\": null, \"highlights\": null}, {\"id\": \"i3\", \"url\": null, \"title\": \"C\"}]}"
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "query": "many",
+     "contents": {
+      "highlights": true
+     },
+     "numResults": 50
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "url": "http://127.0.0.1/a",
+      "title": "A",
+      "description": "one two",
+      "position": 1
+     },
+     {
+      "url": "http://127.0.0.1/b",
+      "title": "",
+      "description": "",
+      "position": 2
+     },
+     {
+      "url": "",
+      "title": "C",
+      "description": "",
+      "position": 3
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "exa",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 200,
+   "body": {
+    "requestId": "r",
+    "results": [
+     {
+      "id": "i1",
+      "url": "http://127.0.0.1/a",
+      "title": "A",
+      "highlights": [
+       "one",
+       "two"
+      ]
+     },
+     {
+      "id": "i2",
+      "url": "http://127.0.0.1/b",
+      "title": null,
+      "highlights": null
+     },
+     {
+      "id": "i3",
+      "url": null,
+      "title": "C"
+     }
+    ]
+   },
+   "raw": "{\"requestId\": \"r\", \"results\": [{\"id\": \"i1\", \"url\": \"http://127.0.0.1/a\", \"title\": \"A\", \"highlights\": [\"one\", \"two\"]}, {\"id\": \"i2\", \"url\": \"http://127.0.0.1/b\", \"title\": null, \"highlights\": null}, {\"id\": \"i3\", \"url\": null, \"title\": \"C\"}]}"
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "query": "one",
+     "contents": {
+      "highlights": true
+     },
+     "numResults": 1
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "url": "http://127.0.0.1/a",
+      "title": "A",
+      "description": "one two",
+      "position": 1
+     },
+     {
+      "url": "http://127.0.0.1/b",
+      "title": "",
+      "description": "",
+      "position": 2
+     },
+     {
+      "url": "",
+      "title": "C",
+      "description": "",
+      "position": 3
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "exa",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 200,
+   "body": {
+    "requestId": "r",
+    "results": []
+   },
+   "raw": "{\"requestId\": \"r\", \"results\": []}"
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "query": "python asyncio",
+     "contents": {
+      "highlights": true
+     },
+     "numResults": 5
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "vendor": "exa",
+  "kind": "search",
+  "query": "many",
+  "limit": 50,
+  "answer": {
+   "status": 200,
+   "body": {
+    "requestId": "r",
+    "results": []
+   },
+   "raw": "{\"requestId\": \"r\", \"results\": []}"
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "query": "many",
+     "contents": {
+      "highlights": true
+     },
+     "numResults": 50
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "vendor": "exa",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 200,
+   "body": {
+    "requestId": "r",
+    "results": []
+   },
+   "raw": "{\"requestId\": \"r\", \"results\": []}"
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "query": "one",
+     "contents": {
+      "highlights": true
+     },
+     "numResults": 1
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "vendor": "exa",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 401,
+   "body": {
+    "error": "bad key"
+   },
+   "raw": "{\"error\": \"bad key\"}"
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "query": "python asyncio",
+     "contents": {
+      "highlights": true
+     },
+     "numResults": 5
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Request failed with status code 401: {\"error\": \"bad key\"}"
+  }
+ },
+ {
+  "vendor": "exa",
+  "kind": "search",
+  "query": "many",
+  "limit": 50,
+  "answer": {
+   "status": 401,
+   "body": {
+    "error": "bad key"
+   },
+   "raw": "{\"error\": \"bad key\"}"
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "query": "many",
+     "contents": {
+      "highlights": true
+     },
+     "numResults": 50
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Request failed with status code 401: {\"error\": \"bad key\"}"
+  }
+ },
+ {
+  "vendor": "exa",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 401,
+   "body": {
+    "error": "bad key"
+   },
+   "raw": "{\"error\": \"bad key\"}"
+  },
+  "requests": [
+   {
+    "path": "/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "query": "one",
+     "contents": {
+      "highlights": true
+     },
+     "numResults": 1
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Request failed with status code 401: {\"error\": \"bad key\"}"
+  }
+ },
+ {
+  "vendor": "exa",
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/a",
+   "http://127.0.0.1/b",
+   "http://127.0.0.1/c",
+   "http://127.0.0.1/d",
+   "http://127.0.0.1/e",
+   "http://127.0.0.1/f",
+   "http://127.0.0.1/g"
+  ],
+  "answer": {
+   "status": 200,
+   "body": {
+    "requestId": "r",
+    "results": [
+     {
+      "id": "http://127.0.0.1/a",
+      "url": "http://127.0.0.1/a",
+      "title": "A",
+      "text": "alpha"
+     },
+     {
+      "id": "http://127.0.0.1/b",
+      "url": "http://127.0.0.1/b",
+      "title": null,
+      "text": null
+     }
+    ],
+    "statuses": [
+     {
+      "id": "http://127.0.0.1/c",
+      "status": "error",
+      "error": {
+       "tag": "CRAWL_HTTP_429",
+       "httpStatusCode": null
+      }
+     },
+     {
+      "id": "http://127.0.0.1/d",
+      "status": "error",
+      "error": {
+       "tag": "CRAWL_NOT_FOUND",
+       "httpStatusCode": 404
+      }
+     },
+     {
+      "id": "http://127.0.0.1/e",
+      "status": "error",
+      "error": {
+       "tag": "SOURCE_NOT_AVAILABLE",
+       "httpStatusCode": null
+      }
+     },
+     {
+      "id": "http://127.0.0.1/f",
+      "status": "error",
+      "error": {
+       "tag": "CRAWL_HTTP_400",
+       "httpStatusCode": null
+      }
+     },
+     {
+      "id": "http://127.0.0.1/g",
+      "status": "error",
+      "error": {
+       "tag": "ODD",
+       "httpStatusCode": 399
+      }
+     },
+     {
+      "id": "http://127.0.0.1/a",
+      "status": "success"
+     }
+    ]
+   },
+   "raw": "{\"requestId\": \"r\", \"results\": [{\"id\": \"http://127.0.0.1/a\", \"url\": \"http://127.0.0.1/a\", \"title\": \"A\", \"text\": \"alpha\"}, {\"id\": \"http://127.0.0.1/b\", \"url\": \"http://127.0.0.1/b\", \"title\": null, \"text\": null}], \"statuses\": [{\"id\": \"http://127.0.0.1/c\", \"status\": \"error\", \"error\": {\"tag\": \"CRAWL_HTTP_429\", \"httpStatusCode\": null}}, {\"id\": \"http://127.0.0.1/d\", \"status\": \"error\", \"error\": {\"tag\": \"CRAWL_NOT_FOUND\", \"httpStatusCode\": 404}}, {\"id\": \"http://127.0.0.1/e\", \"status\": \"error\", \"error\": {\"tag\": \"SOURCE_NOT_AVAILABLE\", \"httpStatusCode\": null}}, {\"id\": \"http://127.0.0.1/f\", \"status\": \"error\", \"error\": {\"tag\": \"CRAWL_HTTP_400\", \"httpStatusCode\": null}}, {\"id\": \"http://127.0.0.1/g\", \"status\": \"error\", \"error\": {\"tag\": \"ODD\", \"httpStatusCode\": 399}}, {\"id\": \"http://127.0.0.1/a\", \"status\": \"success\"}]}"
+  },
+  "requests": [
+   {
+    "path": "/contents",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "urls": [
+      "http://127.0.0.1/a",
+      "http://127.0.0.1/b",
+      "http://127.0.0.1/c",
+      "http://127.0.0.1/d",
+      "http://127.0.0.1/e",
+      "http://127.0.0.1/f",
+      "http://127.0.0.1/g"
+     ],
+     "text": true
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/a",
+    "title": "A",
+    "content": "alpha",
+    "raw_content": "alpha",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/a",
+     "title": "A"
+    }
+   },
+   {
+    "url": "http://127.0.0.1/b",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/b",
+     "title": ""
+    }
+   },
+   {
+    "url": "http://127.0.0.1/c",
+    "title": "",
+    "content": "",
+    "error": "HTTP 429 from origin",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/c"
+    }
+   },
+   {
+    "url": "http://127.0.0.1/d",
+    "title": "",
+    "content": "",
+    "error": "HTTP 404 from origin",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/d"
+    }
+   },
+   {
+    "url": "http://127.0.0.1/e",
+    "title": "",
+    "content": "",
+    "error": "SOURCE_NOT_AVAILABLE",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/e"
+    }
+   },
+   {
+    "url": "http://127.0.0.1/f",
+    "title": "",
+    "content": "",
+    "error": "HTTP 400 from origin",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/f"
+    }
+   },
+   {
+    "url": "http://127.0.0.1/g",
+    "title": "",
+    "content": "",
+    "error": "ODD",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/g"
+    }
+   }
+  ]
+ },
+ {
+  "vendor": "exa",
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/a",
+   "http://127.0.0.1/b",
+   "http://127.0.0.1/c",
+   "http://127.0.0.1/d",
+   "http://127.0.0.1/e",
+   "http://127.0.0.1/f",
+   "http://127.0.0.1/g"
+  ],
+  "answer": {
+   "status": 500,
+   "body": {
+    "error": "boom"
+   },
+   "raw": "{\"error\": \"boom\"}"
+  },
+  "requests": [
+   {
+    "path": "/contents",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "urls": [
+      "http://127.0.0.1/a",
+      "http://127.0.0.1/b",
+      "http://127.0.0.1/c",
+      "http://127.0.0.1/d",
+      "http://127.0.0.1/e",
+      "http://127.0.0.1/f",
+      "http://127.0.0.1/g"
+     ],
+     "text": true
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/a",
+    "title": "",
+    "content": "",
+    "error": "Request failed with status code 500: {\"error\": \"boom\"}"
+   },
+   {
+    "url": "http://127.0.0.1/b",
+    "title": "",
+    "content": "",
+    "error": "Request failed with status code 500: {\"error\": \"boom\"}"
+   },
+   {
+    "url": "http://127.0.0.1/c",
+    "title": "",
+    "content": "",
+    "error": "Request failed with status code 500: {\"error\": \"boom\"}"
+   },
+   {
+    "url": "http://127.0.0.1/d",
+    "title": "",
+    "content": "",
+    "error": "Request failed with status code 500: {\"error\": \"boom\"}"
+   },
+   {
+    "url": "http://127.0.0.1/e",
+    "title": "",
+    "content": "",
+    "error": "Request failed with status code 500: {\"error\": \"boom\"}"
+   },
+   {
+    "url": "http://127.0.0.1/f",
+    "title": "",
+    "content": "",
+    "error": "Request failed with status code 500: {\"error\": \"boom\"}"
+   },
+   {
+    "url": "http://127.0.0.1/g",
+    "title": "",
+    "content": "",
+    "error": "Request failed with status code 500: {\"error\": \"boom\"}"
+   }
+  ]
+ },
+ {
+  "vendor": "parallel",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 200,
+   "body": {
+    "search_id": "s",
+    "results": [
+     {
+      "url": "http://127.0.0.1/a",
+      "title": "A",
+      "excerpts": [
+       "one",
+       "two"
+      ]
+     },
+     {
+      "url": "http://127.0.0.1/b",
+      "title": null,
+      "excerpts": null
+     }
+    ]
+   },
+   "raw": "{\"search_id\": \"s\", \"results\": [{\"url\": \"http://127.0.0.1/a\", \"title\": \"A\", \"excerpts\": [\"one\", \"two\"]}, {\"url\": \"http://127.0.0.1/b\", \"title\": null, \"excerpts\": null}]}"
+  },
+  "requests": [
+   {
+    "path": "/v1beta/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "max_results": 5,
+     "mode": "agentic",
+     "objective": "python asyncio",
+     "search_queries": [
+      "python asyncio"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "url": "http://127.0.0.1/a",
+      "title": "A",
+      "description": "one two",
+      "position": 1
+     },
+     {
+      "url": "http://127.0.0.1/b",
+      "title": "",
+      "description": "",
+      "position": 2
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "parallel",
+  "kind": "search",
+  "query": "many",
+  "limit": 50,
+  "answer": {
+   "status": 200,
+   "body": {
+    "search_id": "s",
+    "results": [
+     {
+      "url": "http://127.0.0.1/a",
+      "title": "A",
+      "excerpts": [
+       "one",
+       "two"
+      ]
+     },
+     {
+      "url": "http://127.0.0.1/b",
+      "title": null,
+      "excerpts": null
+     }
+    ]
+   },
+   "raw": "{\"search_id\": \"s\", \"results\": [{\"url\": \"http://127.0.0.1/a\", \"title\": \"A\", \"excerpts\": [\"one\", \"two\"]}, {\"url\": \"http://127.0.0.1/b\", \"title\": null, \"excerpts\": null}]}"
+  },
+  "requests": [
+   {
+    "path": "/v1beta/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "max_results": 20,
+     "mode": "agentic",
+     "objective": "many",
+     "search_queries": [
+      "many"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "url": "http://127.0.0.1/a",
+      "title": "A",
+      "description": "one two",
+      "position": 1
+     },
+     {
+      "url": "http://127.0.0.1/b",
+      "title": "",
+      "description": "",
+      "position": 2
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "parallel",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 200,
+   "body": {
+    "search_id": "s",
+    "results": [
+     {
+      "url": "http://127.0.0.1/a",
+      "title": "A",
+      "excerpts": [
+       "one",
+       "two"
+      ]
+     },
+     {
+      "url": "http://127.0.0.1/b",
+      "title": null,
+      "excerpts": null
+     }
+    ]
+   },
+   "raw": "{\"search_id\": \"s\", \"results\": [{\"url\": \"http://127.0.0.1/a\", \"title\": \"A\", \"excerpts\": [\"one\", \"two\"]}, {\"url\": \"http://127.0.0.1/b\", \"title\": null, \"excerpts\": null}]}"
+  },
+  "requests": [
+   {
+    "path": "/v1beta/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "max_results": 1,
+     "mode": "agentic",
+     "objective": "one",
+     "search_queries": [
+      "one"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "url": "http://127.0.0.1/a",
+      "title": "A",
+      "description": "one two",
+      "position": 1
+     },
+     {
+      "url": "http://127.0.0.1/b",
+      "title": "",
+      "description": "",
+      "position": 2
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "parallel",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 200,
+   "body": {
+    "search_id": "s",
+    "results": []
+   },
+   "raw": "{\"search_id\": \"s\", \"results\": []}"
+  },
+  "requests": [
+   {
+    "path": "/v1beta/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "max_results": 5,
+     "mode": "agentic",
+     "objective": "python asyncio",
+     "search_queries": [
+      "python asyncio"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "vendor": "parallel",
+  "kind": "search",
+  "query": "many",
+  "limit": 50,
+  "answer": {
+   "status": 200,
+   "body": {
+    "search_id": "s",
+    "results": []
+   },
+   "raw": "{\"search_id\": \"s\", \"results\": []}"
+  },
+  "requests": [
+   {
+    "path": "/v1beta/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "max_results": 20,
+     "mode": "agentic",
+     "objective": "many",
+     "search_queries": [
+      "many"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "vendor": "parallel",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 200,
+   "body": {
+    "search_id": "s",
+    "results": []
+   },
+   "raw": "{\"search_id\": \"s\", \"results\": []}"
+  },
+  "requests": [
+   {
+    "path": "/v1beta/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "max_results": 1,
+     "mode": "agentic",
+     "objective": "one",
+     "search_queries": [
+      "one"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "vendor": "parallel",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 403,
+   "body": {
+    "error": "forbidden"
+   },
+   "raw": "{\"error\": \"forbidden\"}"
+  },
+  "requests": [
+   {
+    "path": "/v1beta/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "max_results": 5,
+     "mode": "agentic",
+     "objective": "python asyncio",
+     "search_queries": [
+      "python asyncio"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Parallel search failed: Error code: 403 - {'error': 'forbidden'}"
+  }
+ },
+ {
+  "vendor": "parallel",
+  "kind": "search",
+  "query": "many",
+  "limit": 50,
+  "answer": {
+   "status": 403,
+   "body": {
+    "error": "forbidden"
+   },
+   "raw": "{\"error\": \"forbidden\"}"
+  },
+  "requests": [
+   {
+    "path": "/v1beta/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "max_results": 20,
+     "mode": "agentic",
+     "objective": "many",
+     "search_queries": [
+      "many"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Parallel search failed: Error code: 403 - {'error': 'forbidden'}"
+  }
+ },
+ {
+  "vendor": "parallel",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 403,
+   "body": {
+    "error": "forbidden"
+   },
+   "raw": "{\"error\": \"forbidden\"}"
+  },
+  "requests": [
+   {
+    "path": "/v1beta/search",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "max_results": 1,
+     "mode": "agentic",
+     "objective": "one",
+     "search_queries": [
+      "one"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Parallel search failed: Error code: 403 - {'error': 'forbidden'}"
+  }
+ },
+ {
+  "vendor": "parallel",
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/a",
+   "http://127.0.0.1/b",
+   "http://127.0.0.1/c",
+   "http://127.0.0.1/d",
+   "http://127.0.0.1/e",
+   "http://127.0.0.1/f",
+   "http://127.0.0.1/g"
+  ],
+  "answer": {
+   "status": 200,
+   "body": {
+    "extract_id": "e",
+    "results": [
+     {
+      "url": "http://127.0.0.1/a",
+      "title": "A",
+      "full_content": "alpha",
+      "excerpts": [
+       "x"
+      ]
+     },
+     {
+      "url": "http://127.0.0.1/b",
+      "title": null,
+      "full_content": null,
+      "excerpts": [
+       "p",
+       "q"
+      ]
+     }
+    ],
+    "errors": [
+     {
+      "url": "http://127.0.0.1/c",
+      "error_type": "http_error",
+      "http_status_code": 404,
+      "content": "gone"
+     },
+     {
+      "url": "http://127.0.0.1/d",
+      "error_type": "fetch_failed",
+      "http_status_code": null,
+      "content": null
+     },
+     {
+      "url": "http://127.0.0.1/e",
+      "error_type": "http_error",
+      "http_status_code": 503,
+      "content": ""
+     },
+     {
+      "url": "http://127.0.0.1/f",
+      "error_type": "http_error",
+      "http_status_code": 400,
+      "content": "bad"
+     },
+     {
+      "url": "http://127.0.0.1/g",
+      "error_type": "http_error",
+      "http_status_code": 399,
+      "content": "meh"
+     }
+    ]
+   },
+   "raw": "{\"extract_id\": \"e\", \"results\": [{\"url\": \"http://127.0.0.1/a\", \"title\": \"A\", \"full_content\": \"alpha\", \"excerpts\": [\"x\"]}, {\"url\": \"http://127.0.0.1/b\", \"title\": null, \"full_content\": null, \"excerpts\": [\"p\", \"q\"]}], \"errors\": [{\"url\": \"http://127.0.0.1/c\", \"error_type\": \"http_error\", \"http_status_code\": 404, \"content\": \"gone\"}, {\"url\": \"http://127.0.0.1/d\", \"error_type\": \"fetch_failed\", \"http_status_code\": null, \"content\": null}, {\"url\": \"http://127.0.0.1/e\", \"error_type\": \"http_error\", \"http_status_code\": 503, \"content\": \"\"}, {\"url\": \"http://127.0.0.1/f\", \"error_type\": \"http_error\", \"http_status_code\": 400, \"content\": \"bad\"}, {\"url\": \"http://127.0.0.1/g\", \"error_type\": \"http_error\", \"http_status_code\": 399, \"content\": \"meh\"}]}"
+  },
+  "requests": [
+   {
+    "path": "/v1beta/extract",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "urls": [
+      "http://127.0.0.1/a",
+      "http://127.0.0.1/b",
+      "http://127.0.0.1/c",
+      "http://127.0.0.1/d",
+      "http://127.0.0.1/e",
+      "http://127.0.0.1/f",
+      "http://127.0.0.1/g"
+     ],
+     "full_content": true
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/a",
+    "title": "A",
+    "content": "alpha",
+    "raw_content": "alpha",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/a",
+     "title": "A"
+    }
+   },
+   {
+    "url": "http://127.0.0.1/b",
+    "title": "",
+    "content": "p\n\nq",
+    "raw_content": "p\n\nq",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/b",
+     "title": ""
+    }
+   },
+   {
+    "url": "http://127.0.0.1/c",
+    "title": "",
+    "content": "gone",
+    "error": "HTTP 404 from origin",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/c"
+    }
+   },
+   {
+    "url": "http://127.0.0.1/d",
+    "title": "",
+    "content": "",
+    "error": "fetch_failed",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/d"
+    }
+   },
+   {
+    "url": "http://127.0.0.1/e",
+    "title": "",
+    "content": "",
+    "error": "HTTP 503 from origin",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/e"
+    }
+   },
+   {
+    "url": "http://127.0.0.1/f",
+    "title": "",
+    "content": "bad",
+    "error": "HTTP 400 from origin",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/f"
+    }
+   },
+   {
+    "url": "http://127.0.0.1/g",
+    "title": "",
+    "content": "",
+    "error": "meh",
+    "metadata": {
+     "sourceURL": "http://127.0.0.1/g"
+    }
+   }
+  ]
+ },
+ {
+  "vendor": "parallel",
+  "kind": "extract",
+  "urls": [
+   "http://127.0.0.1/a",
+   "http://127.0.0.1/b",
+   "http://127.0.0.1/c",
+   "http://127.0.0.1/d",
+   "http://127.0.0.1/e",
+   "http://127.0.0.1/f",
+   "http://127.0.0.1/g"
+  ],
+  "answer": {
+   "status": 500,
+   "body": {
+    "error": "boom"
+   },
+   "raw": "{\"error\": \"boom\"}"
+  },
+  "requests": [
+   {
+    "path": "/v1beta/extract",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "urls": [
+      "http://127.0.0.1/a",
+      "http://127.0.0.1/b",
+      "http://127.0.0.1/c",
+      "http://127.0.0.1/d",
+      "http://127.0.0.1/e",
+      "http://127.0.0.1/f",
+      "http://127.0.0.1/g"
+     ],
+     "full_content": true
+    }
+   },
+   {
+    "path": "/v1beta/extract",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "urls": [
+      "http://127.0.0.1/a",
+      "http://127.0.0.1/b",
+      "http://127.0.0.1/c",
+      "http://127.0.0.1/d",
+      "http://127.0.0.1/e",
+      "http://127.0.0.1/f",
+      "http://127.0.0.1/g"
+     ],
+     "full_content": true
+    }
+   },
+   {
+    "path": "/v1beta/extract",
+    "auth": {
+     "x-api-key": "<key>"
+    },
+    "body": {
+     "urls": [
+      "http://127.0.0.1/a",
+      "http://127.0.0.1/b",
+      "http://127.0.0.1/c",
+      "http://127.0.0.1/d",
+      "http://127.0.0.1/e",
+      "http://127.0.0.1/f",
+      "http://127.0.0.1/g"
+     ],
+     "full_content": true
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://127.0.0.1/a",
+    "title": "",
+    "content": "",
+    "error": "Parallel extract failed: Error code: 500 - {'error': 'boom'}"
+   },
+   {
+    "url": "http://127.0.0.1/b",
+    "title": "",
+    "content": "",
+    "error": "Parallel extract failed: Error code: 500 - {'error': 'boom'}"
+   },
+   {
+    "url": "http://127.0.0.1/c",
+    "title": "",
+    "content": "",
+    "error": "Parallel extract failed: Error code: 500 - {'error': 'boom'}"
+   },
+   {
+    "url": "http://127.0.0.1/d",
+    "title": "",
+    "content": "",
+    "error": "Parallel extract failed: Error code: 500 - {'error': 'boom'}"
+   },
+   {
+    "url": "http://127.0.0.1/e",
+    "title": "",
+    "content": "",
+    "error": "Parallel extract failed: Error code: 500 - {'error': 'boom'}"
+   },
+   {
+    "url": "http://127.0.0.1/f",
+    "title": "",
+    "content": "",
+    "error": "Parallel extract failed: Error code: 500 - {'error': 'boom'}"
+   },
+   {
+    "url": "http://127.0.0.1/g",
+    "title": "",
+    "content": "",
+    "error": "Parallel extract failed: Error code: 500 - {'error': 'boom'}"
+   }
+  ]
+ }
+]

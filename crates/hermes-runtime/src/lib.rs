@@ -45,4 +45,5 @@ mod tools;
 pub mod turn;
 pub mod url_safety;
 pub mod web_tools;
+mod web_vendors;
 pub use browser_cdp::BrowserSettings;
