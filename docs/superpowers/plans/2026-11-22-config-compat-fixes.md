@@ -284,7 +284,7 @@ turn; matching the reference adds about 2000 tokens to every request (more with 
   redacted, as the reference's forced path does. A warning is printed at startup when it is off.
   `privacy.redact_pii` and `security.redact_phone_numbers` are still not read.
 
-## Notes on `delegation.*` route (done) and the approvals finding (open, needs a decision)
+## Notes on `delegation.*` route (done)
 
 - `delegation.model`, `provider`, `base_url`, `api_key`, `api_mode` pick the route subagents run on, with the
   reference's rules: only `model` keeps the parent's endpoint and key; a bare `base_url` (provider empty,
