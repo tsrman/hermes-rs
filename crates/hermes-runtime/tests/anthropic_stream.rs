@@ -79,6 +79,20 @@ fn request() -> Value {
 }
 
 #[tokio::test]
+async fn reads_token_usage_from_message_start_and_delta() {
+    let (url, handle) = server(vec![sse(&[
+        json!({"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 55, "output_tokens": 1}}}),
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 9}}),
+        json!({"type": "message_stop"}),
+    ])]);
+    let provider = AnthropicProvider::new(&url, "secret", Duration::from_secs(5)).unwrap();
+    let completion = provider.complete(&request(), |_| {}).await.unwrap();
+    let usage = completion.usage.unwrap();
+    assert_eq!((usage.input_tokens, usage.output_tokens), (55, 9));
+    handle.join().unwrap();
+}
+
+#[tokio::test]
 async fn streams_text_and_sends_messages_request() {
     let (url, handle) = server(vec![sse(&[
         json!({"type": "message_start", "message": {"id": "m"}}),

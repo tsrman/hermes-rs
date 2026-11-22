@@ -37,8 +37,16 @@ pub struct ToolCall {
     pub arguments: String,
 }
 
+/// What a provider says a request cost, when it says.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Usage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct Completion {
+    pub usage: Option<Usage>,
     pub content: String,
     pub finish_reason: Option<String>,
     pub tool_calls: Vec<ToolCall>,

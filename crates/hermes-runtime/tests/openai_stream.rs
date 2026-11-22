@@ -355,3 +355,22 @@ async fn assembles_interleaved_tool_calls_in_index_order() {
     assert_eq!(completion.tool_calls[1].arguments, "{}");
     handle.join().unwrap();
 }
+
+#[tokio::test]
+async fn asks_for_usage_and_reads_a_chunk_without_choices() {
+    let body = concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":7}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let (base, handle) = server(ok_response(body));
+    let provider = OpenAiProvider::new(&base, "fixture", Duration::from_secs(5)).unwrap();
+    let result = provider
+        .complete(&json!({"model":"test", "messages":[]}), |_| {})
+        .await
+        .unwrap();
+    let usage = result.usage.unwrap();
+    assert_eq!((usage.input_tokens, usage.output_tokens), (120, 7));
+    let request: serde_json::Value = serde_json::from_str(&handle.join().unwrap()).unwrap();
+    assert_eq!(request["stream_options"]["include_usage"], true);
+}

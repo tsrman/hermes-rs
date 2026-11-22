@@ -105,7 +105,22 @@ impl AnthropicProvider {
                             _ => {}
                         }
                     }
+                    Some("message_start") => {
+                        let input = event
+                            .pointer("/message/usage/input_tokens")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        let usage = completion.usage.get_or_insert_with(Default::default);
+                        usage.input_tokens = input;
+                    }
                     Some("message_delta") => {
+                        if let Some(output) = event
+                            .pointer("/usage/output_tokens")
+                            .and_then(Value::as_u64)
+                        {
+                            let usage = completion.usage.get_or_insert_with(Default::default);
+                            usage.output_tokens = output;
+                        }
                         if let Some(reason) =
                             event.pointer("/delta/stop_reason").and_then(Value::as_str)
                         {

@@ -113,13 +113,15 @@ def run_task(name, binary, model, env, timeout):
     events = [json.loads(l) for l in journal.read_text().splitlines()] if journal.exists() else []
     tools = [e for e in events if e["event"] == "tool"]
     errors = [e for e in events if e["event"] == "provider_error"]
+    usage = [e["usage"] for e in events if e["event"] == "response" and e.get("usage")]
     try:
         ok, note = check(project, out)
     except Exception as error:  # a broken check is a failed task, not a crashed suite
         ok, note = False, f"check raised {error!r}"
     return {"task": name, "ok": bool(ok), "exit": code, "seconds": round(seconds, 1), "requests": sum(e["event"] == "request" for e in events),
             "tool_calls": len(tools), "tool_failures": sum(not t["succeeded"] for t in tools),
-            "tools": [t["name"] for t in tools], "provider_errors": len(errors), "note": note, "dir": str(base)}
+            "tools": [t["name"] for t in tools], "provider_errors": len(errors),
+            "input_tokens": sum(u["input_tokens"] for u in usage), "output_tokens": sum(u["output_tokens"] for u in usage), "note": note, "dir": str(base)}
 
 
 def main():
@@ -139,7 +141,7 @@ def main():
         result = run_task(name, args.binary, args.model, env, args.timeout)
         results.append(result)
         print(f"{'PASS' if result['ok'] else 'FAIL'} {name:8} {result['seconds']:6}s req={result['requests']} tools={result['tool_calls']} "
-              f"failed={result['tool_failures']} err={result['provider_errors']} {result['note']}", flush=True)
+              f"failed={result['tool_failures']} err={result['provider_errors']} in={result['input_tokens']} out={result['output_tokens']} {result['note']}", flush=True)
     print(f"{sum(r['ok'] for r in results)}/{len(results)} passed on {args.model}")
     if args.json:
         Path(args.json).write_text(json.dumps(results, ensure_ascii=False, indent=1))

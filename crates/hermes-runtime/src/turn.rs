@@ -317,6 +317,10 @@ where
                             json!({
                                 "content": result.content,
                                 "finish_reason": result.finish_reason,
+                                "usage": result.usage.map(|usage| json!({
+                                    "input_tokens": usage.input_tokens,
+                                    "output_tokens": usage.output_tokens,
+                                })),
                                 "tool_calls": result.tool_calls.iter().map(|call| json!({
                                     "id": call.id, "name": call.name, "arguments": call.arguments
                                 })).collect::<Vec<_>>(),

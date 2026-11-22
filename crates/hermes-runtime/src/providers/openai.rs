@@ -63,6 +63,9 @@ impl OpenAiProvider {
             .cloned()
             .ok_or(ProviderError::InvalidRequest)?;
         request.insert("stream".into(), Value::Bool(true));
+        request
+            .entry("stream_options")
+            .or_insert_with(|| serde_json::json!({"include_usage": true}));
         let mut response = self.open_stream(&request).await?;
 
         let mut decoder = SseDecoder::new();
@@ -77,10 +80,20 @@ impl OpenAiProvider {
                 }
                 let event: Value =
                     serde_json::from_str(&data).map_err(|_| ProviderError::InvalidEvent)?;
-                let choices = event
-                    .get("choices")
-                    .and_then(Value::as_array)
-                    .ok_or(ProviderError::InvalidEvent)?;
+                if let Some(usage) = event.get("usage").filter(|usage| usage.is_object()) {
+                    let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+                    completion.usage = Some(super::Usage {
+                        input_tokens: count("prompt_tokens"),
+                        output_tokens: count("completion_tokens"),
+                    });
+                }
+                // A usage-only chunk may carry no choices at all.
+                let none = Vec::new();
+                let choices = match event.get("choices") {
+                    Some(choices) => choices.as_array().ok_or(ProviderError::InvalidEvent)?,
+                    None if event.get("usage").is_some() => &none,
+                    None => return Err(ProviderError::InvalidEvent),
+                };
                 for choice in choices
                     .iter()
                     .filter(|choice| choice.get("index").and_then(Value::as_u64) == Some(0))
