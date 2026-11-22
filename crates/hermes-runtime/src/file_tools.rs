@@ -140,8 +140,30 @@ impl<'a> FileWorkspace<'a> {
             .filter(|value| *value > 0)
             .ok_or("Invalid limit")?
             .min(2000);
-        let (root, resolved) = self.resolve(path)?;
-        let file = open_read(&root, &resolved)?;
+        let (root, resolved) = match self.resolve(path) {
+            Ok(found) => found,
+            Err(error) if error.contains("No such file") => {
+                // A path that does not exist: name similar files, but only inside the workspace.
+                let candidate = self
+                    .root
+                    .canonicalize()
+                    .map_err(|e| e.to_string())?
+                    .join(path);
+                self.check_path(
+                    &self.root.canonicalize().map_err(|e| e.to_string())?,
+                    &candidate,
+                )?;
+                return Ok(similar_files(path, &candidate));
+            }
+            Err(error) => return Err(error),
+        };
+        let file = match open_read(&root, &resolved) {
+            Ok(file) => file,
+            Err(_) if !resolved.exists() && resolved.symlink_metadata().is_err() => {
+                return Ok(similar_files(path, &resolved));
+            }
+            Err(error) => return Err(error),
+        };
         let metadata = file.metadata().map_err(|error| error.to_string())?;
         if !metadata.is_file() || metadata.len() > READ_LIMIT {
             return Err("File must be a regular file no larger than 10 MB".into());
@@ -153,17 +175,102 @@ impl<'a> FileWorkspace<'a> {
         if data.len() as u64 > READ_LIMIT || data.contains('\0') {
             return Err("File must be UTF-8 text no larger than 10 MB".into());
         }
-        let lines: Vec<&str> = data.lines().collect();
-        let start = usize::try_from(offset - 1)
-            .unwrap_or(usize::MAX)
-            .min(lines.len());
-        let end = start.saturating_add(limit as usize).min(lines.len());
-        let content = lines[start..end]
+        // A leading BOM belongs to the first page only, and is not shown.
+        let shown_data = if offset == 1 {
+            data.strip_prefix('\u{feff}').unwrap_or(&data)
+        } else {
+            &data
+        };
+        let mut lines: Vec<&str> = shown_data.split('\n').collect();
+        if shown_data.ends_with('\n') || shown_data.is_empty() {
+            lines.pop();
+        }
+        let total = lines.len();
+        let start = usize::try_from(offset - 1).unwrap_or(usize::MAX).min(total);
+        let end_line = offset.saturating_add(limit) - 1;
+        let end = start.saturating_add(limit as usize).min(total);
+        let size = data.len();
+        if size == 0 {
+            return Ok(
+                json!({"content": "", "total_lines": 0, "file_size": 0, "hint": "File is empty (0 bytes)."}),
+            );
+        }
+        if offset as usize > total && total > 0 {
+            return Ok(
+                json!({"content": "", "total_lines": total, "file_size": size, "hint": format!(
+                "Note: offset {offset} is beyond the end of the file ({total} lines total). Retry with offset <= {total}.")}),
+            );
+        }
+        const MAX_LINE: usize = 2000;
+        let mut clipped_lines = false;
+        let mut content = lines[start..end]
             .iter()
             .enumerate()
-            .map(|(index, line)| format!("{}|{}", start + index + 1, line))
+            .map(|(index, line)| {
+                let line = if line.chars().count() > MAX_LINE {
+                    clipped_lines = true;
+                    format!(
+                        "{}... [truncated]",
+                        line.chars().take(MAX_LINE).collect::<String>()
+                    )
+                } else {
+                    (*line).to_owned()
+                };
+                format!("{}|{}", start + index + 1, line)
+            })
             .collect::<Vec<_>>()
             .join("\n");
+        let mut truncated = total as u64 > end_line;
+        let mut hint = truncated.then(|| {
+            format!(
+                "Use offset={} to continue reading (showing {offset}-{end_line} of {total} lines)",
+                end_line + 1
+            )
+        });
+        let mut extra = serde_json::Map::new();
+        // A read is capped at a character budget, trimmed to the last whole line.
+        const MAX_CHARS: usize = 100_000;
+        if content.chars().count() > MAX_CHARS {
+            let mut kept: Vec<&str> = Vec::new();
+            let mut running = 0;
+            for line in content.split('\n') {
+                let addition = line.chars().count() + usize::from(!kept.is_empty());
+                if running + addition > MAX_CHARS {
+                    break;
+                }
+                kept.push(line);
+                running += addition;
+            }
+            let first_clamped = kept.is_empty();
+            let trimmed = if first_clamped {
+                content
+                    .split('\n')
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(MAX_CHARS)
+                    .collect::<String>()
+            } else {
+                kept.join("\n")
+            };
+            let lines_kept = if first_clamped { 1 } else { kept.len() };
+            let next_offset = offset as usize + lines_kept;
+            let mut text = format!(
+                "Output truncated at the 100,000-char read budget after {lines_kept} line(s) (showing lines {offset}-{} of {total}). Use offset={next_offset} to continue.",
+                next_offset - 1
+            );
+            if first_clamped {
+                extra.insert("truncated_lines".into(), json!(true));
+                text.push_str(" Note: the first line alone exceeded the budget and was clamped mid-line; its remainder is not retrievable via offset.");
+            }
+            content = trimmed;
+            truncated = true;
+            hint = Some(text);
+            extra.insert("truncated_by".into(), json!("bytes"));
+            extra.insert("next_offset".into(), json!(next_offset));
+        } else if clipped_lines {
+            extra.insert("truncated_lines".into(), json!(true));
+        }
         // File content reaches the model with credentials masked by a sentinel it cannot write
         // back as a usable key; a file known to hold credentials gets every pass.
         let homes: Vec<&Path> = self.profile.iter().map(PathBuf::as_path).collect();
@@ -177,12 +284,28 @@ impl<'a> FileWorkspace<'a> {
             if observation.hash != hash {
                 *observation = Observation::new(hash);
             }
-            observation.add(start, end, lines.len());
+            // A page trimmed by the character budget only covers the lines kept.
+            let seen_end = extra
+                .get("next_offset")
+                .and_then(Value::as_u64)
+                .map_or(end, |next| (next as usize - 1).min(end));
+            observation.add(start, seen_end, total);
         }
-        Ok(
-            json!({"content": content, "total_lines": lines.len(), "file_size": data.len(),
-                  "truncated": end < lines.len(), "is_binary": false, "is_image": false, "not_found": false}),
-        )
+        let mut result = serde_json::Map::new();
+        result.insert("content".into(), json!(content));
+        result.insert("total_lines".into(), json!(total));
+        result.insert("file_size".into(), json!(size));
+        result.insert("truncated".into(), json!(truncated));
+        if let Some(hint) = hint {
+            result.insert("hint".into(), json!(hint));
+        }
+        for (key, value) in extra {
+            result.insert(key, value);
+        }
+        result.insert("is_binary".into(), json!(false));
+        result.insert("is_image".into(), json!(false));
+        result.insert("not_found".into(), json!(false));
+        Ok(Value::Object(result))
     }
 
     pub(crate) fn resolve(&self, path: &str) -> Result<(PathBuf, PathBuf), String> {
@@ -491,6 +614,88 @@ impl<'a> FileWorkspace<'a> {
 enum Prepared {
     Plan(Box<linux::WritePlan>),
     Done(Value),
+}
+
+/// "File not found" with up to five similar names from the same directory, best first.
+fn similar_files(path: &str, resolved: &Path) -> Value {
+    let name = Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let stem = |text: &str| {
+        Path::new(text)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase()
+    };
+    let extension = |text: &str| {
+        Path::new(text)
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|e| format!(".{}", e.to_lowercase()))
+            .unwrap_or_default()
+    };
+    let (basename, ext) = (stem(&name), extension(&name));
+    let directory = Path::new(path)
+        .parent()
+        .map(Path::to_owned)
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let mut listing: Vec<String> = resolved
+        .parent()
+        .and_then(|dir| std::fs::read_dir(dir).ok())
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    listing.sort();
+    listing.truncate(50);
+    let mut scored: Vec<(u32, String)> = Vec::new();
+    for entry in listing.iter().filter(|e| !e.is_empty()) {
+        let lower = entry.to_lowercase();
+        let mut score = if lower == name {
+            100
+        } else if stem(entry) == basename {
+            90
+        } else if lower.starts_with(&name) || name.starts_with(&lower) {
+            70
+        } else if lower.contains(&name) {
+            60
+        } else if name.contains(&lower) && lower.chars().count() > 2 {
+            40
+        } else if !ext.is_empty() && extension(entry) == ext {
+            let common = name
+                .chars()
+                .collect::<std::collections::HashSet<_>>()
+                .intersection(&lower.chars().collect())
+                .count();
+            if common as f64 >= name.chars().count().max(lower.chars().count()) as f64 * 0.4 {
+                30
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        if score == 0 && crate::difflib::ratio(&name, &lower) >= 0.8 {
+            score = 50;
+        }
+        if score > 0 {
+            scored.push((score, directory.join(entry).display().to_string()));
+        }
+    }
+    scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    let similar: Vec<String> = scored.into_iter().take(5).map(|(_, p)| p).collect();
+    let mut result = json!({"error": format!("File not found: {path}"), "not_found": true});
+    if !similar.is_empty() {
+        result["similar_files"] = json!(similar);
+    }
+    result
 }
 
 fn open_read(root: &Path, path: &Path) -> Result<std::fs::File, String> {

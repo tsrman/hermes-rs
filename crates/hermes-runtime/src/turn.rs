@@ -483,6 +483,46 @@ mod tests {
     }
 
     #[test]
+    fn reads_follow_the_reference_budget_hints_and_suggestions() {
+        let directory = tempfile::tempdir().unwrap();
+        let body: String = (1..=3000).map(|i| format!("row {i}\n")).collect();
+        std::fs::write(directory.path().join("big.txt"), &body).unwrap();
+        std::fs::write(directory.path().join("empty.txt"), "").unwrap();
+        std::fs::write(directory.path().join("config.yaml"), "a: 1\n").unwrap();
+        let page = read_file(directory.path(), r#"{"path": "big.txt"}"#);
+        assert_eq!(page["total_lines"], 3000);
+        assert_eq!(page["truncated"], true);
+        assert_eq!(
+            page["hint"],
+            "Use offset=2001 to continue reading (showing 1-2000 of 3000 lines)"
+        );
+        let long: String = (1..=2500)
+            .map(|i| format!("{i} {}\n", "x".repeat(100)))
+            .collect();
+        std::fs::write(directory.path().join("long.txt"), &long).unwrap();
+        let budget = read_file(directory.path(), r#"{"path": "long.txt", "limit": 2000}"#);
+        assert_eq!(budget["truncated_by"], "bytes");
+        assert!(budget["hint"]
+            .as_str()
+            .unwrap()
+            .starts_with("Output truncated at the 100,000-char read budget"));
+        assert!(budget["content"].as_str().unwrap().chars().count() <= 100_000);
+        assert_eq!(
+            read_file(directory.path(), r#"{"path": "empty.txt"}"#)["hint"],
+            "File is empty (0 bytes)."
+        );
+        let past = read_file(directory.path(), r#"{"path": "config.yaml", "offset": 9}"#);
+        assert!(past["hint"]
+            .as_str()
+            .unwrap()
+            .contains("beyond the end of the file (1 lines total)"));
+        let missing = read_file(directory.path(), r#"{"path": "config.yml"}"#);
+        assert_eq!(missing["error"], "File not found: config.yml");
+        assert_eq!(missing["not_found"], true);
+        assert_eq!(missing["similar_files"][0], "./config.yaml");
+    }
+
+    #[test]
     fn reads_paginated_utf8_with_one_based_line_numbers() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("file.txt"), "one\nдва\nthree\n").unwrap();
