@@ -850,4 +850,39 @@ mod tests {
             Some("has no prompt")
         );
     }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_completion_from_a_run_that_lost_its_claim_is_discarded() {
+        let home = tempfile::tempdir().unwrap();
+        let zone: Tz = "UTC".parse().unwrap();
+        let now = zone.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap();
+        std::fs::create_dir_all(home.path().join("cron")).unwrap();
+        let job = json!({"id": "a", "name": "a", "enabled": true, "state": "scheduled",
+            "schedule": {"kind": "interval", "minutes": 30},
+            "fire_claim": {"at": "2026-01-01T11:59:00+00:00", "by": "new:owner"}});
+        std::fs::write(
+            home.path().join("cron/jobs.json"),
+            json!({"jobs": [job.clone()]}).to_string(),
+        )
+        .unwrap();
+        let outcome = |owner| Outcome {
+            success: true,
+            error: None,
+            status: None,
+            owner,
+        };
+        // The run that held the claim before it expired reports late: nothing changes.
+        mark_job_run(home.path(), now, "a", &outcome(Some("old:owner"))).unwrap();
+        let stored = |home: &Path| -> Value {
+            let raw = std::fs::read_to_string(home.join("cron/jobs.json")).unwrap();
+            serde_json::from_str::<Value>(&raw).unwrap()["jobs"][0].clone()
+        };
+        assert_eq!(stored(home.path()), job);
+        // The current holder's completion is booked and releases the claim.
+        mark_job_run(home.path(), now, "a", &outcome(Some("new:owner"))).unwrap();
+        let booked = stored(home.path());
+        assert_eq!(booked["last_status"], "ok");
+        assert!(booked["fire_claim"].is_null());
+    }
 }
