@@ -693,3 +693,34 @@ class ExecuteCodeTest(ToolTestCase):
         (self.profile / "config.yaml").write_text(self.config, encoding="utf-8")
         results, requests = self.cells("print(1)", flags=())
         self.assertNotIn("execute_code", [t["function"]["name"] for t in requests[-1]["tools"]])
+
+
+class CustomEndpointConfigTest(ToolTestCase):
+    """A config that keeps the key in `model.api_key` and per-endpoint request fields under `providers`."""
+
+    def ask(self, model="qwen-flash", extra=""):
+        (self.profile / "config.yaml").write_text(
+            f"model:\n  api_key: sk-key\n  base_url: {self.url}/v1\n  default: {model}\n"
+            "  max_concurrency: 1\n  provider: custom\n  context_length: 1000000\n"
+            f"providers:\n  llm-api:\n    name: llm-api\n    base_url: {self.url}/v1\n"
+            "    model: qwen-flash\n    extra_body:\n      chat_template_kwargs:\n"
+            f"        enable_thinking: true\n{extra}", encoding="utf-8")
+        env = {key: value for key, value in self.env.items() if key != "HERMES_API_KEY"}
+        run = subprocess.run(
+            self.command(oneshot=True), cwd=self.root, env=env, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        with urlopen(self.url + "/requests", timeout=4) as response:
+            return json.load(response)
+
+    def test_the_key_comes_from_the_model_section_and_extra_body_reaches_the_request(self):
+        request = self.ask()[0]
+        self.assertEqual(request["chat_template_kwargs"], {"enable_thinking": True})
+        self.assertEqual(request["model"], "qwen-flash")
+
+    def test_extra_body_applies_only_to_the_model_it_names(self):
+        self.assertNotIn("chat_template_kwargs", self.ask(model="other")[0])
+
+    def test_a_disabled_provider_adds_nothing(self):
+        request = self.ask(extra="  second:\n    enabled: false\n    base_url: x\n")[0]
+        self.assertEqual(request["chat_template_kwargs"], {"enable_thinking": True})

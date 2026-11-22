@@ -13,6 +13,7 @@ pub struct OpenAiProvider {
     endpoint: String,
     api_key: String,
     max_attempts: u32,
+    extra_body: Map<String, Value>,
 }
 
 impl OpenAiProvider {
@@ -22,7 +23,14 @@ impl OpenAiProvider {
             endpoint: endpoint_url(base_url, "/chat/completions")?,
             api_key: api_key.to_owned(),
             max_attempts: 3,
+            extra_body: Map::new(),
         })
+    }
+
+    /// Fields merged into every request body (nested objects merge, other values replace).
+    pub fn with_extra_body(mut self, extra_body: Map<String, Value>) -> Self {
+        self.extra_body = extra_body;
+        self
     }
 
     pub fn with_max_attempts(mut self, max_attempts: u32) -> Self {
@@ -53,7 +61,32 @@ impl OpenAiProvider {
     pub async fn complete<F>(
         &self,
         request: &Value,
+        on_text: F,
+    ) -> Result<Completion, ProviderError>
+    where
+        F: FnMut(&str),
+    {
+        self.complete_with(request, on_text, true).await
+    }
+
+    /// A side request such as the compression summary: the configured `extra_body` belongs to
+    /// the main conversation and is not sent.
+    pub async fn complete_plain<F>(
+        &self,
+        request: &Value,
+        on_text: F,
+    ) -> Result<Completion, ProviderError>
+    where
+        F: FnMut(&str),
+    {
+        self.complete_with(request, on_text, false).await
+    }
+
+    async fn complete_with<F>(
+        &self,
+        request: &Value,
         mut on_text: F,
+        with_extra_body: bool,
     ) -> Result<Completion, ProviderError>
     where
         F: FnMut(&str),
@@ -62,6 +95,9 @@ impl OpenAiProvider {
             .as_object()
             .cloned()
             .ok_or(ProviderError::InvalidRequest)?;
+        if with_extra_body {
+            merge(&mut request, &self.extra_body);
+        }
         request.insert("stream".into(), Value::Bool(true));
         request
             .entry("stream_options")
@@ -389,6 +425,17 @@ pub(super) async fn is_transient_rate_limit(
     Ok(code == "rate_limit_exceeded"
         || has_reset
         || rate_signals.iter().any(|signal| message.contains(signal)))
+}
+
+fn merge(target: &mut Map<String, Value>, extra: &Map<String, Value>) {
+    for (key, value) in extra {
+        match (target.get_mut(key), value) {
+            (Some(Value::Object(existing)), Value::Object(more)) => merge(existing, more),
+            _ => {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+    }
 }
 
 #[cfg(test)]

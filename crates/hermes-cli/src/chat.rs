@@ -108,6 +108,8 @@ struct Route {
     responses: bool,
     base_url: String,
     api_key: String,
+    #[serde(default)]
+    extra_body: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl Route {
@@ -139,6 +141,7 @@ impl Route {
             Provider::OpenAi(
                 OpenAiProvider::new(&self.base_url, &self.api_key, timeout)
                     .map_err(setup)?
+                    .with_extra_body(self.extra_body.clone().unwrap_or_default())
                     .with_max_attempts(attempts),
             )
         };
@@ -180,10 +183,17 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
     let vendor_api_key = settings.vendor_key_for(settings.provider, &base_url);
     let api_key = args
         .api_key
+        .or(settings.config_api_key.clone())
         .or(settings.api_key)
         .or(vendor_api_key)
         .filter(|value| !value.is_empty())
         .ok_or("API key is required")?;
+    let extra_body = (settings.provider == "custom" && !settings.responses)
+        .then(|| {
+            let model = args.model.as_deref().or(settings.model.as_deref())?;
+            hermes_runtime::config::custom_extra_body(&settings.custom_providers, &base_url, model)
+        })
+        .flatten();
     Ok(ChatRequest {
         root: std::env::current_dir()
             .map_err(|error| error.to_string())?
@@ -220,6 +230,7 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
             model: settings.model,
             provider: settings.provider.into(),
             responses: settings.responses,
+            extra_body,
             base_url,
             api_key,
         },
@@ -232,6 +243,7 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
                 responses: config.responses,
                 base_url: config.base_url,
                 api_key: config.api_key.unwrap_or_default(),
+                extra_body: None,
             })
             .collect(),
     })

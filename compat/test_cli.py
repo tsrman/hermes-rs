@@ -137,6 +137,17 @@ class CliTest(unittest.TestCase):
         config = "compression:\n  threshold_tokens: '450'\n  protect_first_n: 2\n  protect_last_n: 2\n"
         return session, database, requests, config
 
+    def test_compression_summary_does_not_carry_the_provider_extra_body(self):
+        session, _, original, config = self.seed_compression_history()
+        config += (f"providers:\n  p:\n    base_url: {self.base}/v1\n    model: primary\n"
+                   "    extra_body: {chat_template_kwargs: {enable_thinking: true}}\n")
+        result, recorded = self.chat_with_profile(extra_config=config, args=("--resume", session), query="New task")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summary, answer = recorded[len(original):]
+        self.assertIn("Archiveword", json.dumps(summary["messages"]))
+        self.assertNotIn("chat_template_kwargs", summary)
+        self.assertEqual(answer["chat_template_kwargs"], {"enable_thinking": True})
+
     def test_resume_compacts_history_and_refreshes_memory_atomically(self):
         session, database, original, config = self.seed_compression_history()
         result, recorded = self.chat_with_profile(extra_config=config, args=("--resume", session), query="New task")

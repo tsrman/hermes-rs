@@ -180,7 +180,7 @@ impl TurnHistory {
         let Some(request) = settings.request(&route.model, middle) else {
             return CompactionOutcome::Skipped;
         };
-        let Ok(result) = route.provider.complete(&request, |_| {}).await else {
+        let Ok(result) = route.provider.complete_plain(&request, |_| {}).await else {
             return CompactionOutcome::Skipped;
         };
         if result.finish_reason.as_deref() != Some("stop") || !result.tool_calls.is_empty() {

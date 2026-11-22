@@ -39,6 +39,10 @@ pub struct ChatSettings {
     pub responses: bool,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
+    /// `model.api_key` from config.yaml.
+    pub config_api_key: Option<String>,
+    /// `providers` / `custom_providers` entries that may carry an `extra_body`.
+    pub custom_providers: Vec<CustomProvider>,
     pub api_max_attempts: u32,
     pub max_turns: u32,
     pub fallbacks: Vec<FallbackSettings>,
@@ -80,6 +84,8 @@ impl Default for ChatSettings {
             responses: false,
             base_url: None,
             api_key: None,
+            config_api_key: None,
+            custom_providers: Vec::new(),
             api_max_attempts: 3,
             max_turns: 16,
             fallbacks: Vec::new(),
@@ -325,6 +331,12 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
                 .get("default")
                 .and_then(serde_yaml::Value::as_str)
                 .map(str::to_owned);
+            settings.config_api_key = model
+                .get("api_key")
+                .and_then(serde_yaml::Value::as_str)
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map(str::to_owned);
             settings.base_url = model
                 .get("base_url")
                 .and_then(serde_yaml::Value::as_str)
@@ -387,6 +399,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.openai_base_url = secrets.get("OPENAI_BASE_URL").cloned();
     settings.anthropic_api_key = secrets.get("ANTHROPIC_API_KEY").cloned();
     settings.anthropic_base_url = secrets.get("ANTHROPIC_BASE_URL").cloned();
+    settings.custom_providers = custom_providers(&config);
     settings.mcp_servers = mcp_servers(&config, &secrets);
     settings.web = WebSettings::from_config(&config, &secrets);
     settings.browser = BrowserSettings::from_config(&config, &secrets);
@@ -696,5 +709,121 @@ mod clarify_timeout_tests {
         assert_eq!(timeout("agent: {clarify_timeout: -4}"), 0);
         assert_eq!(timeout("agent: {clarify_timeout: 'soon'}"), 90);
         assert_eq!(timeout("agent: {clarify_timeout: '45'}"), 45);
+    }
+}
+
+/// One endpoint declared under `providers:` (or the legacy `custom_providers:` list).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CustomProvider {
+    base_url: String,
+    model: String,
+    catalog: Vec<String>,
+    extra_body: serde_json::Map<String, serde_json::Value>,
+}
+
+fn custom_providers(config: &serde_yaml::Value) -> Vec<CustomProvider> {
+    let legacy = match config.get("custom_providers") {
+        Some(serde_yaml::Value::Sequence(entries)) => entries.iter().collect(),
+        _ => Vec::new(),
+    };
+    let current = match config.get("providers") {
+        Some(serde_yaml::Value::Mapping(entries)) => entries
+            .iter()
+            .filter(|(_, entry)| {
+                !matches!(entry.get("enabled"), Some(flag)
+                    if flag.as_bool() == Some(false)
+                        || flag.as_str().is_some_and(|word| matches!(
+                            word.trim().to_lowercase().as_str(),
+                            "false" | "0" | "no" | "off")))
+            })
+            .map(|(key, entry)| (key.as_str().map(str::to_owned), entry))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let entries = legacy.into_iter().map(|entry| (None, entry)).chain(current);
+    entries
+        .filter_map(|(key, entry)| custom_provider(key.as_deref(), entry))
+        .collect()
+}
+
+fn custom_provider(key: Option<&str>, entry: &serde_yaml::Value) -> Option<CustomProvider> {
+    let text = |names: &[&str]| {
+        names.iter().find_map(|name| {
+            entry
+                .get(*name)
+                .and_then(serde_yaml::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+    };
+    let base_url = text(&["base_url", "url", "api"])?;
+    // A provider needs a name, from the entry or its key.
+    text(&["name"]).or(key.map(str::trim).filter(|key| !key.is_empty()))?;
+    let extra_body = match serde_json::to_value(entry.get("extra_body")?).ok()? {
+        serde_json::Value::Object(map) if !map.is_empty() => map,
+        _ => return None,
+    };
+    let catalog = match entry.get("models") {
+        Some(serde_yaml::Value::Mapping(models)) => models
+            .keys()
+            .filter_map(|name| name.as_str())
+            .map(|name| name.trim().to_lowercase())
+            .collect(),
+        Some(serde_yaml::Value::Sequence(models)) => models
+            .iter()
+            .filter_map(|name| name.as_str())
+            .map(|name| name.trim().to_lowercase())
+            .collect(),
+        _ => Vec::new(),
+    };
+    Some(CustomProvider {
+        base_url: base_url.trim_end_matches('/').to_owned(),
+        model: text(&["model", "default_model"]).unwrap_or("").to_owned(),
+        catalog,
+        extra_body,
+    })
+}
+
+/// The `extra_body` for the `custom` provider at `base_url` running `model`: the first entry
+/// that names this model (or lists it in its catalog), else the first entry without a model.
+pub fn custom_extra_body(
+    entries: &[CustomProvider],
+    base_url: &str,
+    model: &str,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let target = base_url.trim().trim_end_matches('/');
+    let model = model.trim().to_lowercase();
+    let mut fallback = None;
+    for entry in entries.iter().filter(|entry| entry.base_url == target) {
+        if entry.model.is_empty() {
+            fallback.get_or_insert(&entry.extra_body);
+        } else if entry.catalog.contains(&model) || entry.model.to_lowercase() == model {
+            return Some(entry.extra_body.clone());
+        }
+    }
+    fallback.cloned()
+}
+
+#[cfg(test)]
+mod custom_provider_tests {
+    use super::*;
+
+    fn entries(yaml: &str) -> Vec<CustomProvider> {
+        custom_providers(&serde_yaml::from_str(yaml).unwrap())
+    }
+
+    #[test]
+    fn extra_body_follows_url_and_model() {
+        let providers = entries(
+            "providers:\n  a:\n    base_url: https://x/v1/\n    model: Qwen\n    extra_body: {k: 1}\n  b:\n    base_url: https://x/v1\n    extra_body: {k: 2}\n  off:\n    enabled: false\n    base_url: https://y/v1\n    extra_body: {k: 3}\n",
+        );
+        assert_eq!(providers.len(), 2);
+        let k = |url: &str, model: &str| {
+            custom_extra_body(&providers, url, model).map(|body| body["k"].clone())
+        };
+        assert_eq!(k("https://x/v1", "qwen"), Some(1.into()));
+        assert_eq!(k("https://x/v1/", "other"), Some(2.into()));
+        assert_eq!(k("https://y/v1", "m"), None);
+        assert_eq!(k("https://z/v1", "m"), None);
     }
 }

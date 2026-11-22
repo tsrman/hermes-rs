@@ -80,6 +80,23 @@ impl Provider {
     }
 }
 
+impl Provider {
+    /// Like `complete`, for side requests that must not carry the conversation's `extra_body`.
+    pub async fn complete_plain<F>(
+        &self,
+        request: &serde_json::Value,
+        on_text: F,
+    ) -> Result<Completion, ProviderError>
+    where
+        F: FnMut(&str),
+    {
+        match self {
+            Self::OpenAi(provider) => provider.complete_plain(request, on_text).await,
+            other => other.complete(request, on_text).await,
+        }
+    }
+}
+
 impl From<OpenAiProvider> for Provider {
     fn from(provider: OpenAiProvider) -> Self {
         Self::OpenAi(provider)
