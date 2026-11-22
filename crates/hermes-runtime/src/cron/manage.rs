@@ -16,7 +16,9 @@ use serde_json::{json, Map, Value};
 
 use super::schedule::{compute_next_run, iso_instant, parse_iso_instant, parse_schedule, Schedule};
 use super::store::{job_zone, summarize, with_jobs};
-use super::tick::{claim_is_live, truthy, unsupported_reason, FIRE_CLAIM_TTL_SECONDS};
+use super::tick::{
+    claim_is_live, truthy, unsupported_reason, FIRE_CLAIM_TTL_SECONDS, ONESHOT_CLAIM_TTL_SECONDS,
+};
 
 /// Seconds a one-shot stays eligible after its time.
 const ONESHOT_GRACE_SECONDS: i64 = 120;
@@ -802,8 +804,68 @@ fn pid_is_gone(_pid: i32) -> bool {
 }
 
 /// A claim that is young enough and whose owner is not provably dead.
+fn live_claim(claim: &Value, now: DateTime<Tz>, ttl: i64) -> bool {
+    claim_is_live(claim, now, ttl) && !owner_is_dead(claim)
+}
+
 pub(super) fn fire_claim_is_live(claim: &Value, now: DateTime<Tz>) -> bool {
-    claim_is_live(claim, now, FIRE_CLAIM_TTL_SECONDS) && !owner_is_dead(claim)
+    live_claim(claim, now, FIRE_CLAIM_TTL_SECONDS)
+}
+
+const REARM_RECURRING_ERROR: &str =
+    "Cannot re-arm recurring jobs: re-arm is one-shot-only; use plain resume or cron run.";
+
+/// `rearm_oneshot`: give a finished one-shot a new occurrence at `run_at` (an ISO time, or the
+/// current time for a run-now). Returns the stored record. A lookup that finds nothing is
+/// reported as the reference's `Job not found: ...`.
+pub fn rearm_oneshot(
+    home: &Path,
+    now: DateTime<Tz>,
+    reference: &str,
+    run_at: &str,
+) -> Result<Value, String> {
+    with_jobs(home, now, |jobs| {
+        let index = match lookup(jobs, reference) {
+            Lookup::Found(index) => index,
+            Lookup::Missing => return Err(format!("Job not found: {reference}")),
+            Lookup::Ambiguous(matches) => return Err(ambiguous_text(jobs, reference, &matches)),
+        };
+        let parsed = parse_schedule(run_at, now)?;
+        if parsed.kind != "once" {
+            return Err(REARM_RECURRING_ERROR.into());
+        }
+        let next = compute_next_run(&parsed, None, job_zone(&jobs[index]), now)
+            .ok_or_else(|| once_past_error(parsed.run_at.as_deref().unwrap_or(run_at)))?;
+        let job = &jobs[index];
+        if live_claim(&job["run_claim"], now, ONESHOT_CLAIM_TTL_SECONDS) {
+            return Err("Cannot re-arm one-shot over a live run claim.".into());
+        }
+        if fire_claim_is_live(&job["fire_claim"], now) {
+            return Err("Cannot re-arm one-shot over a live fire claim.".into());
+        }
+        if job["schedule"]["kind"].as_str() != Some("once") {
+            return Err(REARM_RECURRING_ERROR.into());
+        }
+        let mut repeat = job["repeat"].as_object().cloned().unwrap_or_default();
+        repeat.insert("completed".into(), json!(0));
+        let display = if parsed.display.is_empty() {
+            run_at.to_owned()
+        } else {
+            parsed.display.clone()
+        };
+        let record = jobs[index].as_object_mut().ok_or("invalid job record")?;
+        record.insert("schedule".into(), json!(parsed));
+        record.insert("schedule_display".into(), json!(display));
+        record.insert("repeat".into(), Value::Object(repeat));
+        record.insert("run_claim".into(), Value::Null);
+        record.insert("fire_claim".into(), Value::Null);
+        record.insert("enabled".into(), json!(true));
+        record.insert("state".into(), json!("scheduled"));
+        record.insert("paused_at".into(), Value::Null);
+        record.insert("paused_reason".into(), Value::Null);
+        record.insert("next_run_at".into(), json!(next));
+        Ok((jobs[index].clone(), true))
+    })
 }
 
 fn future_slot(value: &Value, now: DateTime<Tz>) -> Option<String> {

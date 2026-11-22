@@ -275,8 +275,16 @@ pub enum Command {
         #[arg(long)]
         reason: Option<String>,
     },
-    /// Resume a paused job by ID or name.
-    Resume { job: String },
+    /// Resume a paused job by ID or name, or give a finished one-shot a new run.
+    Resume {
+        job: String,
+        /// Re-arm a one-shot at an ISO-8601 time.
+        #[arg(long = "at", value_name = "TIME", conflicts_with = "run_now")]
+        run_at: Option<String>,
+        /// Re-arm a one-shot to run now.
+        #[arg(long)]
+        run_now: bool,
+    },
     /// Run a job now, in this process, and print what happened as JSON.
     ///
     /// A run ahead of the job's next slot is an extra fire: the slot and the repeat budget are
@@ -433,11 +441,35 @@ pub async fn run(home: Option<&Path>, command: Command) -> Result<u8, String> {
                 .map_err(|error| format!("Failed to pause job: {error}"))?;
             serde_json::to_value(job).map_err(|error| error.to_string())?
         }
-        Command::Resume { job } => {
+        Command::Resume {
+            job,
+            run_at,
+            run_now,
+        } => {
             let home = home.ok_or("profile root is unavailable")?;
-            let job = store::resume_job(home, now_in(zone), &job)
-                .map_err(|error| format!("Failed to resume job: {error}"))?;
-            serde_json::to_value(job).map_err(|error| error.to_string())?
+            let now = now_in(zone);
+            let at = if run_now {
+                Some(hermes_runtime::cron::schedule::iso_instant(now))
+            } else {
+                run_at.filter(|at| !at.is_empty())
+            };
+            match at {
+                Some(at) => {
+                    let rearmed = manage::rearm_oneshot(home, now, &job, &at).map_err(|error| {
+                        if error.starts_with("Job not found: ") {
+                            error
+                        } else {
+                            format!("Failed to re-arm job: {error}")
+                        }
+                    })?;
+                    summary(&rearmed)
+                }
+                None => {
+                    let job = store::resume_job(home, now, &job)
+                        .map_err(|error| format!("Failed to resume job: {error}"))?;
+                    serde_json::to_value(job).map_err(|error| error.to_string())?
+                }
+            }
         }
         Command::Run { job } => {
             let home = home.ok_or("profile root is unavailable")?;
@@ -618,12 +650,12 @@ async fn run_job(
                     break None;
                 }
                 // Once a second: is the job still there?
-                if ticks % 10 == 0 && !store::job_exists(home, id) {
+                if ticks.is_multiple_of(10) && !store::job_exists(home, id) {
                     let document = document(job, &prompt, "Run cancelled: the job was removed.", now);
                     return (false, Some("job removed while running".to_owned()), Some("cancelled"), document);
                 }
                 // Every ten seconds: keep the fire claim alive.
-                if let Some(owner) = owner.filter(|_| ticks % 100 == 0) {
+                if let Some(owner) = owner.filter(|_| ticks.is_multiple_of(100)) {
                     if !manage::heartbeat(home, now_in(now.timezone()), id, owner)
                         && store::job_exists(home, id)
                     {

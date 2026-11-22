@@ -9,8 +9,9 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use hermes_runtime::cron::manage::{
-    add_job_with_id, claim_manual, edit_job, AddParams, EditParams, ManualClaim,
+    add_job_with_id, claim_manual, edit_job, rearm_oneshot, AddParams, EditParams, ManualClaim,
 };
+use hermes_runtime::cron::schedule::iso_instant;
 use hermes_runtime::cron::store::{pause_job, remove_job, resume_job};
 use hermes_runtime::cron::tick::{mark_job_run, Outcome};
 use serde_json::{json, Value};
@@ -56,7 +57,22 @@ fn replay_step(home: &Path, zone: Tz, label: &str, step: &Value) -> Result<(), S
             failure = edit_job(home, now, reference, &params).err();
         }
         "pause" => failure = pause_job(home, now, reference, None).err(),
-        "resume" => failure = resume_job(home, now, reference).err(),
+        "resume" => {
+            // `--run-now` re-arms at the current time, `--at` at the given one; an empty `--at`
+            // is a plain resume.
+            let at = if args["run_now"].as_bool() == Some(true) {
+                Some(iso_instant(now))
+            } else {
+                args["run_at"]
+                    .as_str()
+                    .filter(|at| !at.is_empty())
+                    .map(str::to_owned)
+            };
+            failure = match at {
+                Some(at) => rearm_oneshot(home, now, reference, &at).err(),
+                None => resume_job(home, now, reference).err(),
+            };
+        }
         "remove" => failure = remove_job(home, now, reference).err(),
         "run" => {
             let claimed = &step["claimed"];

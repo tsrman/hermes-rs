@@ -269,6 +269,40 @@ case("run", [
     step("run", "missing", run=OK),
 ], seed=RUN_SEED)
 
+# ---- re-arm a one-shot: `resume --at` and `resume --run-now` ----
+REARM_SEED = [
+    job("done-one-000", "Done one", "once", enabled=False, state="completed", next_run_at=None,
+        run_at="2026-11-20T10:00:00+00:00", repeat={"times": 1, "completed": 1}, last_run_at="2026-11-20T10:00:01+00:00"),
+    job("done-two-000", "Done two", "once", enabled=False, state="completed", next_run_at=None,
+        run_at="2026-11-20T10:00:00+00:00", repeat={"times": 3, "completed": 3}, timezone="Asia/Tokyo"),
+    job("paused-one-0", "Paused one", "once", enabled=False, state="paused", paused_at="2026-11-22T08:00:00+00:00",
+        paused_reason="r", next_run_at=None, run_at="2026-11-22T10:00:00+00:00"),
+    job("recurring-00", "Recurring", "interval", next_run_at="2026-11-23T10:00:00+00:00"),
+    job("run-claimed0", "Run claimed", "once", enabled=False, state="completed", next_run_at=None,
+        run_claim={"at": "2026-11-23T09:20:00.000000+00:00", "by": "other:abc"}),
+    job("fire-claimed", "Fire claimed", "once", enabled=False, state="completed", next_run_at=None,
+        fire_claim={"at": "2026-11-23T09:29:00.000000+00:00", "by": "other:abc"}),
+    job("stale-claim0", "Stale claim", "once", enabled=False, state="completed", next_run_at=None,
+        run_claim={"at": "2026-11-23T08:00:00.000000+00:00", "by": "other:abc"},
+        fire_claim={"at": "2026-11-23T09:20:00.000000+00:00", "by": "other:abc"}),
+    job("twin-a-00000", "Twin", "once", enabled=False, state="completed", next_run_at=None),
+    job("twin-b-00000", "twin", "once", enabled=False, state="completed", next_run_at=None),
+]
+case("rearm", [
+    step("resume", "done-one-000", "--at", "2026-12-01T09:00:00Z"),
+    step("resume", "Done two", "--run-now"),
+    step("resume", "paused-one-0", "--at", "in 30m"),
+    step("resume", "recurring-00", "--run-now"),
+    step("resume", "recurring-00", "--at", "30m"),
+    step("resume", "stale-claim0", "--at", "2026-12-02T09:00:00"),
+    step("resume", "run-claimed0", "--at", "2026-12-01T09:00:00Z"),
+    step("resume", "fire-claimed", "--run-now"),
+    step("resume", "done-one-000", "--at", "2020-01-01T00:00:00Z"),
+    step("resume", "done-one-000", "--at", "not-a-time"),
+    step("resume", "missing", "--at", "2026-12-01T09:00:00Z"),
+    step("resume", "twin", "--run-now"),
+    step("resume", "done-two-000", "--at", ""),
+], seed=REARM_SEED)
 
 def build_parser():
     from hermes_cli.subcommands.cron import build_cron_parser

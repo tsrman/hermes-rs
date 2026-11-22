@@ -23,7 +23,7 @@ use super::schedule::{compute_next_run, iso_instant, parse_iso_instant, Schedule
 use super::store::{cron_dir, job_zone, with_jobs};
 
 const ONESHOT_GRACE_SECONDS: i64 = 120;
-const ONESHOT_CLAIM_TTL_SECONDS: i64 = 1800;
+pub(super) const ONESHOT_CLAIM_TTL_SECONDS: i64 = 1800;
 /// How long a fire claim stays live without a heartbeat.
 pub(super) const FIRE_CLAIM_TTL_SECONDS: i64 = 300;
 const MIN_GRACE_SECONDS: i64 = 120;

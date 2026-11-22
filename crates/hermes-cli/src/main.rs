@@ -22,6 +22,8 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+// The cron subcommand carries every job flag, so it is by far the largest variant.
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// Inspect stored sessions in the selected profile.
     Sessions {
