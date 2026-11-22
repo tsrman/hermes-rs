@@ -19,6 +19,16 @@ pub fn install(settings: ApprovalSettings) {
     approval_policy::install(settings);
 }
 
+/// How far an approval reaches.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Grant {
+    Once,
+    /// The rest of this conversation.
+    Session,
+    /// For a command: also saved to `command_allowlist`.
+    Always,
+}
+
 pub async fn prompt(request: ApprovalRequest) -> ApprovalDecision {
     if let Some(policy) = approval_policy::installed() {
         match policy.decide(&request) {
@@ -27,17 +37,26 @@ pub async fn prompt(request: ApprovalRequest) -> ApprovalDecision {
             Verdict::Ask => {}
         }
     }
-    let (decision, always) = ask_person(&request).await;
-    if always && matches!(decision, ApprovalDecision::Approved) {
+    let (decision, grant) = ask_person(&request).await;
+    if matches!(decision, ApprovalDecision::Approved) {
         if let Some(policy) = approval_policy::installed() {
-            policy.remember(&request);
+            match grant {
+                Grant::Once => {}
+                Grant::Session => policy.remember(&request),
+                Grant::Always => {
+                    let (_, error) = policy.remember_always(&request);
+                    if let Some(error) = error {
+                        eprintln!("Could not save command_allowlist: {error}");
+                    }
+                }
+            }
         }
     }
     decision
 }
 
-/// The person's answer, and whether it was "always".
-async fn ask_person(request: &ApprovalRequest) -> (ApprovalDecision, bool) {
+/// The person's answer, and how far it reaches.
+async fn ask_person(request: &ApprovalRequest) -> (ApprovalDecision, Grant) {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use std::time::Duration;
@@ -59,7 +78,7 @@ async fn ask_person(request: &ApprovalRequest) -> (ApprovalDecision, bool) {
                     Ok(Err(_)) => ApprovalDecision::Unavailable,
                     Err(_) => ApprovalDecision::TimedOut,
                 },
-                false,
+                Grant::Once,
             );
         }
         match tokio::time::timeout(
@@ -69,14 +88,14 @@ async fn ask_person(request: &ApprovalRequest) -> (ApprovalDecision, bool) {
         .await
         {
             Ok(Ok(answer)) => answer,
-            Ok(Err(_)) => (ApprovalDecision::Unavailable, false),
-            Err(_) => (ApprovalDecision::TimedOut, false),
+            Ok(Err(_)) => (ApprovalDecision::Unavailable, Grant::Once),
+            Err(_) => (ApprovalDecision::TimedOut, Grant::Once),
         }
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = request;
-        (ApprovalDecision::Unavailable, false)
+        (ApprovalDecision::Unavailable, Grant::Once)
     }
 }
 
@@ -91,7 +110,7 @@ mod terminal {
 
     use hermes_runtime::turn::ApprovalAction;
 
-    use super::{ApprovalDecision, ApprovalRequest};
+    use super::{ApprovalDecision, ApprovalRequest, Grant};
 
     pub(super) fn open() -> io::Result<File> {
         #[cfg(target_os = "linux")]
@@ -139,7 +158,7 @@ mod terminal {
         Ok(OsStr::from_bytes(path.to_bytes()).into())
     }
 
-    pub(super) async fn ask(request: &ApprovalRequest) -> io::Result<(ApprovalDecision, bool)> {
+    pub(super) async fn ask(request: &ApprovalRequest) -> io::Result<(ApprovalDecision, Grant)> {
         let tty = open()?;
         // SAFETY: tcflush clears pending terminal input on a live descriptor.
         if unsafe { libc::tcflush(tty.as_raw_fd(), libc::TCIFLUSH) } != 0 {
@@ -168,15 +187,24 @@ mod terminal {
                 request.content.chars().count() - 6000
             )
         };
-        let always = if matches!(request.action, ApprovalAction::RunCode) {
-            "Answer a to always allow exactly this code in this conversation."
-        } else if matches!(request.action, ApprovalAction::RunCommand) {
-            "Answer a to always allow this exact command in this conversation."
+        let command = matches!(request.action, ApprovalAction::RunCommand);
+        let reason = if command {
+            super::approval_policy::installed()
+                .and_then(|policy| policy.explain(request))
+                .map(|why| format!("Flagged: {}\n", super::printable(&why)))
+                .unwrap_or_default()
         } else {
-            "Answer a to always allow file changes in this conversation."
+            String::new()
+        };
+        let choices = if matches!(request.action, ApprovalAction::RunCode) {
+            "Answer a to always allow exactly this code in this conversation.\nApprove once? [y/N] "
+        } else if command {
+            "Answer y to approve once, s for this conversation, a to always allow what it was flagged for (saved to command_allowlist), anything else to deny.\nApprove? [y/s/a/N] "
+        } else {
+            "Answer a to always allow file changes in this conversation.\nApprove once? [y/N] "
         };
         let prompt = format!(
-            "\n{action} {:?}\n{preview} (escaped)\n{shown}\n{always}\nApprove once? [y/N] ",
+            "\n{action} {:?}\n{preview} (escaped)\n{shown}\n{reason}{choices}",
             request.target
         );
         let mut remaining = prompt.as_bytes();
@@ -195,7 +223,7 @@ mod terminal {
         loop {
             let mut ready = tty.readable().await?;
             match ready.try_io(|fd| fd.get_ref().read(&mut bytes)) {
-                Ok(Ok(0)) => return Ok((ApprovalDecision::Denied, false)),
+                Ok(Ok(0)) => return Ok((ApprovalDecision::Denied, Grant::Once)),
                 Ok(Ok(count)) => {
                     let received = &bytes[..count];
                     if let Some(end) = received.iter().position(|&byte| byte == b'\n') {
@@ -204,20 +232,21 @@ mod terminal {
                             .unwrap_or("")
                             .trim()
                             .to_lowercase();
-                        let always = matches!(text.as_str(), "a" | "always");
-                        let confirmed = always || matches!(text.as_str(), "y" | "yes");
-                        return Ok((
-                            if confirmed {
-                                ApprovalDecision::Approved
-                            } else {
-                                ApprovalDecision::Denied
-                            },
-                            always,
-                        ));
+                        let grant = match text.as_str() {
+                            "a" | "always" if command => Some(Grant::Always),
+                            "a" | "always" => Some(Grant::Session),
+                            "s" | "session" if command => Some(Grant::Session),
+                            "y" | "yes" => Some(Grant::Once),
+                            _ => None,
+                        };
+                        return Ok(match grant {
+                            Some(grant) => (ApprovalDecision::Approved, grant),
+                            None => (ApprovalDecision::Denied, Grant::Once),
+                        });
                     }
                     answer.extend_from_slice(received);
                     if answer.len() >= bytes.len() {
-                        return Ok((ApprovalDecision::Denied, false));
+                        return Ok((ApprovalDecision::Denied, Grant::Once));
                     }
                 }
                 Ok(Err(error)) => return Err(error),

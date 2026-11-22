@@ -21,6 +21,9 @@ ROOT = Path(__file__).resolve().parent.parent
 BINARY = Path(os.environ.get("HERMES_TEST_BINARY", ROOT / "target/debug/hermes")).resolve()
 
 
+# Flagged by the dangerous-command detector (a recursive delete) but harmless: the path does not exist.
+FLAGGED = "rm -rf ./no-such-dir-for-approval"
+
 class ToolTestCase(unittest.TestCase):
     scenario = "local_tools"
 
@@ -78,7 +81,8 @@ class ToolTestCase(unittest.TestCase):
         self.addCleanup(self.stop, process)
         return process, master
 
-    def wait_for_prompt(self, process, master, marker=b"[y/N]", transcript=None):
+    def wait_for_prompt(self, process, master, marker=(b"[y/N]", b"[y/s/a/N]"), transcript=None):
+        markers = marker if isinstance(marker, tuple) else (marker,)
         transcript = bytearray() if transcript is None else transcript
         deadline = time.monotonic() + 20
         while process.poll() is None and time.monotonic() < deadline:
@@ -88,7 +92,7 @@ class ToolTestCase(unittest.TestCase):
                     transcript.extend(os.read(master, 16384))
                 except OSError:
                     break
-            if marker in transcript:
+            if any(m in transcript for m in markers):
                 return transcript.decode(errors="replace")
         details = ""
         if process.poll() is not None:
@@ -366,7 +370,7 @@ class FileToolTest(ToolTestCase):
 class TerminalToolTest(ToolTestCase):
     def test_terminal_runs_in_the_approved_directory_without_profile_environment(self):
         (self.root / "subdir").mkdir()
-        command = "printf '%s\\n' \"${HERMES_API_KEY:-no-key}\"; pwd"
+        command = f"printf '%s\\n' \"${{HERMES_API_KEY:-no-key}}\"; pwd; {FLAGGED}"
         process, tty = self.interactive(tool="terminal", arguments={"command": command, "workdir": "subdir"})
         prompt = self.wait_for_prompt(process, tty)
         self.assertIn("subdir", prompt)
@@ -382,7 +386,7 @@ class TerminalToolTest(ToolTestCase):
             self.assertNotIn("patch", tools)
         self.assertEqual(result["exit_code"], 0)
         self.assertEqual(result["output"].splitlines(), ["no-key", str(self.root / "subdir")])
-        process, tty = self.interactive(tool="terminal", arguments={"command": "exit 7"})
+        process, tty = self.interactive(tool="terminal", arguments={"command": f"{FLAGGED}; exit 7"})
         self.wait_for_prompt(process, tty)
         os.write(tty, b"yes\n")
         _, error = self.finish_terminal(process, tty)
@@ -392,7 +396,7 @@ class TerminalToolTest(ToolTestCase):
         self.assertEqual(result["exit_code"], 7)
 
     def test_terminal_does_not_start_without_approval(self):
-        arguments = {"command": "printf touched > marker.txt"}
+        arguments = {"command": f"printf touched > marker.txt; {FLAGGED}"}
         blocked, requests = self.unattended("terminal", arguments)
         self.assertEqual(blocked["status"], "approval_unavailable")
         self.assertNotIn("terminal", [tool["function"]["name"] for tool in requests[0]["tools"]])
@@ -410,6 +414,42 @@ class TerminalToolTest(ToolTestCase):
                 if mode != "cancel":
                     result, _ = self.last_tool_result()
                     self.assertEqual(result["status"], "approval_" + ("denied" if mode == "deny" else "timeout"))
+
+    def test_a_harmless_command_runs_without_a_question_and_a_flagged_one_says_why(self):
+        # The reference's default: only what the detector flags needs an answer.
+        process, tty = self.interactive(tool="terminal", arguments={"command": "echo ok"})
+        _, error = self.finish_terminal(process, tty)
+        self.assertEqual(process.returncode, 0, error)
+        result, _ = self.last_tool_result()
+        self.assertEqual(result["output"], "ok\n", result)
+        process, tty = self.interactive(tool="terminal", arguments={"command": FLAGGED})
+        prompt = self.wait_for_prompt(process, tty)
+        self.assertIn("Flagged: recursive delete", prompt)
+        os.write(tty, b"n\n")
+        self.finish_terminal(process, tty)
+        result, _ = self.last_tool_result()
+        self.assertEqual(result["status"], "approval_denied")
+
+    def test_always_saves_the_flagged_pattern_and_session_does_not(self):
+        config = self.profile / "config.yaml"
+        process, tty = self.interactive(tool="terminal", arguments={"command": FLAGGED})
+        self.wait_for_prompt(process, tty)
+        os.write(tty, b"s\n")
+        _, error = self.finish_terminal(process, tty)
+        self.assertEqual(process.returncode, 0, error)
+        self.assertNotIn("command_allowlist", config.read_text())
+        process, tty = self.interactive(tool="terminal", arguments={"command": FLAGGED})
+        self.wait_for_prompt(process, tty)
+        os.write(tty, b"a\n")
+        _, error = self.finish_terminal(process, tty)
+        self.assertEqual(process.returncode, 0, error)
+        self.assertIn("recursive delete", config.read_text())
+        # A later run finds the stored answer and does not ask.
+        process, tty = self.interactive(tool="terminal", arguments={"command": FLAGGED})
+        _, error = self.finish_terminal(process, tty)
+        self.assertEqual(process.returncode, 0, error)
+        result, _ = self.last_tool_result()
+        self.assertEqual(result["exit_code"], 0, result)
 
     def test_terminal_respects_backend_and_workspace(self):
         arguments = {"command": "printf touched > marker.txt"}
@@ -437,7 +477,7 @@ class TerminalToolTest(ToolTestCase):
     def test_terminal_refuses_a_directory_replaced_during_approval(self):
         directory = self.root / "workdir"
         directory.mkdir()
-        arguments = {"command": "printf touched > marker.txt", "workdir": "workdir"}
+        arguments = {"command": f"printf touched > marker.txt; {FLAGGED}", "workdir": "workdir"}
         process, tty = self.interactive(tool="terminal", arguments=arguments)
         self.wait_for_prompt(process, tty)
         original = directory.rename(self.root / "original")
@@ -457,7 +497,7 @@ class TerminalToolTest(ToolTestCase):
                     self.start_owner()
                 pid_file = self.root / "child.pid"
                 pid_file.unlink(missing_ok=True)
-                command = "sleep 30 & printf '%s' \"$!\" > child.pid"
+                command = f"{FLAGGED}; sleep 30 & printf '%s' \"$!\" > child.pid"
                 if mode != "finish":
                     command += "; wait"
                 arguments = {"command": command, "timeout": 1 if mode == "timeout" else 30}
@@ -541,8 +581,26 @@ class UnattendedWorkTest(ToolTestCase):
         config = "  allow: ['echo *']\n"
         ran, requests = self.run_tool("terminal", {"command": "echo fine"}, config=config)
         self.assertEqual(ran["output"], "fine\n", ran)
-        chained, _ = self.run_tool("terminal", {"command": "echo a; echo b"}, config=config)
+        # A chain no pattern covers still needs a person when the detector flags it...
+        chained, _ = self.run_tool("terminal", {"command": f"echo a; {FLAGGED}"}, config=config)
         self.assertEqual(chained["status"], "approval_unavailable")
+        # ...and a harmless one runs without a question (the reference's default).
+        harmless, _ = self.run_tool("terminal", {"command": "echo a; echo b"}, config=config)
+        self.assertEqual(harmless["output"], "a\nb\n", harmless)
+
+    def test_the_hardline_floor_refuses_even_under_yolo(self):
+        # mkfs on a device that does not exist: refused by the floor, and harmless if it ever ran.
+        command = "mkfs.ext4 /no/such/device-for-approval-probe"
+        refused, _ = self.run_tool("terminal", {"command": command}, "--yolo")
+        self.assertEqual(refused["status"], "approval_denied", refused)
+
+    def test_command_allowlist_answers_for_a_flagged_command_with_no_person(self):
+        config = "  allow: ['pwd']\n"
+        asked, _ = self.run_tool("terminal", {"command": FLAGGED}, config=config)
+        self.assertEqual(asked["status"], "approval_unavailable", asked)
+        stored, _ = self.run_tool(
+            "terminal", {"command": FLAGGED}, config=config + "command_allowlist: ['recursive delete']\n")
+        self.assertEqual(stored["exit_code"], 0, stored)
 
     def test_commands_see_the_toolchain_environment_and_keep_the_directory(self):
         (self.root / "sub").mkdir()

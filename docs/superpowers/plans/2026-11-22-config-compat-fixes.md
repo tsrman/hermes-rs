@@ -76,10 +76,10 @@ routes ignore it); `auxiliary.compression.extra_body` is not read; fallback rout
 14. **`terminal.*`** read: `backend`, `env_passthrough`, timeouts for code. Not read [keys]: `cwd`,
     `timeout`, `home_mode`, `shell_init_files`, `auto_source_bashrc`, `persistent_shell`, docker/ssh/modal
     settings (remote backends do not exist in the port).
-15. **`approvals.*`** read: `mode`, `timeout`, `allow`, `deny`. Not read [keys]: `cron_mode`,
-    `unattended_mode`, `smart_policy`, `denial_breaker_threshold`, `approvers`, `command_allowlist`
-    (top-level). `command_allowlist` is the persistent allow list the reference writes when the user
-    answers "always"; the port keeps grants only for the session.
+15. **(detector and `command_allowlist` done) `approvals.*`** read: `mode`, `timeout`, `allow`, `deny`, and
+    the top-level `command_allowlist`. Not read [keys]: `cron_mode`, `unattended_mode`, `smart_policy`,
+    `denial_breaker_threshold`, `approvers`; `mode` is only read as `off` (no `smart`). See the section
+    "Approvals: the reference's detector" below.
 16. **(route done) `delegation.*`** read: `max_concurrent_children`, `max_iterations`, `oneshot_max_children`,
     `subagent_auto_approve`. Not read [keys]: `model`, `provider`, `base_url`, `api_key`, `api_mode`,
     `request_overrides`, `reasoning_effort`, `child_timeout_seconds`, `max_summary_chars`,
@@ -295,15 +295,38 @@ turn; matching the reference adds about 2000 tokens to every request (more with 
   `claude-haiku-5-5` on the gateway. Still not read: `request_overrides`, `reasoning_effort`,
   `child_timeout_seconds`, `max_summary_chars`, `max_spawn_depth`, `orchestrator_enabled`,
   `inherit_mcp_toolsets`.
-- **Approvals (item 15) is a design question, not a missing key.** The reference asks for approval only for
-  commands its detector flags (`tools/approval_detection.py`: dangerous patterns and a hard-line list, and
-  `command_allowlist` holds the pattern keys a person approved permanently). The port asks for every
-  command and file change unless `approvals.allow`, the small built-in list or a session grant covers it.
-  Porting the detector would let ordinary commands (`pip install`, `python script.py`, builds, tests) run
-  without a question, which is how the reference feels in practice but is a weaker default than the port has
-  now. Decision needed before any work: keep the stricter default and add `command_allowlist` as persistent
-  `approvals.allow` entries, or port the detector and its patterns (large, security-critical, needs a recorded
-  corpus like the redactor's).
+## Approvals: the reference's detector (done)
+
+Decision (2026-11-22): the default is the reference's. A command needs an answer only when the
+dangerous-command detector flags it; everything else (`pip install`, `python script.py`, builds, tests)
+runs. The detector is `crates/hermes-runtime/src/approval_detect/` (about 20 modules), built bottom-up
+against corpora recorded from the reference by `compat/create_approval_*.py` and checked by the
+`approval_*_corpus` tests (7 suites, about 9 thousand recorded rows, plus mutation checks). Pattern
+tables are generated from the reference by `compat/generate_approval_tables.py`.
+
+Order of decisions for a command (`approval_policy.rs`): `approvals.deny` globs; the hardline floor and
+the `sudo -S` guard (refused even under `--yolo` and `approvals.mode: off`); `--yolo`/`off`
+(refused instead when the scan could not read the command to the end); `command_allowlist` and
+`approvals.allow` (single plain commands only); then the detector's findings. An answer of `y` covers
+once, `s` the pattern keys for the conversation, `a` also writes them to `command_allowlist` in
+`config.yaml` (key aliases of old entries resolve both ways).
+
+Where the port is stricter than the reference, on purpose:
+
+- every matching pattern key needs consent, not only the first match plus the content rules (an
+  approved `rm -rf` no longer waves a `git push --force` in the same line through);
+- with no person to ask a flagged command is refused, where the reference's unattended contexts let it
+  proceed unless `deny` mode is configured; the terminal is still offered to a run with no person only
+  when `approvals.allow` is set or `--yolo` is given, as before (open: whether `-q`/cron runs should get
+  the terminal by default, as in the reference);
+- `approvals.deny` globs match the command text as written, not every normalized spelling of it;
+- an `approvals.allow` pattern or `command_allowlist` glob covers only a single plain command (the
+  reference's quote-aware operator check is not ported).
+
+Not ported yet: the macOS `osascript` classifier (`approval_applescript.py`), the
+`cron.lifecycle_guard` splice check, Windows path spellings (the detector is POSIX only), the guardian
+(`smart`) mode and `cron_mode`/`unattended_mode`. `config set` rewrites `config.yaml` without keeping
+comments, which also applies to the `command_allowlist` write.
 
 ## Notes on prefill messages, terminal.timeout, terminal.cwd (done / not applicable)
 

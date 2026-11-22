@@ -778,6 +778,15 @@ where
     A: FnMut(ApprovalRequest) -> F,
     F: Future<Output = ApprovalDecision>,
 {
+    // What the rules already decide costs the person nothing, so it is settled before the clock
+    // for their answer starts (the first check of a command can take a moment).
+    if let Some(policy) = crate::approval_policy::installed() {
+        match policy.decide(&request) {
+            crate::approval_policy::Verdict::Allow => return ApprovalDecision::Approved,
+            crate::approval_policy::Verdict::Deny => return ApprovalDecision::Denied,
+            crate::approval_policy::Verdict::Ask => {}
+        }
+    }
     tokio::time::timeout(
         Duration::from_secs(u64::from(request.timeout_secs)),
         approve(request),

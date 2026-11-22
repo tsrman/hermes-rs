@@ -152,7 +152,7 @@ class Handler(BaseHTTPRequestHandler):
                 goal = str(messages[-1 if messages[-1].get("role") == "user" else 1].get("content", ""))
                 moves = "MOVE" in str(messages[1].get("content", ""))
                 wants_tool = moves and tools_seen == 0
-                function = {"name": "terminal", "arguments": json.dumps({"command": "mkdir -p moved && cd moved && pwd"})}
+                function = {"name": "terminal", "arguments": json.dumps({"command": "mkdir -p moved && cd moved && pwd; rm -rf ./no-such-dir-for-approval"})}
                 call_id = "child-move"
                 if not wants_tool:
                     marker = str(messages[1].get("content", "")).split("TASK:\n")[-1][:14]

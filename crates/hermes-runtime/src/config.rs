@@ -590,7 +590,8 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.clarify_timeout_secs = clarify_timeout(&config);
     settings.prompt.memory_tool = settings.tools.allows("memory");
     settings.terminal_env = crate::terminal::TerminalSettings::from_config(&config);
-    settings.approvals = crate::approval_policy::ApprovalSettings::from_config(&config);
+    settings.approvals =
+        crate::approval_policy::ApprovalSettings::from_config(&config).with_profile_dir(home);
     settings.delegation = crate::delegation::DelegationSettings::from_config(&config);
     settings.terminal_local = match &config["terminal"]["backend"] {
         serde_yaml::Value::Null => terminal_env.as_deref().map_or_else(

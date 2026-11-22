@@ -93,7 +93,7 @@ impl Rule {
 }
 
 /// `fnmatch.fnmatchcase(text, pattern)`.
-fn fnmatchcase(text: &str, pattern: &str) -> bool {
+pub fn fnmatchcase(text: &str, pattern: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let mut re = String::from(r"\A");
     let mut i = 0;
@@ -406,6 +406,37 @@ pub fn detect_dangerous_command(command: &str, env: &HomeEnv) -> DangerousVerdic
         dangerous: description.is_some(),
         description,
     }
+}
+
+/// Every dangerous pattern key the command matches, in detection order and without repeats. The
+/// reference asks for consent on the first match plus the content rules only; asking for each match
+/// stops an approved verb from waving a second one through.
+pub fn detect_all_dangerous_keys(command: &str, env: &HomeEnv) -> Vec<String> {
+    let len = command.chars().count();
+    take_recursion_limit();
+    match with_budget(len, || scan(command, None, false, env)) {
+        Ok(found) => {
+            let mut out: Vec<String> = Vec::new();
+            for d in found {
+                if !out.contains(&d) {
+                    out.push(d);
+                }
+            }
+            out
+        }
+        Err(_) if take_recursion_limit() => vec![PARSER_LIMIT_DESCRIPTION.to_owned()],
+        Err(_) => vec![SCAN_INCOMPLETE_DESCRIPTION.to_owned()],
+    }
+}
+
+/// Every key the command needs consent for: all dangerous matches, plus the scan-incomplete key when
+/// the hardline scan could not read the command to the end (a grant never covers that one).
+pub fn dangerous_keys(command: &str, env: &HomeEnv, hardline_complete: bool) -> Vec<String> {
+    let mut keys = detect_all_dangerous_keys(command, env);
+    if !hardline_complete && !keys.iter().any(|k| k == SCAN_INCOMPLETE_DESCRIPTION) {
+        keys.push(SCAN_INCOMPLETE_DESCRIPTION.to_owned());
+    }
+    keys
 }
 
 /// Pattern keys of every content-level rule the command matches, in detection order.

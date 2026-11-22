@@ -592,3 +592,21 @@ pub fn detect_hardline_command(command: &str, env: &HomeEnv) -> HardlineVerdict 
         },
     }
 }
+
+pub const SUDO_STDIN_DESCRIPTION: &str = "sudo password guessing via stdin (sudo -S)";
+
+/// `sudo -S` typed by the model without a configured `SUDO_PASSWORD`: a password piped through stdin
+/// is a guessing vector, refused unconditionally (`_check_sudo_stdin_guard`). The reference lowercases
+/// before an ignore-case match, so a plain `sudo -s` is refused as well.
+pub fn check_sudo_stdin_guard(command: &str, env: &HomeEnv) -> Option<&'static str> {
+    static SUDO_STDIN: LazyLock<Regex> =
+        LazyLock::new(|| compile(r"(?:^|[;&|`\n]|&&|\|\||\$\()\s*sudo\s+-S\b", "(?i)"));
+    if std::env::var_os("SUDO_PASSWORD").is_some() {
+        return None;
+    }
+    let normalized = normalize_command_for_detection(command, env).to_lowercase();
+    SUDO_STDIN
+        .is_match(&normalized)
+        .unwrap_or(false)
+        .then_some(SUDO_STDIN_DESCRIPTION)
+}

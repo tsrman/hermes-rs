@@ -1,3 +1,18 @@
 [workspace]
 members = ["crates/hermes-core", "crates/hermes-runtime", "crates/hermes-cli"]
 resolver = "2"
+
+# The approval detector compiles ~160 patterns on first use and scans every command with them.
+# Optimising the regex crates keeps that fast in debug builds too (tests, local runs); release is unchanged.
+[profile.dev.package.fancy-regex]
+opt-level = 3
+[profile.dev.package.regex]
+opt-level = 3
+[profile.dev.package.regex-automata]
+opt-level = 3
+[profile.dev.package.regex-syntax]
+opt-level = 3
+[profile.dev.package.aho-corasick]
+opt-level = 3
+[profile.dev.package.memchr]
+opt-level = 3
