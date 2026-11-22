@@ -88,7 +88,7 @@ def t_deny():
 TASKS = {f.__name__[2:]: f for f in (t_fix, t_rename, t_newdir, t_search, t_longout, t_cd, t_indent, t_deny)}
 
 
-def run_task(name, binary, model, env, timeout):
+def run_task(name, binary, model, env, timeout, provider="custom"):
     files, prompt, check = TASKS[name]()
     base = Path(tempfile.mkdtemp(prefix=f"live-{name}-"))
     project, profile = base / "proj", base / "profile"
@@ -97,7 +97,7 @@ def run_task(name, binary, model, env, timeout):
         (project / rel).parent.mkdir(parents=True, exist_ok=True)
         (project / rel).write_text(text)
     (profile / "config.yaml").write_text(
-        f"model: {{default: {model}, provider: custom, base_url: '{env['LLM_GATEWAY_URL'].rstrip('/')}/v1'}}\n"
+        f"model: {{default: {model}, provider: {provider}, base_url: '{env['LLM_GATEWAY_URL'].rstrip('/')}/v1'}}\n"
         "approvals:\n  deny: ['git push*', 'rm -rf*']\n")
     journal = base / "journal.jsonl"
     run_env = {k: v for k, v in os.environ.items() if k not in ("LLM_GATEWAY_URL", "GATEWAY_API_KEY")}
@@ -129,6 +129,7 @@ def main():
     parser.add_argument("--model", required=True)
     parser.add_argument("--binary", default=str(ROOT / "target/debug/hermes"))
     parser.add_argument("--only", default="")
+    parser.add_argument("--provider", default="custom", help="custom (chat completions) or anthropic (messages API)")
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--json", default="")
     args = parser.parse_args()
@@ -138,11 +139,11 @@ def main():
     names = [n for n in args.only.split(",") if n] or list(TASKS)
     results = []
     for name in names:
-        result = run_task(name, args.binary, args.model, env, args.timeout)
+        result = run_task(name, args.binary, args.model, env, args.timeout, args.provider)
         results.append(result)
         print(f"{'PASS' if result['ok'] else 'FAIL'} {name:8} {result['seconds']:6}s req={result['requests']} tools={result['tool_calls']} "
               f"failed={result['tool_failures']} err={result['provider_errors']} in={result['input_tokens']} out={result['output_tokens']} {result['note']}", flush=True)
-    print(f"{sum(r['ok'] for r in results)}/{len(results)} passed on {args.model}")
+    print(f"{sum(r['ok'] for r in results)}/{len(results)} passed on {args.model} via {args.provider}")
     if args.json:
         Path(args.json).write_text(json.dumps(results, ensure_ascii=False, indent=1))
 

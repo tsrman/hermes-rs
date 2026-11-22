@@ -81,7 +81,7 @@ fn request() -> Value {
 #[tokio::test]
 async fn reads_token_usage_from_message_start_and_delta() {
     let (url, handle) = server(vec![sse(&[
-        json!({"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 55, "output_tokens": 1}}}),
+        json!({"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5, "cache_creation_input_tokens": 20, "cache_read_input_tokens": 30, "output_tokens": 1}}}),
         json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 9}}),
         json!({"type": "message_stop"}),
     ])]);

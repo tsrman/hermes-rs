@@ -106,10 +106,19 @@ impl AnthropicProvider {
                         }
                     }
                     Some("message_start") => {
-                        let input = event
-                            .pointer("/message/usage/input_tokens")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0);
+                        // Cached prompt tokens are counted apart from `input_tokens`.
+                        let input: u64 = [
+                            "input_tokens",
+                            "cache_creation_input_tokens",
+                            "cache_read_input_tokens",
+                        ]
+                        .iter()
+                        .filter_map(|key| {
+                            event
+                                .pointer(&format!("/message/usage/{key}"))
+                                .and_then(Value::as_u64)
+                        })
+                        .sum();
                         let usage = completion.usage.get_or_insert_with(Default::default);
                         usage.input_tokens = input;
                     }
