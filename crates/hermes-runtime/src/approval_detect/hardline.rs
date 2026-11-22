@@ -20,6 +20,7 @@ use super::exec_findings::{execution_flag_findings, nested_payloads, MALFORMED_E
 use super::hardline_tables::{
     HARDLINE_PATTERNS, WHATIF_OTHER_HARDLINE, WHATIF_STATEMENT_UNGUARDED, WHATIF_STRICT_PATTERNS,
 };
+use super::matchers::download_then_run;
 use super::normalize::{normalize_command_for_detection, HomeEnv};
 use super::shell_heredoc::mask_heredoc_bodies_for_shell_scan;
 use super::shell_scan::{scan_shell, Kind, ScanOpts};
@@ -230,19 +231,24 @@ fn carried_payloads(command: &str) -> R<Vec<String>> {
     Ok(out)
 }
 
-/// The data-dropped, code-dropped and raw copies of `command` (floors read every body).
-fn heredoc_scan_sources_floors(command: &str) -> Vec<String> {
+/// The data-dropped, code-dropped and (for floors, or when a dropped `cat` body's file runs later)
+/// raw copies of `command`.
+pub fn heredoc_scan_sources(command: &str, floors: bool) -> R<Vec<String>> {
+    let data_dropped = mask_heredoc_bodies_for_shell_scan(command, false);
+    let code_dropped = mask_heredoc_bodies_for_shell_scan(command, true);
+    let include_raw =
+        floors || (data_dropped != command && download_then_run(&data_dropped, true)?);
     let mut out: Vec<String> = Vec::new();
-    for source in [
-        mask_heredoc_bodies_for_shell_scan(command, false),
-        mask_heredoc_bodies_for_shell_scan(command, true),
-        command.to_owned(),
-    ] {
+    let mut candidates = vec![data_dropped, code_dropped];
+    if include_raw {
+        candidates.push(command.to_owned());
+    }
+    for source in candidates {
         if !out.contains(&source) {
             out.push(source);
         }
     }
-    out
+    Ok(out)
 }
 
 struct Seen(HashSet<String>);
@@ -270,6 +276,7 @@ fn single_command_detection_variants(
     eval_depth: usize,
     capped: &mut Vec<String>,
     env: &HomeEnv,
+    floors: bool,
 ) -> R<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     let command = expand_ansi_c_quotes(command);
@@ -316,7 +323,8 @@ fn single_command_detection_variants(
         nested_payloads(&mask_quoted_newlines(&command)?, eval_depth, Some(capped))?
     {
         if payload != command {
-            for variant in command_detection_variants(&payload, payload_depth, capped, env)? {
+            for variant in command_detection_variants(&payload, payload_depth, capped, env, floors)?
+            {
                 if seen.fresh(&variant) {
                     out.push(variant);
                 }
@@ -381,11 +389,13 @@ pub fn command_detection_variants(
     eval_depth: usize,
     capped: &mut Vec<String>,
     env: &HomeEnv,
+    floors: bool,
 ) -> R<Vec<String>> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
-    for source in heredoc_scan_sources_floors(command) {
-        for variant in single_command_detection_variants(&source, eval_depth, capped, env)? {
+    for source in heredoc_scan_sources(command, floors)? {
+        for variant in single_command_detection_variants(&source, eval_depth, capped, env, floors)?
+        {
             if seen.insert(variant.clone()) {
                 out.push(variant);
             }
@@ -410,11 +420,11 @@ fn carried_command_variants(
                 if !seen.insert(payload.clone()) {
                     continue;
                 }
-                out.extend(command_detection_variants(&payload, 0, capped, env)?);
+                out.extend(command_detection_variants(&payload, 0, capped, env, true)?);
                 let payload = blank_literal_heredoc_bodies(&payload);
                 nested.push(payload.clone());
                 let peeled = strip_wrapper_prefixes(&payload)?;
-                out.extend(command_detection_variants(&peeled, 0, capped, env)?);
+                out.extend(command_detection_variants(&peeled, 0, capped, env, true)?);
                 if seen.insert(peeled.clone()) {
                     nested.push(peeled);
                 }
@@ -433,9 +443,9 @@ pub fn hardline_detection_variants(
 ) -> R<Vec<String>> {
     let masked = blank_literal_heredoc_bodies(&mask_quoted_newlines(command)?);
     let stripped = strip_wrapper_prefixes(&masked)?;
-    let mut all = command_detection_variants(command, 0, capped, env)?;
+    let mut all = command_detection_variants(command, 0, capped, env, true)?;
     if stripped != masked {
-        all.extend(command_detection_variants(&stripped, 0, capped, env)?);
+        all.extend(command_detection_variants(&stripped, 0, capped, env, true)?);
         all.extend(carried_command_variants(&stripped, capped, env)?);
     }
     all.extend(carried_command_variants(
@@ -473,7 +483,7 @@ fn detect_inner(command: &str, env: &HomeEnv) -> R<(bool, Option<String>)> {
     if command_parser_limit_exceeded(command) {
         return Ok((true, Some(PARSER_LIMIT_DESCRIPTION.into())));
     }
-    for source in heredoc_scan_sources_floors(command) {
+    for source in heredoc_scan_sources(command, true)? {
         let masked = mask_quoted_newlines(&expand_ansi_c_quotes(&source))?;
         if grep_safe_detection_variant(&masked)?.1 {
             return Ok((true, Some(MALFORMED_EXEC_DESCRIPTION.into())));

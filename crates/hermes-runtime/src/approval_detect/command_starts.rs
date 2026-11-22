@@ -141,7 +141,7 @@ pub fn mark_command_starts(
 }
 
 /// `_SHELL_REDIRECTION_RE.match` at `pos`: `[0-9]*` then an operator; returns the end offset.
-fn match_redirection(chars: &[char], pos: usize) -> Option<usize> {
+pub fn match_redirection(chars: &[char], pos: usize) -> Option<usize> {
     let mut k = pos;
     while chars.get(k).is_some_and(char::is_ascii_digit) {
         k += 1;

@@ -3,8 +3,9 @@
 //! Built bottom-up against corpora recorded from the reference (`compat/create_approval_corpus.py`
 //! for verdicts, `compat/create_approval_scan_corpus.py` for the scanner primitives). Text is handled
 //! as `char` slices so every offset means what the reference's Python string offsets mean. Only the
-//! layers listed here exist so far: the hardline floor has a verdict function, the dangerous-command
-//! layer (`detect_dangerous_command`) does not, and nothing is wired into the approval policy yet.
+//! layers listed here exist so far: the hardline floor (`hardline`) and the dangerous-command layer
+//! (`dangerous`) have verdict functions; nothing is wired into the approval policy yet, and the
+//! `osascript` classifier and the `cron.lifecycle_guard` splice check are not ported.
 //! POSIX only (see `normalize`); Windows path spellings are not ported.
 //!
 //! Ported: `budget` (scan work bound), `shell_scan` (quote/escape state machine, substitution ends,
@@ -16,15 +17,19 @@
 //! masking), `shell_tokens` (top-level segments, span lexer, grep operands) and `exec_findings`
 //! (`-e`/`-c` interpreters, `bash -c`, read-tool program flags, `eval`) and `hardline` (the hardline
 //! floor: detection variants, `detect_hardline_command`; its pattern table is generated into
-//! `hardline_tables` by `compat/generate_approval_tables.py`).
+//! `hardline_tables` by `compat/generate_approval_tables.py`), `matchers` (pipe-to-shell, `/dev/tcp`, wmic,
+//! download-then-run) and `dangerous` (the dangerous layer; its table is `dangerous_tables`).
 
 pub mod ansi_c;
 pub mod budget;
 pub mod command_starts;
+pub mod dangerous;
+mod dangerous_tables;
 pub mod env_split;
 pub mod exec_findings;
 pub mod hardline;
 mod hardline_tables;
+pub mod matchers;
 pub mod normalize;
 pub mod patterns;
 pub mod shell_heredoc;
