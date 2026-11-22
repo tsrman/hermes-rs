@@ -112,6 +112,9 @@ for these inputs: `model:` as a list, `providers:` as a list, `custom_providers:
 
 ## Order of work
 
+Status 2026-11-22: steps 1 and 2 are done (see the tables above; fallbacks and TLS options excepted, and noted
+as such). Next is step 3.
+
 1. Items 2 and 1/3/4 together (env expansion, then named providers with their key, URL and mode); one
    reference fixture of `resolve_runtime_provider` over about 20 config shapes.
 2. Item 5 (headers, TLS options) and item 6 (`extra_body` on every transport and on fallbacks).

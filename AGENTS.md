@@ -14,7 +14,7 @@ This repository contains a Rust rewrite of Hermes Agent. The Cargo workspace has
 - `cargo clippy --workspace --all-targets --locked -- -D warnings` checks all Rust targets.
 - `cargo build --locked -p hermes-cli` followed by `python3 -m unittest discover -s compat -p 'test_*.py' -v` runs the CLI and model-server compatibility tests. These tests require loopback networking.
 
-For local experiments, start `python3 compat/model_server.py --scenario tool` and use its printed address with `target/debug/hermes chat --oneshot -q 'Read fixture.txt' --base-url <address>/v1 --model fixture`. Set `HERMES_API_KEY` in the environment and create `fixture.txt` in the working directory.
+For local experiments, start `python3 compat/model_server.py --scenario tool` and use its printed address with `target/debug/hermes chat --oneshot -q 'Read fixture.txt' --base-url <address>/v1 --model fixture`. Set `HERMES_API_KEY` in the environment and create `fixture.txt` in the working directory. Without `-q`, `hermes chat` starts the interactive conversation (`compat/test_repl.py` covers it). `compat/live_suite.py --model deepseek-flash-1017` runs the real-provider task suite; it reads the gateway settings from the environment or the untracked `.env` and never prints the key.
 
 ## Coding and Testing
 

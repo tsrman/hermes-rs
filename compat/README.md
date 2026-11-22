@@ -262,3 +262,11 @@ python3 compat/benchmark_cli.py target/x86_64-unknown-linux-gnu/release/hermes \
 ```
 
 Скрипт измеряет запуск `--help` у обоих CLI, время до первого запроса к имитатору и полное время текстового хода. Ход Rust запускается через `hermes chat --oneshot`, ход Python через `run_reference_turn.py` и `AIAgent.run_conversation` в том же сценарии. Измерения включают запуск процессов и используют отдельный временный профиль на каждый прогон. RSS измеряется в отдельном запуске, пока процесс ждёт ответ имитатора. Базовое время HTTP на loopback измеряется отдельным запросом. [Результаты проверки](matrix.md#релизная-проверка-и-замеры-cli)
+
+## Интерактивный диалог и живые проверки
+
+`hermes chat` без `-q` запускает диалог в консоли. Тесты `compat/test_repl.py` гоняют его через pty и pipe: несколько ходов в одной сессии, `/new`, `/model`, `/retry` после Ctrl-C, `--continue`, `sessions list`, продолжение строки `\`. Запуск: `python3 -m unittest compat.test_repl`.
+
+Живой набор задач `compat/live_suite.py --model deepseek-flash-1017 [--provider custom|anthropic] [--only fix,git,...]` берёт `LLM_GATEWAY_URL` и `GATEWAY_API_KEY` из окружения или из неотслеживаемого `.env` в корне репозитория, запускает CLI на 14 небольших задачах во временных профилях и проверяет результат запуском кода и журналом `--debug-log`. Ключ передаётся только через окружение процесса и нигде не печатается. По умолчанию живые проверки идут на `deepseek-flash-1017`.
+
+Фикстуры эталона запускаются интерпретатором эталона, например `/tmp/hermes-reference-venv/bin/python compat/create_named_provider_fixture.py /tmp/hermes-main $PWD/crates/hermes-runtime/tests/fixtures/named_providers.json`.

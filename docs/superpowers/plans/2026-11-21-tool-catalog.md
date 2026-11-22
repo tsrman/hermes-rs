@@ -7,13 +7,13 @@
 | Набор | Инструменты | Состояние |
 | --- | --- | --- |
 | web | `web_search`, `web_extract` | Сделано для Tavily, SearXNG и Brave. Нет Firecrawl, Exa, Parallel, Keenable, Perplexity, DDGS, режима без ключей |
-| file | `read_file`, `write_file`, `patch`, `search_files` | Сделано |
-| terminal | `terminal` | Сделано, включая `background=true` (параметр виден, пока предлагается `process_manage`). Нет pty, `notify_on_complete`, `watch_patterns` |
-| skills | `skills_list`, `skill_view` | Сделано. Нет `skill_manage` |
+| file | `read_file`, `write_file`, `patch`, `search_files` | Сделано (схемы `read_file` и `terminal` рукописные) |
+| terminal | `terminal`, `process_manage` | Сделано, включая `background=true`, окружение пользователя и запоминание каталога. Нет pty, `notify_on_complete`, `watch_patterns` |
+| skills | `skills_list`, `skill_view`, `skill_manage` | Сделано (`skill_manage` без нечёткого patch и журнала) |
 | memory | `memory` | Сделано. Нет плагина holographic |
-| прочее | `clarify` | Сделано |
-| мета | — | Нет |
-| остальное | `browser_exec`, `browser_vault`, `execute_code`, `vision_analyze`, `todo_list`, `session_search`, `manage_connections`, `delegate_task`, `cronjob_manage`, `fact_store`, `fact_feedback`, `skill_manage` | Не сделано |
+| прочее | `clarify`, `todo_list`, `session_search`, `execute_code`, `delegate_task`, `browser_cdp` | Сделано (отличия в разделах ниже) |
+| мета | `tool_search`, `tool_describe`, `tool_call` | Сделано |
+| не сделано | `browser_exec`, `browser_vault`, `browser_dialog`, `vision_analyze`, `manage_connections`, `cronjob_manage`, `fact_store`, `fact_feedback` | — |
 
 Из рабочего прототипа в Python по умолчанию видны `clarify`, `delegate_task`, `execute_code`, `memory`, `patch`, `read_file`, `search_files`, `skill_manage`, `skill_view`, `skills_list`, `terminal`, `web_extract`, `web_search`, `write_file` и три мета-инструмента. `todo_list`, `session_search` и браузер скрыты в отложенном каталоге.
 
@@ -75,9 +75,9 @@
 
 | Инструмент | Что нужно |
 | --- | --- |
-| `cronjob_manage` | Сначала `cron add/edit/run` в CLI, для чего нужен порт `lifecycle_guard.py` (около 1650 строк, защита от prompt с командами перезапуска gateway). Затем инструмент (`cronjob_tools.py`, около 1300 строк) поверх тех же функций |
-| `delegate_task` | Субагенты: дочерний ход в том же процессе с урезанным набором инструментов, глубина и лимиты, сессии, результаты, возобновление. Эталон — около 8000 строк в `delegate_tool*.py`. Начать с синхронного делегирования без автовозобновления |
-| `execute_code` | Решение нужно принять заранее (см. ниже). Запуск скрипта, который вызывает инструменты через RPC |
+| `cronjob_manage` (не сделано) | Сначала `cron add/edit/run` в CLI, для чего нужен порт `lifecycle_guard.py` (около 1650 строк, защита от prompt с командами перезапуска gateway). Затем инструмент (`cronjob_tools.py`, около 1300 строк) поверх тех же функций |
+| `delegate_task` (сделано, см. раздел ниже) | Субагенты: дочерний ход в том же процессе с урезанным набором инструментов, глубина и лимиты, сессии, результаты, возобновление. Эталон — около 8000 строк в `delegate_tool*.py`. Начать с синхронного делегирования без автовозобновления |
+| `execute_code` (сделано, см. раздел ниже) | Решение нужно принять заранее (см. ниже). Запуск скрипта, который вызывает инструменты через RPC |
 
 ## Волна 4. Требуют внешних компонентов
 
@@ -93,7 +93,7 @@
 
 ## Решения, которые нужны от вас
 
-1. **`execute_code`.** (а) запускать пользовательский интерпретатор Python с RPC-мостом к инструментам Rust, как опциональный внешний процесс; (б) встроить собственную песочницу на Rust (дорого, расходится с поведением); (в) отложить. Рекомендация — (а), по аналогии с планом для плагинов.
+1. **(решено: вариант а) `execute_code`.** (а) запускать пользовательский интерпретатор Python с RPC-мостом к инструментам Rust, как опциональный внешний процесс; (б) встроить собственную песочницу на Rust (дорого, расходится с поведением); (в) отложить. Рекомендация — (а), по аналогии с планом для плагинов.
 2. **`browser_exec`.** (а) опциональный процесс с Python-обвязкой эталона и версионированным RPC; (б) собственный CDP-слой на Rust с набором команд, который задаст модель; (в) только `browser_cdp`. Рекомендация — сначала `browser_cdp` и `browser_dialog`, затем (а).
 3. **Объём.** Нужны ли `manage_connections` и holographic (`fact_store`, `fact_feedback`) в первом выпуске или они остаются за рамками.
 4. **Видимость по умолчанию.** Повторять скрытие `todo_list`, `session_search` и браузера через `tool_search`, или показывать их сразу. Рекомендация — повторять эталон.
@@ -108,6 +108,8 @@
 - Что не перенесено, пишется явно в плане и в `compat/matrix.md`.
 
 ## Порядок и вехи
+
+Состояние на 2026-11-22: пункты 1–5, 6 (`browser_cdp`; `browser_dialog` не сделан), 9 и 10 (`execute_code`) выполнены; не сделаны 7 (`cronjob_manage`), 8 (`vision_analyze`), `browser_exec`, 11.
 
 1. Волна 0 целиком.
 2. `todo_list`, `session_search`.
