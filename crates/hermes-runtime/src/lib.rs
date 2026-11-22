@@ -29,6 +29,7 @@ pub mod storage;
 mod syntax_lint;
 pub mod system_prompt;
 pub mod terminal;
+mod terminal_init;
 mod todo_tool;
 pub mod tool_policy;
 mod tool_search;

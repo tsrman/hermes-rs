@@ -367,6 +367,9 @@ pub struct TurnOptions<'a> {
     pub single_query: bool,
     pub max_turns: u32,
     pub approval_timeout_secs: Option<u32>,
+    /// The terminal's own limit. A command the detector does not flag needs no answer, so the terminal is
+    /// offered to a run with no person to ask; a flagged one is refused there unless the run's mode approves.
+    pub terminal_approval_timeout_secs: Option<u32>,
     pub terminal_local: bool,
     /// Which environment variables commands see.
     pub terminal_env: Option<&'a crate::terminal::TerminalSettings>,
@@ -400,7 +403,7 @@ impl TurnOptions<'_> {
     }
 
     pub(crate) fn can_run_terminal(&self) -> bool {
-        self.approval_timeout_secs.is_some() && self.terminal_local && terminal::SUPPORTED
+        self.terminal_approval_timeout_secs.is_some() && self.terminal_local && terminal::SUPPORTED
     }
 }
 

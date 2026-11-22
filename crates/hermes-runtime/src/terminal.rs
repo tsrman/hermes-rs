@@ -96,6 +96,12 @@ pub struct TerminalSettings {
     /// The profile's scratch directory; commands get it as `TMPDIR`, `TMP` and `TEMP`.
     #[serde(default)]
     pub scratch: Option<std::path::PathBuf>,
+    /// `terminal.shell_init_files`: sourced before the first command (see `terminal_init`).
+    #[serde(default)]
+    pub shell_init_files: Vec<String>,
+    /// `terminal.auto_source_bashrc: false` (the reference's default is true).
+    #[serde(default)]
+    pub no_auto_source_bashrc: bool,
 }
 
 const DEFAULT_ENV: [&str; 22] = [
@@ -166,6 +172,20 @@ impl TerminalSettings {
                 .filter(|calls| *calls > 0)
                 .map(|calls| calls as usize),
             scratch: None,
+            shell_init_files: config["terminal"]["shell_init_files"]
+                .as_sequence()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_yaml::Value::as_str)
+                        .filter(|path| !path.is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            no_auto_source_bashrc: !config["terminal"]
+                .get("auto_source_bashrc")
+                .is_none_or(crate::terminal_init::py_truthy),
         }
     }
 
@@ -184,6 +204,19 @@ impl TerminalSettings {
                 out.push((name.to_owned(), value));
             }
         }
+        let names: Vec<String> = DEFAULT_ENV
+            .iter()
+            .copied()
+            .chain(self.env_passthrough.iter().map(String::as_str))
+            .filter(|name| !WITHHELD_ENV.contains(name))
+            .map(str::to_owned)
+            .collect();
+        let mut out = crate::terminal_init::with_init_files(
+            out,
+            &self.shell_init_files,
+            !self.no_auto_source_bashrc,
+            &names,
+        );
         if let Some(scratch) = &self.scratch {
             for name in ["TMPDIR", "TMP", "TEMP"] {
                 out.retain(|(known, _)| known != name);

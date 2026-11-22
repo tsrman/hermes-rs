@@ -101,6 +101,11 @@ async fn run() -> Result<u8, String> {
         Command::Chat(args) => {
             let request = chat::prepare(home, args)?;
             approval::install(request.approvals().clone());
+            if request.is_unattended(approval::available()) {
+                if let Some(policy) = hermes_runtime::approval_policy::installed() {
+                    policy.set_unattended(request.approvals().single_query_approves);
+                }
+            }
             if request.is_interactive() {
                 return repl::run(home, request).await;
             }

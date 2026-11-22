@@ -43,6 +43,8 @@ pub(crate) const READ_FILE: &str = "read_file";
 pub(crate) struct ToolEnv {
     pub write_files: bool,
     pub terminal: bool,
+    /// Nobody can approve a run of code (`execute_code` asks every time), so it is not offered.
+    pub no_code_approval: bool,
     /// The most subagents one call may start, when this turn may delegate.
     pub delegation: Option<usize>,
     pub has_profile: bool,
@@ -62,6 +64,7 @@ impl ToolEnv {
         Self {
             write_files: options.can_write_files(),
             terminal: options.can_run_terminal(),
+            no_code_approval: options.approval_timeout_secs.is_none(),
             delegation: options
                 .delegation
                 .filter(|_| options.child.is_none())
@@ -159,7 +162,7 @@ fn terminal_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFutur
                 "status": "backend_unavailable"
             });
         }
-        let timeout = cx.options.approval_timeout_secs;
+        let timeout = cx.options.terminal_approval_timeout_secs;
         let background = (cx.options.tools.allows(PROCESS_MANAGE)
             && !cx.options.tools.is_deferred(PROCESS_MANAGE))
         .then(|| cx.options.state_key());
@@ -355,7 +358,7 @@ static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: EXECUTE_CODE,
         offered: |env| {
-            env.terminal
+            (env.terminal && !env.no_code_approval)
                 .then(|| execute_code::schema(&execute_code::sandbox_tools(env)))
         },
         call: execute_code::call,
@@ -549,6 +552,7 @@ mod tests {
         let env = ToolEnv {
             write_files: true,
             terminal: true,
+            no_code_approval: false,
             delegation: Some(10),
             has_profile: true,
             skills_indexed: true,

@@ -399,7 +399,9 @@ class TerminalToolTest(ToolTestCase):
         arguments = {"command": f"printf touched > marker.txt; {FLAGGED}"}
         blocked, requests = self.unattended("terminal", arguments)
         self.assertEqual(blocked["status"], "approval_unavailable")
-        self.assertNotIn("terminal", [tool["function"]["name"] for tool in requests[0]["tools"]])
+        # With nobody to ask the terminal is still offered, and a flagged command is refused.
+        self.assertIn("terminal", [tool["function"]["name"] for tool in requests[0]["tools"]])
+        self.assertFalse((self.root / "marker.txt").exists())
         for mode in ("deny", "timeout", "cancel"):
             with self.subTest(mode=mode):
                 process, tty = self.interactive(tool="terminal", arguments=arguments)
@@ -587,6 +589,44 @@ class UnattendedWorkTest(ToolTestCase):
         # ...and a harmless one runs without a question (the reference's default).
         harmless, _ = self.run_tool("terminal", {"command": "echo a; echo b"}, config=config)
         self.assertEqual(harmless["output"], "a\nb\n", harmless)
+
+    def test_the_terminal_is_offered_without_a_person_and_the_modes_decide_flagged_commands(self):
+        # The reference's defaults: an unflagged command runs, a flagged one is refused...
+        ran, requests = self.run_tool("terminal", {"command": "echo ok"})
+        self.assertEqual(ran["output"], "ok\n", ran)
+        self.assertIn("terminal", [tool["function"]["name"] for tool in requests[0]["tools"]])
+        self.assertNotIn("execute_code", [tool["function"]["name"] for tool in requests[0]["tools"]])
+        refused, _ = self.run_tool("terminal", {"command": FLAGGED})
+        self.assertEqual(refused["status"], "approval_unavailable", refused)
+        # ...unless approvals.single_query_mode says approve; the floor stays whatever the mode says.
+        mode = "  single_query_mode: approve\n"
+        approved, _ = self.run_tool("terminal", {"command": FLAGGED}, config=mode)
+        self.assertEqual(approved["exit_code"], 0, approved)
+        floor, _ = self.run_tool("terminal", {"command": "mkfs.ext4 /no/such/device-for-approval-probe"}, config=mode)
+        self.assertEqual(floor["status"], "approval_denied", floor)
+        # Any other word, `true` included, is deny, as in the reference.
+        denied, _ = self.run_tool("terminal", {"command": FLAGGED}, config="  single_query_mode: true\n")
+        self.assertEqual(denied["status"], "approval_unavailable", denied)
+
+    def test_shell_init_files_extend_path_but_leak_nothing_else(self):
+        home = self.root / "login-home"
+        tools = home / "tools"
+        tools.mkdir(parents=True)
+        probe = tools / "probe-tool"
+        probe.write_text("#!/bin/sh\necho probe-ran\n", encoding="utf-8")
+        probe.chmod(0o755)
+        (home / ".bashrc").write_text(
+            f'export PATH="{tools}:$PATH"\nexport LEAKED_TOKEN=secret-from-rc\n', encoding="utf-8")
+        self.env["HOME"] = str(home)
+        command = {"command": "probe-tool; echo ${LEAKED_TOKEN:-withheld}"}
+        found, _ = self.run_tool("terminal", command)
+        self.assertEqual(found["output"], "probe-ran\nwithheld\n", found)
+        # auto_source_bashrc: false leaves the rc files unread; an explicit list replaces the defaults.
+        off, _ = self.run_tool("terminal", {"command": "probe-tool"}, config="terminal:\n  auto_source_bashrc: false\n")
+        self.assertNotEqual(off["exit_code"], 0, off)
+        listed, _ = self.run_tool("terminal", command,
+                                  config=f"terminal:\n  shell_init_files: ['{home}/.bashrc']\n  auto_source_bashrc: false\n")
+        self.assertEqual(listed["output"], "probe-ran\nwithheld\n", listed)
 
     def test_the_hardline_floor_refuses_even_under_yolo(self):
         # mkfs on a device that does not exist: refused by the floor, and harmless if it ever ran.

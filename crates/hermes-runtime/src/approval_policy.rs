@@ -45,9 +45,27 @@ pub struct ApprovalSettings {
     /// globs (case-sensitive) an operator added by hand.
     #[serde(default)]
     pub command_allowlist: Vec<String>,
+    /// `approvals.single_query_mode: approve`: a `-q` run with nobody to answer lets flagged
+    /// commands through. The default, `deny`, refuses them (the unflagged ones still run).
+    #[serde(default)]
+    pub single_query_approves: bool,
+    /// `approvals.cron_mode: approve`: the same for cron jobs.
+    #[serde(default)]
+    pub cron_approves: bool,
     /// Where an "always" answer is saved; `None` keeps it for this run only.
     #[serde(skip)]
     pub profile_dir: Option<PathBuf>,
+}
+
+/// The reference's `_binary_approval_mode`: `approve`, `off`, `allow` or `yes` mean approve; anything
+/// else, absent included, means deny.
+fn approves_unattended(value: &serde_yaml::Value) -> bool {
+    value.as_str().is_some_and(|mode| {
+        matches!(
+            mode.trim().to_lowercase().as_str(),
+            "approve" | "off" | "allow" | "yes"
+        )
+    })
 }
 
 /// Read-only commands that need no asking.
@@ -88,6 +106,8 @@ impl ApprovalSettings {
             allow: string_list(&section["allow"]),
             deny: string_list(&section["deny"]),
             command_allowlist: string_list(&config["command_allowlist"]),
+            single_query_approves: approves_unattended(&section["single_query_mode"]),
+            cron_approves: approves_unattended(&section["cron_mode"]),
             profile_dir: None,
         }
     }
@@ -149,6 +169,9 @@ pub struct ApprovalPolicy {
     /// The last command analysed, so asking about it, explaining it and remembering the answer read
     /// the detector once.
     analysed: Mutex<Option<Analysed>>,
+    /// `Some(approve)` when no person can answer (a `-q` run with no terminal, a cron job): flagged
+    /// commands are then refused, or approved when the matching `*_mode` is `approve`.
+    unattended: Mutex<Option<bool>>,
 }
 
 struct Analysed {
@@ -159,6 +182,22 @@ struct Analysed {
 }
 
 impl ApprovalPolicy {
+    /// No person can answer in this run. Flagged commands are refused unless `approve`, which is the
+    /// run's `single_query_mode` or `cron_mode`; a command the scanner could not read is refused either way.
+    pub fn set_unattended(&self, approve: bool) {
+        *self
+            .unattended
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(approve);
+    }
+
+    fn unattended(&self) -> Option<bool> {
+        *self
+            .unattended
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// Switch approving everything on or off for the rest of the run.
     pub fn set_approve_all(&self, on: bool) {
         self.approve_all
@@ -245,6 +284,7 @@ impl ApprovalPolicy {
             permanent: Mutex::new(permanent),
             approve_all: std::sync::atomic::AtomicBool::new(false),
             analysed: Mutex::new(None),
+            unattended: Mutex::new(None),
         }
     }
 
@@ -378,8 +418,12 @@ impl ApprovalPolicy {
         if configured && is_plain(command) {
             return Verdict::Allow;
         }
+        let unattended = self.unattended();
+        if unattended.is_some() && unread {
+            return Verdict::Deny;
+        }
         let findings = self.findings(command, &env);
-        if findings.iter().all(|key| self.covered(key, grants)) {
+        if findings.iter().all(|key| self.covered(key, grants)) || unattended == Some(true) {
             Verdict::Allow
         } else {
             Verdict::Ask
@@ -667,6 +711,44 @@ mod tests {
             "{list:?}"
         );
         assert_eq!(config["model"], "fixture");
+    }
+
+    #[test]
+    fn an_unattended_run_refuses_flagged_commands_unless_its_mode_approves() {
+        let refuse = ApprovalPolicy::new(ApprovalSettings::default());
+        refuse.set_unattended(false);
+        assert_eq!(refuse.decide(&command("echo ok")), Verdict::Allow);
+        assert_eq!(refuse.decide(&command("rm -rf build")), Verdict::Ask);
+        let approve = ApprovalPolicy::new(ApprovalSettings::default());
+        approve.set_unattended(true);
+        assert_eq!(approve.decide(&command("rm -rf build")), Verdict::Allow);
+        // The floors and the unread command stay refused whatever the mode says.
+        assert_eq!(approve.decide(&command("rm -rf /")), Verdict::Deny);
+        let nested = format!("echo {}{}", "$(".repeat(40), ")".repeat(40));
+        assert_eq!(approve.decide(&command(&nested)), Verdict::Deny);
+    }
+
+    #[test]
+    fn unattended_modes_read_like_the_reference() {
+        let read = |text: &str| {
+            let config: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
+            let settings = ApprovalSettings::from_config(&config);
+            (settings.single_query_approves, settings.cron_approves)
+        };
+        assert_eq!(read("approvals: {}"), (false, false));
+        assert_eq!(
+            read("approvals: {single_query_mode: approve}"),
+            (true, false)
+        );
+        assert_eq!(read("approvals: {cron_mode: ' Allow '}"), (false, true));
+        assert_eq!(
+            read("approvals: {cron_mode: 'off', single_query_mode: yes}"),
+            (true, true)
+        );
+        assert_eq!(
+            read("approvals: {cron_mode: deny, single_query_mode: true}"),
+            (false, false)
+        );
     }
 
     #[test]

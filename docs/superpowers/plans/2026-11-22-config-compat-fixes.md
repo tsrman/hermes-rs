@@ -73,9 +73,9 @@ routes ignore it); `auxiliary.compression.extra_body` is not read; fallback rout
 13. **(switch done; PII and phone options not) `security.redact_secrets`, `privacy.redact_pii`, `security.redact_phone_numbers`.** The port always
     redacts secrets and has no switch [keys]. Decide whether to add the switch; defaulting to the
     reference's default is mandatory either way.
-14. **`terminal.*`** read: `backend`, `env_passthrough`, timeouts for code. Not read [keys]: `cwd`,
-    `timeout`, `home_mode`, `shell_init_files`, `auto_source_bashrc`, `persistent_shell`, docker/ssh/modal
-    settings (remote backends do not exist in the port).
+14. **(init files done) `terminal.*`** read: `backend`, `env_passthrough`, `timeout`, `shell_init_files`,
+    `auto_source_bashrc`, timeouts for code. Not read [keys]: `cwd`, `home_mode`, `persistent_shell`,
+    docker/ssh/modal settings (remote backends do not exist in the port). See the notes below.
 15. **(detector and `command_allowlist` done) `approvals.*`** read: `mode`, `timeout`, `allow`, `deny`, and
     the top-level `command_allowlist`. Not read [keys]: `cron_mode`, `unattended_mode`, `smart_policy`,
     `denial_breaker_threshold`, `approvers`; `mode` is only read as `off` (no `smart`). See the section
@@ -333,18 +333,39 @@ Where the port is stricter than the reference, on purpose:
 
 - every matching pattern key needs consent, not only the first match plus the content rules (an
   approved `rm -rf` no longer waves a `git push --force` in the same line through);
-- with no person to ask a flagged command is refused, where the reference's unattended contexts let it
-  proceed unless `deny` mode is configured; the terminal is still offered to a run with no person only
-  when `approvals.allow` is set or `--yolo` is given, as before (open: whether `-q`/cron runs should get
-  the terminal by default, as in the reference);
 - `approvals.deny` globs match the command text as written, not every normalized spelling of it;
 - an `approvals.allow` pattern or `command_allowlist` glob covers only a single plain command (the
   reference's quote-aware operator check is not ported).
+
+Runs with nobody to answer (decided 2026-11-22: as in the reference). The terminal is offered to every run,
+`-q` and cron included; an unflagged command runs, a flagged one is refused (`approval_unavailable`)
+unless the run's mode approves: `approvals.single_query_mode` for a `-q` run with no terminal or with
+`--oneshot`, `approvals.cron_mode` for a cron job. `approve`, `off`, `allow` and `yes` mean approve; any
+other value, `true` included, and an absent key mean deny. The floors and a command the scanner could not
+read are refused whatever the mode says, and `command_allowlist` entries still approve. File writes and
+`execute_code` stay hidden without a person (code is approved one run at a time). A `-q` run at a
+terminal still asks, where the reference's `-q` never asks; `--oneshot` is the port's no-person switch.
+`approvals.unattended_mode` (webhook platforms) has no counterpart.
 
 Not ported yet: the macOS `osascript` classifier (`approval_applescript.py`), the
 `cron.lifecycle_guard` splice check, Windows path spellings (the detector is POSIX only), the guardian
 (`smart`) mode and `cron_mode`/`unattended_mode`. `config set` rewrites `config.yaml` without keeping
 comments, which also applies to the `command_allowlist` write.
+
+## Notes on the terminal's init files (done)
+
+`terminal.shell_init_files` (a list; `~` and `${VAR}` expanded, missing files dropped) and
+`terminal.auto_source_bashrc` (default true, read like Python's `bool(...)`) work as in the reference:
+a login `bash` sources `~/.profile`, `~/.bash_profile` and `~/.bashrc` (or the explicit list, which
+replaces them), so that `PATH` entries added by nvm, pyenv or cargo reach commands, and the directories of
+the original `PATH` that the profile dropped are put back at the end. Differences, on purpose:
+
+- the shell runs once per process, not per session, and only the variables a command may see anyway are
+  taken from it (the default names and `terminal.env_passthrough`); credentials an rc file exports and
+  the rest of the login environment stay out, which keeps the "minimal environment" rule. `HOME`, `USER`,
+  `LOGNAME`, `SHELL`, `TERM`, `TZ` and `TMPDIR` are never replaced;
+- commands still run under `/bin/sh -c`, not `bash`, and the exported environment and shell state do not
+  persist between calls (`persistent_shell` is not read), only the working directory does.
 
 ## Notes on prefill messages, terminal.timeout, terminal.cwd (done / not applicable)
 

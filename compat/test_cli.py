@@ -568,9 +568,11 @@ class CliTest(unittest.TestCase):
         self.assertIn("<available_skills>", prompt)
         self.assertIn("- workflow: Local workflow", prompt)
         self.assertIn("- review: External review", prompt)
-        for hidden in ("Ambient skill", "Disabled skill", "Incompatible skill", "Needs a tool",
+        for hidden in ("Ambient skill", "Disabled skill", "Incompatible skill",
                        "Created workflow", "Project workflow", "Local body"):
             self.assertNotIn(hidden, prompt)
+        # The terminal is offered without a person (the reference's default), so a skill that needs it shows.
+        self.assertIn("- needs-terminal: Needs a tool", prompt)
         self.assertIn("skill_view", [tool["function"]["name"] for tool in all_requests[0]["tools"]])
         self.assertIn("Local body", json.loads(all_requests[-1]["messages"][-1]["content"])["content"])
 

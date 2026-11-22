@@ -273,10 +273,11 @@ class CronTickTest(unittest.TestCase):
         self.assertTrue(prompt.startswith("[IMPORTANT: You are running as a scheduled cron job."))
         self.assertIn("[CURRENT RUN TIME: ", prompt)
         self.assertTrue(prompt.endswith("Report brief"))
-        # Nobody can approve anything, so writes and commands are not offered.
+        # Nobody can approve anything: file writes and code are not offered. The terminal is (as in the
+        # reference); a command it flags is refused unless approvals.cron_mode is approve.
         offered = {tool["function"]["name"] for tool in request["tools"]}
-        self.assertTrue({"read_file", "memory"} <= offered)
-        self.assertFalse({"write_file", "patch", "terminal"} & offered)
+        self.assertTrue({"read_file", "memory", "terminal"} <= offered)
+        self.assertFalse({"write_file", "patch", "execute_code"} & offered)
 
     def test_jobs_that_are_not_due_or_not_runnable_are_left_alone(self):
         interval = {"kind": "interval", "minutes": 30}

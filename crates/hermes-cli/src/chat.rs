@@ -201,6 +201,8 @@ pub struct ChatRequest {
     #[serde(default)]
     approval_timeout_secs: Option<u32>,
     #[serde(default)]
+    terminal_approval_timeout_secs: Option<u32>,
+    #[serde(default)]
     terminal_local: bool,
     #[serde(default)]
     terminal_env: hermes_runtime::terminal::TerminalSettings,
@@ -424,6 +426,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
             || settings.approvals.answers_without_a_person()
             || args.yolo)
             .then_some(settings.approval_timeout_secs),
+        terminal_approval_timeout_secs: Some(settings.approval_timeout_secs),
         terminal_local: settings.terminal_local,
         terminal_env: settings.terminal_env,
         clarify_timeout_secs: settings.clarify_timeout_secs,
@@ -543,6 +546,7 @@ where
         session_id: writer.as_ref().and_then(SessionWriter::session_id),
         max_turns: request.max_turns,
         approval_timeout_secs: request.approval_timeout_secs,
+        terminal_approval_timeout_secs: request.terminal_approval_timeout_secs,
         terminal_local: request.terminal_local,
         terminal_env: Some(&request.terminal_env),
         clarify_timeout_secs: request.clarify_timeout_secs,
@@ -697,6 +701,13 @@ pub async fn run_text(
     };
     let mut request = prepare(home, args)?;
     request.tools = hermes_runtime::config::load_tool_policy(home, platform)?;
+    if platform == "cron" {
+        // No person answers a cron job: unflagged commands run, flagged ones follow `cron_mode`.
+        crate::approval::install(request.approvals().clone());
+        if let Some(policy) = hermes_runtime::approval_policy::installed() {
+            policy.set_unattended(request.approvals().cron_approves);
+        }
+    }
     let mut text = String::new();
     let code = execute(
         home,
@@ -717,6 +728,11 @@ pub async fn run_text(
 impl ChatRequest {
     pub fn is_interactive(&self) -> bool {
         self.query.is_empty()
+    }
+
+    /// A single query that no person can answer: `--oneshot`, or no terminal to ask on.
+    pub fn is_unattended(&self, terminal_available: bool) -> bool {
+        !self.is_interactive() && (self.oneshot || !terminal_available)
     }
 
     /// The model the next turn uses: the `/model` choice, else the configured default.
