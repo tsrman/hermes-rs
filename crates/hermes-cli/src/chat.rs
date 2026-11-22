@@ -329,11 +329,20 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         .filter(|value| !value.is_empty())
         .ok_or(format!("API key is required. {SETUP_HINT}"))?;
     if let Some(model) = args.model.as_deref().or(settings.model.as_deref()) {
-        if let Some(window) = hermes_runtime::config::custom_context_length(
-            &settings.custom_providers,
-            &base_url,
-            model,
-        ) {
+        // The reference's order after `model.context_length`: an explicit `model_overrides`
+        // entry, then the matching `providers` entry, then a `_default` override.
+        let overrides = &settings.model_overrides;
+        let window = overrides
+            .explicit_window(settings.provider, model)
+            .or_else(|| {
+                hermes_runtime::config::custom_context_length(
+                    &settings.custom_providers,
+                    &base_url,
+                    model,
+                )
+            })
+            .or_else(|| overrides.default_window(settings.provider));
+        if let Some(window) = window {
             settings.compression.set_context_length_if_unset(window);
         }
     }

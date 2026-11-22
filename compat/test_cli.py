@@ -170,6 +170,29 @@ class CliTest(unittest.TestCase):
         self.assertIn("Context compression skipped", result.stderr)
         self.assertEqual(len(recorded) - len(original), 1)
 
+    def skipped_with(self, extra):
+        session, _, original, _ = self.seed_compression_history()
+        config = "compression:\n  threshold_tokens: '450'\n  protect_first_n: 2\n  protect_last_n: 2\n" + extra
+        result, recorded = self.chat_with_profile(extra_config=config, args=("--resume", session), query="New task")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return "Context compression skipped" in result.stderr and len(recorded) - len(original) == 1
+
+    SMALL = "{context_window: 5000}"
+
+    def test_an_explicit_model_override_beats_the_provider_entry_window(self):
+        entry = f"providers:\n  p:\n    base_url: {self.base}/v1\n    context_length: 1000000\n"
+        self.assertTrue(self.skipped_with(entry + f"model_overrides:\n  custom:\n    primary: {self.SMALL}\n"))
+
+    def test_a_default_override_does_not_beat_the_provider_entry_window(self):
+        entry = f"providers:\n  p:\n    base_url: {self.base}/v1\n    context_length: 1000000\n"
+        self.assertFalse(self.skipped_with(entry + f"model_overrides:\n  custom:\n    _default: {self.SMALL}\n"))
+
+    def test_the_providers_default_override_fills_the_gap(self):
+        self.assertTrue(self.skipped_with(f"model_overrides:\n  custom:\n    _default: {self.SMALL}\n"))
+
+    def test_the_global_default_override_fills_the_gap(self):
+        self.assertTrue(self.skipped_with(f"model_overrides:\n  _default: {self.SMALL}\n"))
+
     def test_auxiliary_compression_on_another_endpoint_needs_a_model(self):
         session, _, _, config = self.seed_compression_history()
         config += "auxiliary:\n  compression:\n    base_url: https://elsewhere.example/v1\n    provider: custom\n"

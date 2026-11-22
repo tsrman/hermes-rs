@@ -96,8 +96,15 @@ routes ignore it); `auxiliary.compression.extra_body` is not read; fallback rout
     below).
 19. **(prefill and terminal.timeout done) Top-level `prefill_messages_file`, `quick_commands`, `personalities`, `display.personality`,
     `timezone`** (the last is used for the prompt date, the others not) [keys].
-20. **`model_overrides`, `model_catalog`, `models_dev`** are not read [keys]; they feed context-window and
-    pricing lookup.
+20. **(`model_overrides.context_window` done) `model_overrides`, `model_catalog`, `models_dev`**: they feed
+    context-window, capability and pricing lookup. The port has no model catalog and no pricing, so only
+    `model_overrides.<provider>.<model>.context_window` (and `_default`) is read. Order for the compression
+    window, as in `_config_override_context_length`: `model.context_length`, an explicit `model_overrides`
+    entry (exact model name, then case-insensitive), the matching `providers` entry, then a `_default`
+    (the provider's, then the global one; the reference applies it only on a catalog miss, which is every
+    lookup here). Values are coerced like `int()` and must be positive. The provider key is the route's
+    name (`custom` for custom and named endpoints); models.dev id aliases are not mapped. `supports_*`,
+    `model_family` and the catalog keys change nothing the port does.
 
 ### P3: outside the one-shot CLI, listed so they are not mistaken for gaps in the port
 

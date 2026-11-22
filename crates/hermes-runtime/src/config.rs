@@ -56,6 +56,8 @@ pub struct ChatSettings {
     pub default_headers: Vec<(String, String)>,
     /// `providers` / `custom_providers` entries that may carry an `extra_body`.
     pub custom_providers: Vec<CustomProvider>,
+    /// `model_overrides`: context windows by provider and model.
+    pub model_overrides: ModelOverrides,
     pub api_max_attempts: u32,
     pub max_turns: u32,
     pub fallbacks: Vec<FallbackSettings>,
@@ -162,6 +164,7 @@ impl Default for ChatSettings {
             delegation_route: AuxiliaryRoute::default(),
             default_headers: Vec::new(),
             custom_providers: Vec::new(),
+            model_overrides: ModelOverrides::default(),
             api_max_attempts: 3,
             max_turns: 16,
             fallbacks: Vec::new(),
@@ -406,6 +409,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
         ..ChatSettings::default()
     };
     settings.custom_providers = custom_providers(&config);
+    settings.model_overrides = ModelOverrides::from_config(&config);
     let mut named_key_env = None;
     if let Some(model) = config.get("model") {
         if let Some(name) = model.as_str() {
@@ -1095,6 +1099,76 @@ fn positive(value: &serde_yaml::Value) -> Option<usize> {
         .and_then(|window| usize::try_from(window).ok())
 }
 
+/// `model_overrides:` as far as the port uses it: `context_window` per provider and model, the
+/// `_default` entries of a provider and the global one.
+#[derive(Clone, Debug, Default)]
+pub struct ModelOverrides {
+    root: serde_yaml::Mapping,
+}
+
+impl ModelOverrides {
+    fn from_config(config: &serde_yaml::Value) -> Self {
+        Self {
+            root: config
+                .get("model_overrides")
+                .and_then(serde_yaml::Value::as_mapping)
+                .cloned()
+                .unwrap_or_default(),
+        }
+    }
+
+    fn section(&self, provider: &str) -> Option<&serde_yaml::Mapping> {
+        self.root.get(provider.trim())?.as_mapping()
+    }
+
+    /// The window an entry of exactly this provider and model sets (exact name first, then
+    /// case-insensitively, never `_default`).
+    pub fn explicit_window(&self, provider: &str, model: &str) -> Option<usize> {
+        let model = model.trim();
+        let section = self.section(provider)?;
+        if model.is_empty() {
+            return None;
+        }
+        let entry = section
+            .get(model)
+            .filter(|entry| entry.is_mapping())
+            .or_else(|| {
+                section.iter().find_map(|(name, entry)| {
+                    let name = name.as_str()?;
+                    (name != "_default"
+                        && name.to_lowercase() == model.to_lowercase()
+                        && entry.is_mapping())
+                    .then_some(entry)
+                })
+            })?;
+        window(entry)
+    }
+
+    /// The fill-gap window: the provider's `_default`, else the global one. The reference applies
+    /// it only when its model catalog misses, which the port, having no catalog, always does.
+    pub fn default_window(&self, provider: &str) -> Option<usize> {
+        self.section(provider)
+            .and_then(|section| section.get("_default"))
+            .filter(|entry| entry.is_mapping())
+            .or_else(|| self.root.get("_default").filter(|entry| entry.is_mapping()))
+            .and_then(window)
+    }
+}
+
+/// `int(entry["context_window"])` when positive.
+fn window(entry: &serde_yaml::Value) -> Option<usize> {
+    let raw = entry.get("context_window")?;
+    let number = match raw {
+        serde_yaml::Value::Number(number) => number
+            .as_i64()
+            .or_else(|| number.as_f64().map(|value| value as i64))?,
+        serde_yaml::Value::String(text) => text.trim().parse::<i64>().ok()?,
+        serde_yaml::Value::Bool(flag) => i64::from(*flag),
+        _ => return None,
+    };
+    usize::try_from(number).ok().filter(|value| *value > 0)
+}
+
 /// The context window an entry for `base_url` declares for `model`: a per-model value first,
 /// then the entry's own.
 pub fn custom_context_length(
@@ -1349,5 +1423,27 @@ pub fn load_prefill(path: &str, home: Option<&Path>) -> (Vec<serde_json::Value>,
                 full.display()
             )),
         ),
+    }
+}
+
+#[cfg(test)]
+mod model_override_tests {
+    use super::*;
+
+    #[test]
+    fn windows_come_from_explicit_entries_then_defaults() {
+        let config = serde_yaml::from_str(
+            "model_overrides:\n  _default: {context_window: 50000}\n  custom:\n    _default: {context_window: 60000}\n    Big: {context_window: '900000'}\n    bad: {context_window: -1}\n    flag: {context_window: true}\n  openai:\n    gpt: {context_window: 1.0e5}\n",
+        )
+        .unwrap();
+        let overrides = ModelOverrides::from_config(&config);
+        assert_eq!(overrides.explicit_window("custom", "Big"), Some(900_000));
+        assert_eq!(overrides.explicit_window("custom", "big"), Some(900_000));
+        assert_eq!(overrides.explicit_window("custom", "bad"), None);
+        assert_eq!(overrides.explicit_window("custom", "flag"), Some(1));
+        assert_eq!(overrides.explicit_window("openai", "gpt"), Some(100_000));
+        assert_eq!(overrides.explicit_window("anthropic", "gpt"), None);
+        assert_eq!(overrides.default_window("custom"), Some(60_000));
+        assert_eq!(overrides.default_window("openai"), Some(50_000));
     }
 }
