@@ -189,6 +189,43 @@ fn the_custom_route_asks_for_the_effort_the_reference_asks_for() {
 }
 
 #[test]
+fn routes_that_want_reasoning_echoed_get_no_default_effort_but_keep_a_configured_one() {
+    let local = "http://127.0.0.1:1/v1";
+    let unset = reasoning("{}");
+    assert_eq!(
+        unset.custom_effort_for("fixture", local).as_deref(),
+        Some("medium")
+    );
+    for (model, url) in [
+        ("deepseek-flash-1017", local),
+        ("DeepSeek-V4", local),
+        ("mimo-v2", local),
+        ("fixture", "https://api.deepseek.com/v1"),
+        ("fixture", "https://api.moonshot.ai/v1"),
+        ("fixture", "https://eu.api.kimi.com/v1"),
+    ] {
+        assert_eq!(unset.custom_effort_for(model, url), None, "{model} {url}");
+    }
+    // A host that only contains the name is not that vendor.
+    assert_eq!(
+        unset
+            .custom_effort_for("fixture", "https://notapi.deepseek.com.example.test/v1")
+            .as_deref(),
+        Some("medium")
+    );
+    let high = reasoning("{reasoning_effort: high}");
+    assert_eq!(
+        high.custom_effort_for("deepseek-flash-1017", local).as_deref(),
+        Some("high")
+    );
+    let off = reasoning("{reasoning_overrides: {deepseek-flash-1017: none}}");
+    assert_eq!(
+        off.custom_effort_for("deepseek-flash-1017", local).as_deref(),
+        Some("none")
+    );
+}
+
+#[test]
 fn the_responses_text_verbosity_is_read_like_the_reference() {
     for row in agent_requests()["codex_responses"].as_array().unwrap() {
         let section = row["agent"].as_str().unwrap();

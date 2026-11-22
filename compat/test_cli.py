@@ -174,6 +174,16 @@ class CliTest(unittest.TestCase):
         _, recorded = self.chat_with_profile()
         self.assertEqual(recorded[0]["reasoning_effort"], "medium")
 
+    def test_a_model_on_a_must_echo_route_gets_no_default_effort(self):
+        # Deliberate difference from the reference: the port does not replay reasoning.
+        _, recorded = self.chat_with_profile(args=("--model", "deepseek-flash-1017"))
+        self.assertNotIn("reasoning_effort", recorded[0])
+
+    def test_a_configured_effort_is_sent_to_a_must_echo_route_too(self):
+        _, recorded = self.chat_with_profile(extra_config="agent:\n  reasoning_effort: low\n",
+                                             args=("--model", "deepseek-flash-1017"))
+        self.assertEqual(recorded[0]["reasoning_effort"], "low")
+
     def test_agent_reasoning_settings_reach_the_request(self):
         config = "agent:\n  reasoning_effort: ultra\n  reasoning_overrides: {other: none}\n"
         _, recorded = self.chat_with_profile(extra_config=config)

@@ -90,6 +90,32 @@ fn parse_effort(value: &Yaml) -> Option<Asked> {
     }
 }
 
+/// `needs_reasoning_echo` for a `custom` route (the reference's `_REASONING_ECHO_RULES`): a model
+/// name that holds `deepseek`, `mimo` or `stealth/missingno`, or a Kimi, DeepSeek or MiMo host.
+fn echoes_reasoning(model: &str, base_url: &str) -> bool {
+    let model = model.to_lowercase();
+    if ["deepseek", "mimo", "stealth/missingno"]
+        .iter()
+        .any(|part| model.contains(part))
+    {
+        return true;
+    }
+    let rest = base_url.split_once("://").map_or(base_url, |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit('@').next().unwrap_or("");
+    let host = host.split(':').next().unwrap_or("").to_lowercase();
+    [
+        "api.kimi.com",
+        "moonshot.ai",
+        "moonshot.cn",
+        "api.deepseek.com",
+        "api.xiaomimimo.com",
+        "xiaomimimo.com",
+    ]
+    .iter()
+    .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+}
+
 fn digit(c: Option<char>) -> bool {
     c.is_some_and(|c| c.is_ascii_digit())
 }
@@ -245,6 +271,19 @@ impl ReasoningSettings {
                 }
             }
         }
+    }
+
+    /// The effort to send on the request, or `None` to leave the field off. Deliberate difference
+    /// from the reference: with nothing configured, a model on a route that insists on its reasoning
+    /// being echoed back (DeepSeek, Kimi, MiMo) gets no default `medium`. The reference pads those
+    /// replays with `reasoning_content: " "`; the port does not replay reasoning at all, so asking
+    /// such a route to think could end a tool turn in a 400. A configured level is always sent.
+    pub fn custom_effort_for(&self, model: &str, base_url: &str) -> Option<String> {
+        let configured = self.per_model(model).or_else(|| parse_effort(&self.effort));
+        if configured.is_none() && echoes_reasoning(model, base_url) {
+            return None;
+        }
+        Some(self.custom_effort(model))
     }
 
     /// `agent.text_verbosity` when it is low, medium or high, for the Responses `text` field.

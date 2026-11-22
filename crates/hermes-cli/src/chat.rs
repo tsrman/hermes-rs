@@ -383,10 +383,9 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
             // `agent.reasoning_effort` or `agent.reasoning_overrides` say otherwise) on
             // chat completions; the endpoint's own `extra_body` wins over it.
             if !settings.responses {
-                extras.body.insert(
-                    "reasoning_effort".into(),
-                    settings.reasoning.custom_effort(model).into(),
-                );
+                if let Some(effort) = settings.reasoning.custom_effort_for(model, &base_url) {
+                    extras.body.insert("reasoning_effort".into(), effort.into());
+                }
             }
             let mut body = extras.body;
             if let Some(own) = hermes_runtime::config::custom_extra_body(
