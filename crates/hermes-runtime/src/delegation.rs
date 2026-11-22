@@ -433,6 +433,7 @@ async fn run_child(index: usize, task: &Task, family: &Family<'_>) -> ChildRun {
         max_turns: delegation.settings.max_iterations,
         tools: &policy,
         system_prompt_override: Some(&prompt),
+        state_scope: None,
         child: Some(index),
         // Memory and clarify are off for children; the rest follows the parent.
         memory: None,
@@ -600,7 +601,7 @@ pub(crate) fn call<'a>(
             route: cx.route,
             fallbacks: cx.fallbacks,
             workspace,
-            session: cx.options.session_id.unwrap_or("default").to_owned(),
+            session: cx.options.state_key().to_owned(),
         };
         let started = Instant::now();
         let runs = join_all(tasks.iter().enumerate().map(|(index, task)| {

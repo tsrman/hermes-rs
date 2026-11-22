@@ -10,6 +10,7 @@ mod cron;
 mod owner;
 #[cfg(target_os = "linux")]
 mod profile;
+mod repl;
 mod sessions;
 
 #[derive(Parser)]
@@ -100,6 +101,9 @@ async fn run() -> Result<u8, String> {
         Command::Chat(args) => {
             let request = chat::prepare(home, args)?;
             approval::install(request.approvals().clone());
+            if request.is_interactive() {
+                return repl::run(home, request).await;
+            }
             #[cfg(unix)]
             if let Some(home) = home {
                 if let Some(connection) = owner::connect(home).await? {

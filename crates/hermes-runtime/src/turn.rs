@@ -286,9 +286,17 @@ pub struct TurnOptions<'a> {
     pub system_prompt_override: Option<&'a str>,
     /// The index of the subagent this turn is, when it is one.
     pub child: Option<usize>,
+    /// Keeps the working directory, background processes and Python kernel of an interactive
+    /// conversation together across turns, whatever session id each turn is saved under.
+    pub state_scope: Option<&'a str>,
 }
 
 impl TurnOptions<'_> {
+    /// The key under which a turn's working directory, processes and kernel are kept.
+    pub(crate) fn state_key(&self) -> &str {
+        self.state_scope.or(self.session_id).unwrap_or("default")
+    }
+
     pub(crate) fn can_write_files(&self) -> bool {
         self.approval_timeout_secs.is_some() && cfg!(target_os = "linux")
     }

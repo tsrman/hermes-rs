@@ -537,7 +537,7 @@ pub(crate) fn call<'a>(
         else {
             return approval_error(ApprovalDecision::Unavailable);
         };
-        let session = cx.options.session_id.unwrap_or("default").to_owned();
+        let session = cx.options.state_key().to_owned();
         let defaults = crate::terminal::TerminalSettings::default();
         let settings = cx.options.terminal_env.unwrap_or(&defaults);
         let root = cx

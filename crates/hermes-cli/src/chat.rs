@@ -27,8 +27,9 @@ use tokio::time::{interval_at, Instant};
 
 #[derive(Args)]
 pub struct ChatArgs {
+    /// The request to run. Without it, an interactive conversation starts.
     #[arg(short, long)]
-    query: String,
+    query: Option<String>,
     #[arg(long)]
     oneshot: bool,
     /// Save a completed turn as a new session in the selected profile.
@@ -53,8 +54,10 @@ pub struct ChatArgs {
     debug_log: Option<OsString>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct ChatRequest {
+    #[serde(default)]
+    state_scope: Option<String>,
     root: OsString,
     query: String,
     resume: Option<String>,
@@ -100,7 +103,7 @@ fn default_clarify_timeout() -> u32 {
     90
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct Route {
     model: Option<String>,
     provider: String,
@@ -195,10 +198,11 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
         })
         .flatten();
     Ok(ChatRequest {
+        state_scope: None,
         root: std::env::current_dir()
             .map_err(|error| error.to_string())?
             .into_os_string(),
-        query: args.query,
+        query: args.query.unwrap_or_default(),
         resume: args.resume,
         save_session: args.save_session,
         max_turns: args.max_turns.unwrap_or(settings.max_turns),
@@ -309,6 +313,7 @@ where
         delegation: Some(&delegation),
         system_prompt_override: None,
         child: None,
+        state_scope: request.state_scope.as_deref(),
         mcp: Some(&mcp),
         web: Some(&request.web),
         browser: Some(&request.browser),
@@ -453,7 +458,7 @@ pub async fn run_text(
 ) -> Result<(String, u8), String> {
     let env = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     let args = ChatArgs {
-        query,
+        query: Some(query),
         oneshot: true,
         save_session: false,
         resume: None,
@@ -484,6 +489,24 @@ pub async fn run_text(
 }
 
 impl ChatRequest {
+    pub fn is_interactive(&self) -> bool {
+        self.query.is_empty()
+    }
+
+    pub fn resume(&self) -> Option<&str> {
+        self.resume.as_deref()
+    }
+
+    /// The request for one turn of an interactive conversation: the first turn saves a new
+    /// session, later ones continue it.
+    pub fn for_turn(mut self, query: &str, scope: &str, session: Option<&str>) -> Self {
+        self.query = query.to_owned();
+        self.state_scope = Some(scope.to_owned());
+        self.resume = session.map(str::to_owned);
+        self.save_session = session.is_none();
+        self
+    }
+
     pub fn approvals(&self) -> &hermes_runtime::approval_policy::ApprovalSettings {
         &self.approvals
     }

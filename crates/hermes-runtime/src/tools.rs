@@ -162,10 +162,10 @@ fn terminal_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFutur
         let timeout = cx.options.approval_timeout_secs;
         let background = (cx.options.tools.allows(PROCESS_MANAGE)
             && !cx.options.tools.is_deferred(PROCESS_MANAGE))
-        .then(|| cx.options.session_id.unwrap_or("default"));
+        .then(|| cx.options.state_key());
         let defaults = terminal::TerminalSettings::default();
         let settings = cx.options.terminal_env.unwrap_or(&defaults);
-        let session = cx.options.session_id.unwrap_or("default");
+        let session = cx.options.state_key();
         terminal::execute(
             cx.files,
             args,
@@ -187,7 +187,7 @@ fn process_manage_offered(env: &ToolEnv) -> bool {
 
 fn process_manage_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
     Box::pin(async move {
-        let caller = cx.options.session_id.unwrap_or("default");
+        let caller = cx.options.state_key();
         process::call(caller, args).await
     })
 }
@@ -267,7 +267,7 @@ fn browser_cdp_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFu
     Box::pin(async move {
         match cx.options.browser.filter(|browser| browser.offers_cdp()) {
             Some(browser) => {
-                let task = cx.options.session_id.unwrap_or("default");
+                let task = cx.options.state_key();
                 browser_cdp::call(browser, task, args).await
             }
             None => json!({"error": format!("Unknown tool: {BROWSER_CDP}")}),
