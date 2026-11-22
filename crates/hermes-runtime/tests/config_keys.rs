@@ -154,3 +154,69 @@ fn pii_hashing_is_a_gateway_feature_and_the_cli_platform_never_uses_it() {
         }
     }
 }
+
+fn agent_requests() -> Value {
+    serde_json::from_str(include_str!("fixtures/agent_requests.json")).unwrap()
+}
+
+fn reasoning(section: &str) -> hermes_runtime::reasoning::ReasoningSettings {
+    let config = serde_yaml::from_str(&format!("agent: {section}\n")).unwrap();
+    hermes_runtime::reasoning::ReasoningSettings::from_config(&config)
+}
+
+#[test]
+fn the_custom_route_asks_for_the_effort_the_reference_asks_for() {
+    let mut wrong = Vec::new();
+    let mut checked = 0;
+    for row in agent_requests()["chat_completions"].as_array().unwrap() {
+        let section = row["agent"].as_str().unwrap();
+        // A quoted 'off' reads as the word in the reference and as "false" here (documented).
+        if section.contains("'off'") {
+            continue;
+        }
+        let model = row["model"].as_str().unwrap();
+        let want = row["body"]["reasoning_effort"].as_str().unwrap();
+        let got = reasoning(section).custom_effort(model);
+        checked += 1;
+        if got != want {
+            wrong.push(format!(
+                "{section} on {model}: ours {got:?}, reference {want:?}"
+            ));
+        }
+    }
+    assert!(checked > 50, "{checked}");
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn the_responses_text_verbosity_is_read_like_the_reference() {
+    for row in agent_requests()["codex_responses"].as_array().unwrap() {
+        let section = row["agent"].as_str().unwrap();
+        let want = row["body"]["text"]["verbosity"].as_str();
+        assert_eq!(reasoning(section).verbosity(), want, "{section}");
+    }
+}
+
+#[test]
+fn settings_that_never_reach_a_chat_completions_request_change_nothing() {
+    // Recorded: service_tier, text_verbosity, reasoning_echo, stall_guards, verify_on_stop,
+    // image_input_mode and run_budget_seconds leave the custom chat request at its default body.
+    let rows = agent_requests();
+    let rows = rows["chat_completions"].as_array().unwrap();
+    let default = rows.iter().find(|row| row["agent"] == "{}").unwrap();
+    for key in [
+        "service_tier",
+        "text_verbosity",
+        "reasoning_echo",
+        "stall_guards",
+        "verify_on_stop",
+        "image_input_mode",
+        "run_budget_seconds",
+    ] {
+        let row = rows
+            .iter()
+            .find(|row| row["agent"].as_str().unwrap().contains(key))
+            .unwrap();
+        assert_eq!(row["body"], default["body"], "{key}");
+    }
+}

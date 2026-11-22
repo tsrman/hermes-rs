@@ -52,6 +52,8 @@ pub fn keeps_phone_numbers(config: &serde_yaml::Value) -> bool {
 pub struct ChatSettings {
     /// `security.redact_phone_numbers: false`: the assistant's reply keeps its phone numbers.
     pub keep_phone_numbers: bool,
+    /// `agent.reasoning_effort`, `agent.reasoning_overrides` and `agent.text_verbosity`.
+    pub reasoning: crate::reasoning::ReasoningSettings,
     pub model: Option<String>,
     pub provider: &'static str,
     /// Use the OpenAI Responses API instead of Chat Completions.
@@ -178,6 +180,7 @@ impl Default for ChatSettings {
             config_api_key: None,
             redact_secrets: true,
             keep_phone_numbers: false,
+            reasoning: crate::reasoning::ReasoningSettings::default(),
             prefill_file: None,
             named_custom: false,
             compression_route: AuxiliaryRoute::default(),
@@ -435,6 +438,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
         ..ChatSettings::default()
     };
     settings.keep_phone_numbers = keeps_phone_numbers(&config);
+    settings.reasoning = crate::reasoning::ReasoningSettings::from_config(&config);
     settings.custom_providers = custom_providers(&config);
     settings.model_overrides = ModelOverrides::from_config(&config);
     let mut named_key_env = None;

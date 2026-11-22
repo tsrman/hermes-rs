@@ -168,6 +168,39 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("chat_template_kwargs", summary)
         self.assertEqual(answer["chat_template_kwargs"], {"enable_thinking": True})
 
+    def test_the_custom_route_asks_for_medium_reasoning_unless_configured(self):
+        # Recorded from the reference (`agent_requests.json`): a custom chat-completions route
+        # always carries `reasoning_effort`.
+        _, recorded = self.chat_with_profile()
+        self.assertEqual(recorded[0]["reasoning_effort"], "medium")
+
+    def test_agent_reasoning_settings_reach_the_request(self):
+        config = "agent:\n  reasoning_effort: ultra\n  reasoning_overrides: {other: none}\n"
+        _, recorded = self.chat_with_profile(extra_config=config)
+        self.assertEqual(recorded[0]["reasoning_effort"], "max")
+
+    def test_a_per_model_override_beats_the_global_effort(self):
+        config = "agent:\n  reasoning_effort: high\n  reasoning_overrides: {primary: low}\n"
+        _, recorded = self.chat_with_profile(extra_config=config)
+        self.assertEqual(recorded[0]["reasoning_effort"], "low")
+
+    def test_disabled_reasoning_sends_none(self):
+        _, recorded = self.chat_with_profile(extra_config="agent:\n  reasoning_effort: false\n")
+        self.assertEqual(recorded[0]["reasoning_effort"], "none")
+
+    def test_the_endpoints_own_extra_body_wins_over_the_reasoning_effort(self):
+        config = (f"providers:\n  p:\n    base_url: {self.base}/v1\n    model: primary\n"
+                  "    extra_body: {reasoning_effort: vendor-level}\n")
+        _, recorded = self.chat_with_profile(extra_config=config)
+        self.assertEqual(recorded[0]["reasoning_effort"], "vendor-level")
+
+    def test_the_endpoints_extra_body_is_added_beside_the_reasoning_effort(self):
+        config = (f"providers:\n  p:\n    base_url: {self.base}/v1\n    model: primary\n"
+                  "    extra_body: {chat_template_kwargs: {enable_thinking: true}}\n")
+        _, recorded = self.chat_with_profile(extra_config=config)
+        self.assertEqual(recorded[0]["reasoning_effort"], "medium")
+        self.assertEqual(recorded[0]["chat_template_kwargs"], {"enable_thinking": True})
+
     def test_auxiliary_compression_picks_the_summary_model_and_body_fields(self):
         session, _, original, config = self.seed_compression_history()
         config += ("auxiliary:\n  compression:\n    model: summarizer\n    timeout: 30\n"

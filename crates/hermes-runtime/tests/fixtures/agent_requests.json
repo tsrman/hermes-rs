@@ -1,0 +1,729 @@
+{
+ "chat_completions": [
+  {
+   "agent": "{}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: high}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: low}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: minimal}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "minimal"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: medium}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: xhigh}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "xhigh"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: max}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: ultra}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: HIGH}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: ' High '}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: none}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: 'false'}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: false}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: disabled}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: off}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: 'off'}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: no}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: Off}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: [high]}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: {effort: High}}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: {effort: ultra}}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "max"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: {effort: 0}}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: {enabled: no, effort: high}}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {fixture: 'off'}}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {fixture: off}}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: bogus}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: ''}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: null}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: true}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: 3}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: {effort: fast}}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "fast"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: {effort: high}}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: {enabled: false}}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "agent": "{reasoning_effort: {enabled: true}}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {fixture: low}}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {fixture: low}, reasoning_effort: high}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {other: low}, reasoning_effort: high}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {fixture: none}, reasoning_effort: high}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {fixture: bogus}, reasoning_effort: high}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {fixture: bogus}}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {fixture: {effort: fast}}}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "fast"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {'vendor/fixture': low}}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {'openai/fixture': low}}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {'openrouter/openai/fixture': low}}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {'glm-5-2': low}}",
+   "model": "glm-5.2",
+   "body": {
+    "model": "glm-5.2",
+    "timeout": 1800.0,
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {'glm-5.2': low}}",
+   "model": "glm-5-2",
+   "body": {
+    "model": "glm-5-2",
+    "timeout": 1800.0,
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {'glm-5.2': low}}",
+   "model": "zai/glm-5.2",
+   "body": {
+    "model": "zai/glm-5.2",
+    "timeout": 1800.0,
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {'zai/glm-5.2': low}}",
+   "model": "glm-5.2",
+   "body": {
+    "model": "glm-5.2",
+    "timeout": 1800.0,
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {'glm-5.2': low}}",
+   "model": "GLM-5.2",
+   "body": {
+    "model": "GLM-5.2",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {'anthropic/claude-sonnet-4.5': high}}",
+   "model": "claude-sonnet-4-5",
+   "body": {
+    "model": "claude-sonnet-4-5",
+    "timeout": 1800.0,
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: {'ollama-local/qwen3.6:27b': none}}",
+   "model": "qwen3.6:27b",
+   "body": {
+    "model": "qwen3.6:27b",
+    "timeout": 1800.0,
+    "reasoning_effort": "none"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: [fixture]}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{reasoning_overrides: null, reasoning_effort: low}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "agent": "{service_tier: fast}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{service_tier: auto}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{service_tier: cold}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{text_verbosity: high}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{reasoning_echo: true}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{stall_guards: false}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{verify_on_stop: true}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{image_input_mode: text}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  },
+  {
+   "agent": "{run_budget_seconds: 600}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "timeout": 1800.0,
+    "reasoning_effort": "medium"
+   }
+  }
+ ],
+ "codex_responses": [
+  {
+   "agent": "{}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "store": false,
+    "prompt_cache_key": "pck_94790d691e03086f5ce12620",
+    "reasoning": {
+     "effort": "medium",
+     "summary": "auto"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ],
+    "timeout": 1800.0
+   }
+  },
+  {
+   "agent": "{text_verbosity: high}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "store": false,
+    "prompt_cache_key": "pck_4594379b524fa634c42d57b4",
+    "reasoning": {
+     "effort": "medium",
+     "summary": "auto"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ],
+    "text": {
+     "verbosity": "high"
+    },
+    "timeout": 1800.0
+   }
+  },
+  {
+   "agent": "{text_verbosity: low}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "store": false,
+    "prompt_cache_key": "pck_6f4a829b7f33aab542a8e082",
+    "reasoning": {
+     "effort": "medium",
+     "summary": "auto"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ],
+    "text": {
+     "verbosity": "low"
+    },
+    "timeout": 1800.0
+   }
+  },
+  {
+   "agent": "{text_verbosity: medium}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "store": false,
+    "prompt_cache_key": "pck_3d1b25b994be2e475952b6c5",
+    "reasoning": {
+     "effort": "medium",
+     "summary": "auto"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ],
+    "text": {
+     "verbosity": "medium"
+    },
+    "timeout": 1800.0
+   }
+  },
+  {
+   "agent": "{text_verbosity: HIGH}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "store": false,
+    "prompt_cache_key": "pck_d51bf57c28399be363042b6d",
+    "reasoning": {
+     "effort": "medium",
+     "summary": "auto"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ],
+    "text": {
+     "verbosity": "high"
+    },
+    "timeout": 1800.0
+   }
+  },
+  {
+   "agent": "{text_verbosity: bogus}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "store": false,
+    "prompt_cache_key": "pck_96cba6a5065190519e108e1b",
+    "reasoning": {
+     "effort": "medium",
+     "summary": "auto"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ],
+    "timeout": 1800.0
+   }
+  },
+  {
+   "agent": "{text_verbosity: ''}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "store": false,
+    "prompt_cache_key": "pck_30dd44dab5bf246ef0c92cfa",
+    "reasoning": {
+     "effort": "medium",
+     "summary": "auto"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ],
+    "timeout": 1800.0
+   }
+  },
+  {
+   "agent": "{service_tier: fast}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "store": false,
+    "prompt_cache_key": "pck_ab70c37d4d9bd22931a8b6e1",
+    "reasoning": {
+     "effort": "medium",
+     "summary": "auto"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ],
+    "timeout": 1800.0
+   }
+  },
+  {
+   "agent": "{reasoning_effort: high}",
+   "model": "fixture",
+   "body": {
+    "model": "fixture",
+    "store": false,
+    "prompt_cache_key": "pck_069cb9639aef0c77cf9234d8",
+    "reasoning": {
+     "effort": "high",
+     "summary": "auto"
+    },
+    "include": [
+     "reasoning.encrypted_content"
+    ],
+    "timeout": 1800.0
+   }
+  }
+ ]
+}

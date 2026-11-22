@@ -27,6 +27,7 @@ pub mod process;
 pub mod profile;
 pub mod prompt;
 pub mod providers;
+pub mod reasoning;
 pub mod redact;
 pub mod scratch;
 mod session_search;

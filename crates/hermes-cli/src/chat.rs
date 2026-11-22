@@ -369,14 +369,34 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
     if let Some(profile) = hermes_runtime::providers::profiles::lookup(settings.provider) {
         extras.body = profile.default_body();
     }
+    // `agent.text_verbosity` is a Responses field; the reference's xAI route rejects it.
+    if settings.responses && settings.provider != "xai" {
+        if let Some(verbosity) = settings.reasoning.verbosity() {
+            extras
+                .body
+                .insert("text".into(), serde_json::json!({"verbosity": verbosity}));
+        }
+    }
     if let Some(model) = args.model.as_deref().or(settings.model.as_deref()) {
         if settings.provider == "custom" || settings.named_custom {
-            extras.body = hermes_runtime::config::custom_extra_body(
+            // The reference's `custom` profile asks for `reasoning_effort` (medium unless
+            // `agent.reasoning_effort` or `agent.reasoning_overrides` say otherwise) on
+            // chat completions; the endpoint's own `extra_body` wins over it.
+            if !settings.responses {
+                extras.body.insert(
+                    "reasoning_effort".into(),
+                    settings.reasoning.custom_effort(model).into(),
+                );
+            }
+            let mut body = extras.body;
+            if let Some(own) = hermes_runtime::config::custom_extra_body(
                 &settings.custom_providers,
                 &base_url,
                 model,
-            )
-            .unwrap_or_default();
+            ) {
+                hermes_runtime::providers::merge_body_maps(&mut body, &own);
+            }
+            extras.body = body;
         }
     }
     // `model.default_headers` first; the endpoint's own `extra_headers` win over them.

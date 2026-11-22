@@ -90,6 +90,14 @@ impl Extras {
     }
 }
 
+/// Merge `extra` into `target`: nested objects merge, any other value replaces.
+pub fn merge_body_maps(
+    target: &mut serde_json::Map<String, serde_json::Value>,
+    extra: &serde_json::Map<String, serde_json::Value>,
+) {
+    merge(target, extra);
+}
+
 pub(crate) fn merge(
     target: &mut serde_json::Map<String, serde_json::Value>,
     extra: &serde_json::Map<String, serde_json::Value>,
