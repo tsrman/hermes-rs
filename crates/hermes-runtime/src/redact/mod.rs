@@ -65,6 +65,9 @@ pub struct Mode {
     pub strict_urls: bool,
     /// Redact even when `security.redact_secrets` is off (the reference's `force=True`).
     pub force: bool,
+    /// Leave `+<digits>` phone numbers as they are (`security.redact_phone_numbers: false`).
+    /// Only the stored assistant reply asks for it; tool output and logs always mask them.
+    pub keep_phone_numbers: bool,
 }
 
 static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -86,6 +89,19 @@ pub fn redact_sensitive_text(text: &str) -> String {
         text,
         Mode {
             force: true,
+            ..Mode::default()
+        },
+    )
+}
+
+/// The scrub of an assistant reply before it enters the conversation (the reference's
+/// `redact_assistant_reply`): it follows `security.redact_secrets`, like tool output, and
+/// `keep_phone_numbers` (`security.redact_phone_numbers: false`) skips only the phone pass.
+pub fn redact_assistant_reply(text: &str, keep_phone_numbers: bool) -> String {
+    redact(
+        text,
+        Mode {
+            keep_phone_numbers,
             ..Mode::default()
         },
     )
@@ -188,5 +204,9 @@ fn redact(text: &str, mode: Mode) -> String {
     } else {
         text
     };
-    tokens::redact_phone_numbers(&text)
+    if mode.keep_phone_numbers {
+        text
+    } else {
+        tokens::redact_phone_numbers(&text)
+    }
 }

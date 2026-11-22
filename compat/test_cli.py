@@ -34,6 +34,17 @@ class CliTest(unittest.TestCase):
             "test_mid_turn_overflow_with_compression_disabled_is_an_error": "overflow_midturn",
             "test_a_turn_over_the_threshold_compresses_its_earlier_steps_before_the_next_request": "pressure_midturn",
             "test_a_turn_under_the_threshold_is_not_compressed": "pressure_midturn",
+            "test_model_thresholds_override_the_trigger_for_the_model": "pressure_midturn",
+            "test_model_thresholds_for_another_model_are_not_used": "pressure_midturn",
+            "test_a_model_threshold_scoped_to_the_providers_name_applies_only_there": "pressure_midturn",
+            "test_a_model_threshold_scoped_to_another_provider_does_not_apply": "pressure_midturn",
+            "test_max_attempts_caps_how_often_a_turn_compresses_itself": "pressure_long",
+            "test_max_attempts_defaults_to_three": "pressure_long",
+            "test_max_attempts_below_one_means_three": "pressure_long",
+            "test_max_attempts_is_capped_at_ten": "pressure_long",
+            "test_the_stored_reply_is_scrubbed_before_the_next_request": "reply_secrets",
+            "test_the_phone_option_keeps_numbers_in_the_stored_reply_only": "reply_secrets",
+            "test_the_stored_reply_is_left_alone_when_secret_redaction_is_off": "reply_secrets",
             "test_mcp_stdio_tool_is_exposed_and_called": "mcp",
             "test_todo_list_is_hidden_by_default_and_survives_a_resume": "todo",
             "test_memory_tool_writes_the_store_without_changing_the_prompt_snapshot": "memory",
@@ -321,6 +332,84 @@ class CliTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("replacing earlier steps", result.stderr)
         self.assertNotIn("[CONTEXT SUMMARY]", json.dumps(recorded))
+
+    def squeezed_with(self, thresholds):
+        """Whether a turn of three large reads on a 1M-token window compresses, given `model_thresholds`."""
+        (self.workdir / "fixture.txt").write_text("".join(f"line {n} " + "x" * 190 + "\n" for n in range(9000)),
+                                                  encoding="utf-8")
+        config = f"  context_length: 1000000\ncompression:\n  model_thresholds: {thresholds}\n"
+        result, _ = self.chat_with_profile(extra_config=config)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return "replacing earlier steps of this turn" in result.stderr
+
+    def test_model_thresholds_override_the_trigger_for_the_model(self):
+        # The global ratio puts the trigger at 500k tokens; the override at the 64k floor.
+        self.assertTrue(self.squeezed_with("{primary: 0.0}"))
+
+    def test_model_thresholds_for_another_model_are_not_used(self):
+        self.assertFalse(self.squeezed_with("{other: 0.0}"))
+
+    def test_a_model_threshold_scoped_to_the_providers_name_applies_only_there(self):
+        self.assertTrue(self.squeezed_with("{'custom:primary': 0.0}"))
+
+    def test_a_model_threshold_scoped_to_another_provider_does_not_apply(self):
+        self.assertFalse(self.squeezed_with("{'openrouter:primary': 0.0}"))
+
+    def summaries_with(self, attempts):
+        """Summary requests a long tool run makes with `compression.max_attempts` set to `attempts`."""
+        config = "compression:\n  threshold_tokens: '50'\n" + (
+            f"  max_attempts: {attempts}\n" if attempts is not None else "")
+        result, recorded = self.chat_with_profile(extra_config=config)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return sum(r["messages"][0]["content"].startswith("Summarize completed") for r in recorded)
+
+    def test_max_attempts_caps_how_often_a_turn_compresses_itself(self):
+        self.assertEqual(self.summaries_with(1), 1)
+
+    def test_max_attempts_defaults_to_three(self):
+        self.assertEqual(self.summaries_with(None), 3)
+
+    def test_max_attempts_below_one_means_three(self):
+        self.assertEqual(self.summaries_with(0), 3)
+
+    def test_max_attempts_is_capped_at_ten(self):
+        self.assertGreaterEqual(self.summaries_with(50), 4)
+
+    SCRUBBED = "Calling +155****4567 with key sk-abc...7890 now."
+    RAW = "Calling +15551234567 with key sk-abcdefghijklmnop1234567890 now."
+
+    def stored_replies(self, recorded):
+        """The assistant messages the model got back in the next request."""
+        return [m["content"] for m in recorded[-1]["messages"] if m["role"] == "assistant"]
+
+    def test_the_stored_reply_is_scrubbed_before_the_next_request(self):
+        result, recorded = self.chat_with_profile()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The tool-call turn's text comes back masked; what the person saw is the model's own text.
+        self.assertEqual(self.stored_replies(recorded), [self.SCRUBBED])
+        self.assertIn("sk-abcdefghijklmnop1234567890", result.stdout)
+        # The final reply is stored masked too: a resumed conversation replays it that way.
+        saved, _ = self.chat_with_profile(args=("--save-session",))
+        session = saved.stderr.splitlines()[-1].removeprefix("Session: ")
+        resumed, recorded = self.chat_with_profile(args=("--resume", session), query="Continue")
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertEqual(self.stored_replies(recorded), [self.SCRUBBED, self.SCRUBBED])
+
+    def test_the_phone_option_keeps_numbers_in_the_stored_reply_only(self):
+        result, recorded = self.chat_with_profile(extra_config="security:\n  redact_phone_numbers: false\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.stored_replies(recorded), ["Calling +15551234567 with key sk-abc...7890 now."])
+        # Tool output keeps masking phone numbers: the file read returns a number the reference masks.
+        (self.workdir / "fixture.txt").write_text("call +15551234567\n", encoding="utf-8")
+        result, recorded = self.chat_with_profile(extra_config="security:\n  redact_phone_numbers: false\n")
+        tool = [m for m in recorded[-1]["messages"] if m["role"] == "tool"][-1]["content"]
+        self.assertIn("+155****4567", tool)
+        self.assertNotIn("+15551234567", tool)
+
+    def test_the_stored_reply_is_left_alone_when_secret_redaction_is_off(self):
+        result, recorded = self.chat_with_profile(extra_config="security:\n  redact_secrets: false\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.stored_replies(recorded), [self.RAW])
 
     def test_mid_turn_overflow_with_compression_disabled_is_an_error(self):
         result, recorded = self.chat_with_profile(extra_config="compression:\n  enabled: false\n")

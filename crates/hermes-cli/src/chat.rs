@@ -188,6 +188,8 @@ pub struct ChatRequest {
     #[serde(default)]
     compression: CompactionSettings,
     #[serde(default)]
+    keep_phone_numbers: bool,
+    #[serde(default)]
     debug_log: Option<OsString>,
     #[serde(default)]
     approvals: hermes_runtime::approval_policy::ApprovalSettings,
@@ -354,6 +356,9 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
             settings.compression.set_context_length_if_unset(window);
         }
     }
+    if let Some(model) = args.model.as_deref().or(settings.model.as_deref()) {
+        settings.compression.set_route(model, settings.provider);
+    }
     settings.terminal_env.scratch = home.and_then(hermes_runtime::scratch::directory);
     hermes_runtime::redact::set_enabled(settings.redact_secrets);
     if !settings.redact_secrets {
@@ -418,6 +423,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         attempts: settings.api_max_attempts,
         prompt: settings.prompt,
         compression: settings.compression,
+        keep_phone_numbers: settings.keep_phone_numbers,
         debug_log: args.debug_log.clone(),
         delegation: settings.delegation.clone(),
         oneshot: args.oneshot,
@@ -553,6 +559,7 @@ where
         terminal_approval_timeout_secs: request.terminal_approval_timeout_secs,
         terminal_local: request.terminal_local,
         compression: Some(&request.compression),
+        keep_phone_numbers: request.keep_phone_numbers,
         summarizer: summarizer.as_ref(),
         terminal_env: Some(&request.terminal_env),
         clarify_timeout_secs: request.clarify_timeout_secs,

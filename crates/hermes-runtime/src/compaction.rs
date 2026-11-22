@@ -25,14 +25,92 @@ pub struct CompactionSettings {
     absolute: Option<usize>,
     protect_first: usize,
     protect_last: usize,
+    /// `compression.model_thresholds`: ratio overrides keyed by model-name substring, optionally
+    /// scoped as `<provider>:<substring>`.
+    #[serde(default)]
+    model_thresholds: Vec<(String, f64)>,
+    /// The model and provider the run starts on; the overrides above are matched against them.
+    #[serde(default)]
+    route: Option<(String, String)>,
+    /// `compression.max_attempts`: how many times one turn may compress itself (0 = not read).
+    #[serde(default)]
+    max_attempts: usize,
+}
+
+/// The reference's `_parse_config_int`: bools and fractional numbers are refused, a numeric string
+/// is read after trimming.
+fn parse_config_int(value: &Yaml) -> Option<i64> {
+    match value {
+        Yaml::Number(number) => number.as_i64().or_else(|| {
+            let float = number.as_f64()?;
+            (float.fract() == 0.0 && float.abs() < 9e15).then_some(float as i64)
+        }),
+        Yaml::String(text) => text.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+/// Python's `int(value)` as the reference applies it to `protect_first_n`: bools count as 0 and
+/// 1, floats are truncated, numeric strings are read.
+fn python_int(value: &Yaml) -> Option<i64> {
+    match value {
+        Yaml::Bool(flag) => Some(i64::from(*flag)),
+        Yaml::Number(number) => number.as_i64().or_else(|| {
+            number
+                .as_f64()
+                .filter(|float| float.is_finite())
+                .map(|float| float.trunc() as i64)
+        }),
+        Yaml::String(text) => text.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+/// The reference's `resolve_model_threshold`: of the keys that apply to `model` on `provider`, the
+/// one with the longest substring wins, a provider-scoped key beats a bare one of the same length,
+/// and the greater key text breaks a remaining tie.
+fn model_threshold(overrides: &[(String, f64)], model: &str, provider: &str, default: f64) -> f64 {
+    if overrides.is_empty() || model.is_empty() {
+        return default;
+    }
+    let provider = provider.trim().to_lowercase();
+    overrides
+        .iter()
+        .filter_map(|(key, value)| {
+            let rank = match key.split_once(':') {
+                None => model
+                    .contains(key.as_str())
+                    .then(|| (key.chars().count(), 0)),
+                Some((scope, substring)) => (scope.trim().to_lowercase() == provider
+                    && model.contains(substring))
+                .then(|| (substring.chars().count(), 1)),
+            }?;
+            Some((rank, key, *value))
+        })
+        .max_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)))
+        .map_or(default, |(_, _, value)| value)
 }
 
 impl CompactionSettings {
-    pub(crate) fn enabled(&self) -> bool {
+    pub fn enabled(&self) -> bool {
         self.threshold.is_some()
     }
 
-    pub(crate) fn from_config(config: &Yaml) -> Self {
+    /// `compression.protect_first_n` and `protect_last_n` after the reference's coercion.
+    pub fn protected(&self) -> (usize, usize) {
+        (self.protect_first, self.protect_last)
+    }
+
+    /// How many times one turn may replace its early steps with a summary.
+    pub fn attempts(&self) -> usize {
+        if self.max_attempts == 0 {
+            3
+        } else {
+            self.max_attempts
+        }
+    }
+
+    pub fn from_config(config: &Yaml) -> Self {
         let compression = &config["compression"];
         if !truthy(&compression["enabled"], true)
             || !truthy(&compression["in_place"], true)
@@ -47,15 +125,64 @@ impl CompactionSettings {
             .or_else(|| compression["threshold"].as_str()?.trim().parse().ok())
             .filter(|ratio| *ratio > 0.0 && *ratio <= 1.0)
             .unwrap_or(0.5);
-        let relative = context_length.map(|window| ratio_threshold(window, ratio));
-        let threshold = relative.into_iter().chain(absolute).min();
-        Self {
-            threshold,
+        // Entries whose value is not a number are dropped, as the reference does; a section that
+        // is not a mapping is no section.
+        let model_thresholds = compression["model_thresholds"]
+            .as_mapping()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        let key = match key {
+                            Yaml::String(text) => text.clone(),
+                            Yaml::Number(number) => number.to_string(),
+                            _ => return None,
+                        };
+                        Some((key, value.as_f64()?))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut settings = Self {
             context_length,
             ratio,
             absolute,
-            protect_first: count(&compression["protect_first_n"]).unwrap_or(3),
-            protect_last: count(&compression["protect_last_n"]).unwrap_or(20),
+            protect_first: python_int(&compression["protect_first_n"])
+                .map_or(3, |value| usize::try_from(value.max(0)).unwrap_or(0)),
+            protect_last: python_int(&compression["protect_last_n"])
+                .map_or(20, |value| usize::try_from(value.max(0)).unwrap_or(0)),
+            model_thresholds,
+            max_attempts: match parse_config_int(&compression["max_attempts"]) {
+                Some(value) if value >= 1 => usize::try_from(value.min(10)).unwrap_or(3),
+                _ => 3,
+            },
+            ..Self::default()
+        };
+        settings.recompute();
+        settings
+    }
+
+    /// The trigger in tokens from the window, the ratio (the model's override, else the configured
+    /// one) and the absolute cap.
+    fn recompute(&mut self) {
+        let ratio = match &self.route {
+            Some((model, provider)) => {
+                model_threshold(&self.model_thresholds, model, provider, self.ratio)
+            }
+            None => self.ratio,
+        };
+        let relative = self
+            .context_length
+            .map(|window| ratio_threshold(window, ratio));
+        self.threshold = relative.into_iter().chain(self.absolute).min();
+    }
+
+    /// The model and provider the run uses, which the `model_thresholds` overrides are matched
+    /// against. Call it after the command line has had its say.
+    pub fn set_route(&mut self, model: &str, provider: &str) {
+        if !self.model_thresholds.is_empty() {
+            self.route = Some((model.to_owned(), provider.to_owned()));
+            self.recompute();
         }
     }
 
@@ -65,14 +192,11 @@ impl CompactionSettings {
             return;
         }
         self.context_length = Some(window);
-        self.threshold = [Some(ratio_threshold(window, self.ratio)), self.absolute]
-            .into_iter()
-            .flatten()
-            .min();
+        self.recompute();
     }
 
     /// Whether a request of `bytes` has outgrown the compression threshold (about four bytes a token).
-    pub(crate) fn over_threshold(&self, bytes: usize) -> bool {
+    pub fn over_threshold(&self, bytes: usize) -> bool {
         self.threshold
             .is_some_and(|threshold| bytes.div_ceil(4) >= threshold)
     }

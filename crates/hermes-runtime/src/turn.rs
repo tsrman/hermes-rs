@@ -12,6 +12,7 @@ use crate::mcp::McpClients;
 use crate::memory_tool::{MemorySettings, MemoryTurn};
 use crate::prompt::{load_cli_context, PromptSettings};
 use crate::providers::{Provider, ProviderError};
+use crate::redact::redact_assistant_reply;
 use crate::skills::SkillCatalog;
 use crate::terminal::{self, TERMINAL};
 use crate::todo_tool::TodoStore;
@@ -38,6 +39,8 @@ pub enum TurnOutcome {
 
 pub struct CompletedTurn {
     pub(crate) model: String,
+    /// The model's last text as it arrived, before the stored copy was scrubbed.
+    pub(crate) final_response: String,
     pub(crate) system_prompt: String,
     pub(crate) replayed_history: Vec<Value>,
     pub(crate) messages: Vec<Value>,
@@ -62,13 +65,7 @@ impl CompletedTurn {
 
     /// The text of the last assistant message.
     pub(crate) fn final_text(&self) -> String {
-        self.messages
-            .iter()
-            .rev()
-            .find(|message| message["role"] == "assistant")
-            .and_then(|message| message["content"].as_str())
-            .unwrap_or("")
-            .to_owned()
+        self.final_response.clone()
     }
 
     /// The conversation so far, to continue it with another turn.
@@ -381,6 +378,8 @@ pub struct TurnOptions<'a> {
     /// context after tool calls uses them to compress its own earlier steps and carry on.
     pub compression: Option<&'a CompactionSettings>,
     pub summarizer: Option<&'a ModelRoute>,
+    /// `security.redact_phone_numbers: false`: the stored assistant reply keeps its phone numbers.
+    pub keep_phone_numbers: bool,
     /// Which environment variables commands see.
     pub terminal_env: Option<&'a crate::terminal::TerminalSettings>,
     /// Seconds to wait for an answer to `clarify`; 0 waits without limit.
@@ -455,6 +454,8 @@ where
     // mid-turn compression, which shortens this copy and never the conversation that is saved.
     let mut sent = messages.clone();
     let mut squeezes = 0usize;
+    // `compression.max_attempts`: how often this turn may compress its own earlier steps.
+    let max_squeezes = options.compression.map_or(3, CompactionSettings::attempts);
     let mut env = ToolEnv::from_options(&options);
     env.skills_indexed = system_prompt.contains("\n<available_skills>\n");
     env.skill_desc_limit = history.skills.desc_limit();
@@ -476,7 +477,7 @@ where
         let result = loop {
             // Before the request goes out: once the steps of this turn have outgrown the threshold,
             // replace the early ones with a summary instead of waiting for the provider to refuse.
-            if squeezes < MAX_SQUEEZES {
+            if squeezes < max_squeezes {
                 if let Some(settings) = options.compression.filter(|s| {
                     s.enabled() && s.over_threshold(messages_bytes(&sent) + messages_bytes(&tools))
                 }) {
@@ -542,7 +543,7 @@ where
                     }
                     if matches!(error, ProviderError::ContextOverflow)
                         && !emitted_text
-                        && squeezes < MAX_SQUEEZES
+                        && squeezes < max_squeezes
                     {
                         if let Some(settings) = options.compression.filter(|s| s.enabled()) {
                             let summarizer = options.summarizer;
@@ -579,11 +580,15 @@ where
         };
         match result.finish_reason.as_deref() {
             Some("stop") if result.tool_calls.is_empty() => {
-                messages.push(json!({"role": "assistant", "content": result.content}));
+                // What is stored is scrubbed like the reference's stored reply; the text the person
+                // saw (and a subagent's summary) is the model's own.
+                let stored = redact_assistant_reply(&result.content, options.keep_phone_numbers);
+                messages.push(json!({"role": "assistant", "content": stored}));
                 let appended = messages.split_off(first_new_message);
                 messages.remove(0);
                 return Ok(TurnOutcome::Completed(CompletedTurn {
                     model: route.model.clone(),
+                    final_response: result.content,
                     system_prompt,
                     replayed_history: original.unwrap_or(messages),
                     messages: appended,
@@ -606,7 +611,9 @@ where
                 })
             })
             .collect();
-        let assistant = json!({"role": "assistant", "content": if result.content.is_empty() { None } else { Some(result.content) }, "tool_calls": calls});
+        let content = (!result.content.is_empty())
+            .then(|| redact_assistant_reply(&result.content, options.keep_phone_numbers));
+        let assistant = json!({"role": "assistant", "content": content, "tool_calls": calls});
         sent.push(assistant.clone());
         messages.push(assistant);
         for call in result.tool_calls {
@@ -708,10 +715,6 @@ where
     on_event(TurnEvent::Text(&summary.content));
     Ok(TurnOutcome::IterationLimit)
 }
-
-/// How many times one turn may replace its earlier steps with a summary after the provider rejects
-/// the request as too large.
-const MAX_SQUEEZES: usize = 3;
 
 /// Replace the steps of the running turn that come before its last two exchanges with a summary in
 /// `sent`, as the reference does when a request overflows the context window after tool calls.

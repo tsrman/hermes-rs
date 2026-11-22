@@ -32,7 +32,26 @@ pub(crate) fn truthy(value: &serde_yaml::Value, default: bool) -> bool {
     }
 }
 
+/// `security.redact_phone_numbers: false`, the only value that lets the assistant's reply keep its
+/// phone numbers; any other value, or a missing key, keeps them masked, as the reference does.
+/// The reference reads YAML 1.1, where `no`, `off` and `n` (in any of their usual cases) are the
+/// boolean false; the parser here gives those words as strings, so they count when unquoted. A
+/// quoted `'no'` cannot be told from them, and the reference would keep it masked.
+pub fn keeps_phone_numbers(config: &serde_yaml::Value) -> bool {
+    use serde_yaml::Value;
+    match &config["security"]["redact_phone_numbers"] {
+        Value::Bool(flag) => !flag,
+        Value::String(word) => matches!(
+            word.as_str(),
+            "no" | "No" | "NO" | "off" | "Off" | "OFF" | "n" | "N"
+        ),
+        _ => false,
+    }
+}
+
 pub struct ChatSettings {
+    /// `security.redact_phone_numbers: false`: the assistant's reply keeps its phone numbers.
+    pub keep_phone_numbers: bool,
     pub model: Option<String>,
     pub provider: &'static str,
     /// Use the OpenAI Responses API instead of Chat Completions.
@@ -158,6 +177,7 @@ impl Default for ChatSettings {
             api_key: None,
             config_api_key: None,
             redact_secrets: true,
+            keep_phone_numbers: false,
             prefill_file: None,
             named_custom: false,
             compression_route: AuxiliaryRoute::default(),
@@ -414,6 +434,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
             .unwrap_or(300),
         ..ChatSettings::default()
     };
+    settings.keep_phone_numbers = keeps_phone_numbers(&config);
     settings.custom_providers = custom_providers(&config);
     settings.model_overrides = ModelOverrides::from_config(&config);
     let mut named_key_env = None;

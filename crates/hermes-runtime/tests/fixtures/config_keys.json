@@ -1,0 +1,818 @@
+{
+ "thresholds": [
+  {
+   "compression": "{}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 128000,
+   "threshold_tokens": 96000
+  },
+  {
+   "compression": "{}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 500000
+  },
+  {
+   "compression": "{threshold: 0.9}",
+   "model": "gpt-5",
+   "provider": "openrouter",
+   "window": 128000,
+   "threshold_tokens": 115200
+  },
+  {
+   "compression": "{threshold: 0.9}",
+   "model": "gpt-5",
+   "provider": "openrouter",
+   "window": 2000000,
+   "threshold_tokens": 1800000
+  },
+  {
+   "compression": "{model_thresholds: {glm-5.2: 0.4}}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 400000
+  },
+  {
+   "compression": "{model_thresholds: {glm-5.2: 0.4}}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 128000,
+   "threshold_tokens": 96000
+  },
+  {
+   "compression": "{model_thresholds: {glm-5.2: 0.4}}",
+   "model": "gpt-5",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 500000
+  },
+  {
+   "compression": "{model_thresholds: {glm: 0.4, glm-5: 0.6}}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 600000
+  },
+  {
+   "compression": "{model_thresholds: {glm: 0.4, glm-5: 0.6}}",
+   "model": "zai/glm-5.2",
+   "provider": "openrouter",
+   "window": 1000000,
+   "threshold_tokens": 600000
+  },
+  {
+   "compression": "{model_thresholds: {'openrouter:glm': 0.3, glm: 0.6}}",
+   "model": "glm-5.2",
+   "provider": "openrouter",
+   "window": 1000000,
+   "threshold_tokens": 300000
+  },
+  {
+   "compression": "{model_thresholds: {'openrouter:glm': 0.3, glm: 0.6}}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 600000
+  },
+  {
+   "compression": "{model_thresholds: {'openrouter:glm': 0.3, glm: 0.6}}",
+   "model": "glm-5.2",
+   "provider": "OpenRouter",
+   "window": 1000000,
+   "threshold_tokens": 300000
+  },
+  {
+   "compression": "{model_thresholds: {' OpenRouter :glm': 0.3}}",
+   "model": "glm-5.2",
+   "provider": "openrouter",
+   "window": 1000000,
+   "threshold_tokens": 300000
+  },
+  {
+   "compression": "{model_thresholds: {'openrouter:glm': 0.3, 'glm': 0.3}}",
+   "model": "glm-5.2",
+   "provider": "openrouter",
+   "window": 1000000,
+   "threshold_tokens": 300000
+  },
+  {
+   "compression": "{model_thresholds: {'openrouter:gl': 0.3, 'glm': 0.7}}",
+   "model": "glm-5.2",
+   "provider": "openrouter",
+   "window": 1000000,
+   "threshold_tokens": 700000
+  },
+  {
+   "compression": "{model_thresholds: {'a:glm': 0.3, glm: 0.6}}",
+   "model": "glm-5.2",
+   "provider": "a",
+   "window": 1000000,
+   "threshold_tokens": 300000
+  },
+  {
+   "compression": "{model_thresholds: {'a:glm': 0.3, glm: 0.6}}",
+   "model": "glm-5.2",
+   "provider": "b",
+   "window": 1000000,
+   "threshold_tokens": 600000
+  },
+  {
+   "compression": "{model_thresholds: {GLM: 0.4}}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 500000
+  },
+  {
+   "compression": "{model_thresholds: {glm: 0.4, 'x:y': 0.2}}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 400000
+  },
+  {
+   "compression": "{model_thresholds: {'': 0.3}}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 300000
+  },
+  {
+   "compression": "{model_thresholds: {glm: 1.5}}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 850000
+  },
+  {
+   "compression": "{model_thresholds: {glm: 1}}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 850000
+  },
+  {
+   "compression": "{model_thresholds: {glm: 0}}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 64000
+  },
+  {
+   "compression": "{model_thresholds: {glm: -0.5}}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 64000
+  },
+  {
+   "compression": "{model_thresholds: {glm: 0.1}}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 100000,
+   "threshold_tokens": 75000
+  },
+  {
+   "compression": "{model_thresholds: {glm: '0.4'}}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 500000
+  },
+  {
+   "compression": "{model_thresholds: {glm: true}}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 500000
+  },
+  {
+   "compression": "{model_thresholds: {glm: null}}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 500000
+  },
+  {
+   "compression": "{model_thresholds: {glm: 0.4, other: bad}}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 400000
+  },
+  {
+   "compression": "{model_thresholds: [glm]}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 500000
+  },
+  {
+   "compression": "{model_thresholds: glm}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 500000
+  },
+  {
+   "compression": "{model_thresholds: {5: 0.4}}",
+   "model": "gpt-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 400000
+  },
+  {
+   "compression": "{threshold: 0.3, model_thresholds: {glm: 0.4}, threshold_tokens: 150000}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 150000
+  },
+  {
+   "compression": "{threshold: 0.3, model_thresholds: {glm: 0.4}, threshold_tokens: 500000}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 400000
+  },
+  {
+   "compression": "{model_thresholds: {glm: 0.4}, threshold_tokens: 70000}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 1000000,
+   "threshold_tokens": 70000
+  },
+  {
+   "compression": "{threshold_tokens: 60000}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 128000,
+   "threshold_tokens": 60000
+  },
+  {
+   "compression": "{threshold_tokens: 0}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 128000,
+   "threshold_tokens": 96000
+  },
+  {
+   "compression": "{threshold_tokens: -5}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 128000,
+   "threshold_tokens": 96000
+  },
+  {
+   "compression": "{threshold_tokens: '80000'}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 128000,
+   "threshold_tokens": 80000
+  },
+  {
+   "compression": "{threshold_tokens: null}",
+   "model": "glm-5.2",
+   "provider": "custom",
+   "window": 128000,
+   "threshold_tokens": 96000
+  }
+ ],
+ "compression_values": [
+  {
+   "compression": "{}",
+   "max_attempts": 3,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: 1}",
+   "max_attempts": 1,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: 6}",
+   "max_attempts": 6,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: 10}",
+   "max_attempts": 10,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: 11}",
+   "max_attempts": 10,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: 99}",
+   "max_attempts": 10,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: 0}",
+   "max_attempts": 3,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: -2}",
+   "max_attempts": 3,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: '7'}",
+   "max_attempts": 7,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: ' 4 '}",
+   "max_attempts": 4,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: true}",
+   "max_attempts": 3,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: false}",
+   "max_attempts": 3,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: 2.0}",
+   "max_attempts": 2,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: 2.5}",
+   "max_attempts": 3,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: abc}",
+   "max_attempts": 3,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: null}",
+   "max_attempts": 3,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: '3.0'}",
+   "max_attempts": 3,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{max_attempts: [5]}",
+   "max_attempts": 3,
+   "protect_first": 3,
+   "protect_last": 20
+  },
+  {
+   "compression": "{protect_first_n: 0}",
+   "max_attempts": 3,
+   "protect_first": 0,
+   "protect_last": 20
+  },
+  {
+   "compression": "{protect_first_n: 1}",
+   "max_attempts": 3,
+   "protect_first": 1,
+   "protect_last": 20
+  },
+  {
+   "compression": "{protect_first_n: 7}",
+   "max_attempts": 3,
+   "protect_first": 7,
+   "protect_last": 20
+  },
+  {
+   "compression": "{protect_first_n: -1}",
+   "max_attempts": 3,
+   "protect_first": 0,
+   "protect_last": 20
+  },
+  {
+   "compression": "{protect_first_n: '2'}",
+   "max_attempts": 3,
+   "protect_first": 2,
+   "protect_last": 20
+  },
+  {
+   "compression": "{protect_first_n: 2.9}",
+   "max_attempts": 3,
+   "protect_first": 2,
+   "protect_last": 20
+  },
+  {
+   "compression": "{protect_first_n: true}",
+   "max_attempts": 3,
+   "protect_first": 1,
+   "protect_last": 20
+  },
+  {
+   "compression": "{protect_first_n: -2.5}",
+   "max_attempts": 3,
+   "protect_first": 0,
+   "protect_last": 20
+  },
+  {
+   "compression": "{protect_last_n: 0}",
+   "max_attempts": 3,
+   "protect_first": 3,
+   "protect_last": 0
+  },
+  {
+   "compression": "{protect_last_n: 5}",
+   "max_attempts": 3,
+   "protect_first": 3,
+   "protect_last": 5
+  },
+  {
+   "compression": "{protect_last_n: '8'}",
+   "max_attempts": 3,
+   "protect_first": 3,
+   "protect_last": 8
+  },
+  {
+   "compression": "{protect_last_n: 3.7}",
+   "max_attempts": 3,
+   "protect_first": 3,
+   "protect_last": 3
+  },
+  {
+   "compression": "{protect_last_n: -4}",
+   "max_attempts": 3,
+   "protect_first": 3,
+   "protect_last": -4
+  }
+ ],
+ "phone_policy": [
+  {
+   "yaml": "security: {redact_phone_numbers: false}",
+   "keeps": true
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: true}",
+   "keeps": false
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: no}",
+   "keeps": true
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: off}",
+   "keeps": true
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: yes}",
+   "keeps": false
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: No}",
+   "keeps": true
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: NO}",
+   "keeps": true
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: Off}",
+   "keeps": true
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: OFF}",
+   "keeps": true
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: False}",
+   "keeps": true
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: FALSE}",
+   "keeps": true
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: n}",
+   "keeps": true
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: N}",
+   "keeps": true
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: 'no'}",
+   "keeps": false
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: 'off'}",
+   "keeps": false
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: On}",
+   "keeps": false
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: 'false'}",
+   "keeps": false
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: 'False'}",
+   "keeps": false
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: 0}",
+   "keeps": false
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: 1}",
+   "keeps": false
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: null}",
+   "keeps": false
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: ''}",
+   "keeps": false
+  },
+  {
+   "yaml": "security: {redact_phone_numbers: [false]}",
+   "keeps": false
+  },
+  {
+   "yaml": "security: {}",
+   "keeps": false
+  },
+  {
+   "yaml": "security: null",
+   "keeps": false
+  },
+  {
+   "yaml": "security: [false]",
+   "keeps": false
+  },
+  {
+   "yaml": "privacy: {redact_pii: true}",
+   "keeps": false
+  },
+  {
+   "yaml": "",
+   "keeps": false
+  }
+ ],
+ "reply_scrub": {
+  "on": [
+   {
+    "input": "call +15551234567 now",
+    "output": "call +155****4567 now"
+   },
+   {
+    "input": "+4915112345678 and +1555123",
+    "output": "+491****5678 and +1****23"
+   },
+   {
+    "input": "two: +15551234567, +442071838750.",
+    "output": "two: +155****4567, +442****8750."
+   },
+   {
+    "input": "version +1.2.3 build +123456",
+    "output": "version +1.2.3 build +123456"
+   },
+   {
+    "input": "id 12345678 +",
+    "output": "id 12345678 +"
+   },
+   {
+    "input": "(+15551234567)",
+    "output": "(+155****4567)"
+   },
+   {
+    "input": "+15551234567abc",
+    "output": "+15551234567abc"
+   },
+   {
+    "input": "x+15551234567",
+    "output": "x+15551234567"
+   },
+   {
+    "input": "the key is sk-abcdefghijklmnop1234567890 and the phone is +15551234567",
+    "output": "the key is sk-abc...7890 and the phone is +155****4567"
+   },
+   {
+    "input": "export OPENAI_API_KEY=abcdefghijklmnop1234567890",
+    "output": "export OPENAI_API_KEY=***"
+   },
+   {
+    "input": "Authorization: Bearer abcdefghijklmnop1234567890",
+    "output": "Authorization: Bearer abcdef...7890"
+   },
+   {
+    "input": "token ghp_abcdefghijklmnop1234567890",
+    "output": "token ghp_ab...7890"
+   },
+   {
+    "input": "plain text without anything",
+    "output": "plain text without anything"
+   },
+   {
+    "input": "",
+    "output": ""
+   },
+   {
+    "input": "Телефон +79161234567 и ключ sk-abcdefghijklmnop1234567890",
+    "output": "Телефон +791****4567 и ключ sk-abc...7890"
+   },
+   {
+    "input": "https://user:hunter2hunter2@example.test/path call +15551234567",
+    "output": "https://user:***@example.test/path call +155****4567"
+   }
+  ],
+  "keep_phone": [
+   {
+    "input": "call +15551234567 now",
+    "output": "call +15551234567 now"
+   },
+   {
+    "input": "+4915112345678 and +1555123",
+    "output": "+4915112345678 and +1555123"
+   },
+   {
+    "input": "two: +15551234567, +442071838750.",
+    "output": "two: +15551234567, +442071838750."
+   },
+   {
+    "input": "version +1.2.3 build +123456",
+    "output": "version +1.2.3 build +123456"
+   },
+   {
+    "input": "id 12345678 +",
+    "output": "id 12345678 +"
+   },
+   {
+    "input": "(+15551234567)",
+    "output": "(+15551234567)"
+   },
+   {
+    "input": "+15551234567abc",
+    "output": "+15551234567abc"
+   },
+   {
+    "input": "x+15551234567",
+    "output": "x+15551234567"
+   },
+   {
+    "input": "the key is sk-abcdefghijklmnop1234567890 and the phone is +15551234567",
+    "output": "the key is sk-abc...7890 and the phone is +15551234567"
+   },
+   {
+    "input": "export OPENAI_API_KEY=abcdefghijklmnop1234567890",
+    "output": "export OPENAI_API_KEY=***"
+   },
+   {
+    "input": "Authorization: Bearer abcdefghijklmnop1234567890",
+    "output": "Authorization: Bearer abcdef...7890"
+   },
+   {
+    "input": "token ghp_abcdefghijklmnop1234567890",
+    "output": "token ghp_ab...7890"
+   },
+   {
+    "input": "plain text without anything",
+    "output": "plain text without anything"
+   },
+   {
+    "input": "",
+    "output": ""
+   },
+   {
+    "input": "Телефон +79161234567 и ключ sk-abcdefghijklmnop1234567890",
+    "output": "Телефон +79161234567 и ключ sk-abc...7890"
+   },
+   {
+    "input": "https://user:hunter2hunter2@example.test/path call +15551234567",
+    "output": "https://user:***@example.test/path call +15551234567"
+   }
+  ],
+  "disabled": [
+   {
+    "input": "call +15551234567 now",
+    "output": "call +15551234567 now"
+   },
+   {
+    "input": "+4915112345678 and +1555123",
+    "output": "+4915112345678 and +1555123"
+   },
+   {
+    "input": "two: +15551234567, +442071838750.",
+    "output": "two: +15551234567, +442071838750."
+   },
+   {
+    "input": "version +1.2.3 build +123456",
+    "output": "version +1.2.3 build +123456"
+   },
+   {
+    "input": "id 12345678 +",
+    "output": "id 12345678 +"
+   },
+   {
+    "input": "(+15551234567)",
+    "output": "(+15551234567)"
+   },
+   {
+    "input": "+15551234567abc",
+    "output": "+15551234567abc"
+   },
+   {
+    "input": "x+15551234567",
+    "output": "x+15551234567"
+   },
+   {
+    "input": "the key is sk-abcdefghijklmnop1234567890 and the phone is +15551234567",
+    "output": "the key is sk-abcdefghijklmnop1234567890 and the phone is +15551234567"
+   },
+   {
+    "input": "export OPENAI_API_KEY=abcdefghijklmnop1234567890",
+    "output": "export OPENAI_API_KEY=abcdefghijklmnop1234567890"
+   },
+   {
+    "input": "Authorization: Bearer abcdefghijklmnop1234567890",
+    "output": "Authorization: Bearer abcdefghijklmnop1234567890"
+   },
+   {
+    "input": "token ghp_abcdefghijklmnop1234567890",
+    "output": "token ghp_abcdefghijklmnop1234567890"
+   },
+   {
+    "input": "plain text without anything",
+    "output": "plain text without anything"
+   },
+   {
+    "input": "",
+    "output": ""
+   },
+   {
+    "input": "Телефон +79161234567 и ключ sk-abcdefghijklmnop1234567890",
+    "output": "Телефон +79161234567 и ключ sk-abcdefghijklmnop1234567890"
+   },
+   {
+    "input": "https://user:hunter2hunter2@example.test/path call +15551234567",
+    "output": "https://user:hunter2hunter2@example.test/path call +15551234567"
+   }
+  ]
+ },
+ "pii": [
+  {
+   "platform": "local",
+   "enabled": true,
+   "redacts": false
+  },
+  {
+   "platform": "local",
+   "enabled": false,
+   "redacts": false
+  },
+  {
+   "platform": "telegram",
+   "enabled": true,
+   "redacts": true
+  },
+  {
+   "platform": "telegram",
+   "enabled": false,
+   "redacts": false
+  },
+  {
+   "platform": "discord",
+   "enabled": true,
+   "redacts": false
+  },
+  {
+   "platform": "discord",
+   "enabled": false,
+   "redacts": false
+  }
+ ]
+}
