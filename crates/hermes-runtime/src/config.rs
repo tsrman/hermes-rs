@@ -48,6 +48,7 @@ pub struct ChatSettings {
     pub terminal_local: bool,
     pub terminal_env: crate::terminal::TerminalSettings,
     pub approvals: crate::approval_policy::ApprovalSettings,
+    pub delegation: crate::delegation::DelegationSettings,
     /// `clarify.timeout`, else `agent.clarify_timeout`, else 90; 0 or less waits without limit.
     pub clarify_timeout_secs: u32,
     pub mcp_servers: Vec<McpServerConfig>,
@@ -88,6 +89,7 @@ impl Default for ChatSettings {
             terminal_local: true,
             terminal_env: crate::terminal::TerminalSettings::default(),
             approvals: crate::approval_policy::ApprovalSettings::default(),
+            delegation: crate::delegation::DelegationSettings::default(),
             clarify_timeout_secs: 90,
             mcp_servers: Vec::new(),
             web: WebSettings::default(),
@@ -394,6 +396,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.prompt.memory_tool = settings.tools.allows("memory");
     settings.terminal_env = crate::terminal::TerminalSettings::from_config(&config);
     settings.approvals = crate::approval_policy::ApprovalSettings::from_config(&config);
+    settings.delegation = crate::delegation::DelegationSettings::from_config(&config);
     settings.terminal_local = match &config["terminal"]["backend"] {
         serde_yaml::Value::Null => terminal_env.as_deref().map_or_else(
             || {

@@ -113,6 +113,7 @@ class Handler(BaseHTTPRequestHandler):
         if scenario == "compact" and messages and messages[-1].get("content") == "Cancel this turn":
             self.server.release.wait(timeout=15)
         function = {"name": "read_file", "arguments": '{"path":"fixture.txt"}'}
+        final_text = None
         if scenario == "local_tools":
             user_index = max(i for i, message in enumerate(messages) if message.get("role") == "user")
             fixture = json.loads(messages[user_index]["content"])
@@ -137,6 +138,30 @@ class Handler(BaseHTTPRequestHandler):
                     {"id": "2", "content": "Review it", "status": "pending", "parent": "1"}]})}
             else:
                 function = {"name": "todo_list", "arguments": "{}"}
+        elif scenario == "delegate":
+            # The parent delegates two tasks, then checks its own directory; a child told to
+            # MOVE changes directory, the other just answers. Children are told apart by prompt.
+            child = str(messages[0].get("content", "")).startswith("You are a focused subagent")
+            tools_seen = sum(message.get("role") == "tool" for message in messages)
+            if child:
+                goal = str(messages[-1 if messages[-1].get("role") == "user" else 1].get("content", ""))
+                moves = "MOVE" in str(messages[1].get("content", ""))
+                wants_tool = moves and tools_seen == 0
+                function = {"name": "terminal", "arguments": json.dumps({"command": "mkdir -p moved && cd moved && pwd"})}
+                call_id = "child-move"
+                if not wants_tool:
+                    marker = str(messages[1].get("content", "")).split("TASK:\n")[-1][:14]
+                    final_text = f"child-done:{marker}"
+            else:
+                wants_tool = tools_seen < 2
+                if tools_seen == 0:
+                    function = {"name": "delegate_task", "arguments": json.dumps({"tasks": [
+                        {"goal": "MOVE around the project", "context": "ctx A"},
+                        {"goal": "Just answer quickly please"}]})}
+                    call_id = "deleg-0"
+                else:
+                    function = {"name": "terminal", "arguments": json.dumps({"command": "pwd"})}
+                    call_id = "parent-pwd"
         elif scenario == "cron_failure":
             wants_tool = False
             call_id = "none"
@@ -184,7 +209,7 @@ class Handler(BaseHTTPRequestHandler):
             finish_reason = "tool_calls"
         else:
             message = {"role": "assistant", "content": (
-                "[CRON_FAILURE]\nchild task failed" if scenario == "cron_failure" else "Ответ модели")}
+                "[CRON_FAILURE]\nchild task failed" if scenario == "cron_failure" else (final_text or "Ответ модели"))}
             finish_reason = "stop"
         if scenario in ("compact", "compact_failure", "overflow", "overflow_tools") and messages[0]["content"].startswith("Summarize completed conversation history"):
             message["content"] = "Earlier turns resolved the fixture checks."
@@ -239,7 +264,7 @@ def main():
         "text", "tool", "partial_tool", "stall", "tool_retry", "tool_rate_limit",
         "fallback_after_tool", "fallback_auth", "partial_text", "disconnect_once",
         "iteration_limit", "iteration_summary_tool", "partial_after_tool", "stall_on_resume", "burst", "skill",
-        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "mcp", "web", "memory", "cron_failure", "todo",
+        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "mcp", "web", "memory", "cron_failure", "todo", "delegate",
     ), default="text")
     args = parser.parse_args()
     if bool(args.tls_cert) != bool(args.tls_key):

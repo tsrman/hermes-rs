@@ -164,7 +164,36 @@ def t_resume():
                    "Какой port ты видел в config.ini в самом начале? Назови число. Затем открой файл и замени текущий port на 9090."], check, None, between
 
 
-TASKS = {f.__name__[2:]: f for f in (t_fix, t_rename, t_newdir, t_search, t_longout, t_cd, t_indent, t_deny, t_debug, t_bigfile, t_git, t_resume)}
+def journal_events(project):
+    path = project.parent / "journal.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def t_delegate():
+    files = {"a/__init__.py": "", "a/m.py": "def double(x):\n    return x + x + 1\n", "a/test_m.py": "import unittest\nfrom a.m import double\nclass T(unittest.TestCase):\n    def test(self):\n        self.assertEqual(double(4), 8)\nunittest.main()\n",
+             "b/__init__.py": "", "b/m.py": "def last(items):\n    return items[len(items)]\n", "b/test_m.py": "import unittest\nfrom b.m import last\nclass T(unittest.TestCase):\n    def test(self):\n        self.assertEqual(last([1, 2, 3]), 3)\nunittest.main()\n"}
+
+    def check(p, out):
+        events = journal_events(p)
+        called = any(e["event"] == "tool" and e["name"] == "delegate_task" and e.get("child") is None for e in events)
+        children = {e["child"] for e in events if e.get("child") is not None}
+        passed = sh(p, "python3 a/test_m.py").returncode == 0 and sh(p, "python3 b/test_m.py").returncode == 0
+        return called and children >= {0, 1} and passed, f"called={called} children={sorted(children)}"
+    return files, "В каталогах a и b по одному падающему тесту (python3 a/test_m.py, python3 b/test_m.py). Используй инструмент delegate_task: один подагент на каталог, параллельно. Затем проверь оба теста сам и кратко отчитайся.", check
+
+
+def t_execute_code():
+    files = {f"data/part{i}.txt": "".join(f"{i}-{j}: {'ERROR' if (i * 7 + j) % 5 == 0 else 'ok'}\n" for j in range(40)) for i in range(12)}
+
+    def check(p, out):
+        events = journal_events(p)
+        called = any(e["event"] == "tool" and e["name"] == "execute_code" for e in events)
+        expected = sum(1 for i in range(12) for j in range(40) if (i * 7 + j) % 5 == 0)
+        return called and str(expected) in out, f"called={called} expected={expected}"
+    return files, "В каталоге data 12 файлов part*.txt. Подсчитай, сколько всего строк со словом ERROR. Обязательно используй инструмент execute_code (один вызов, цикл по файлам), в ответе назови число.", check
+
+
+TASKS = {f.__name__[2:]: f for f in (t_fix, t_rename, t_newdir, t_search, t_longout, t_cd, t_indent, t_deny, t_debug, t_bigfile, t_git, t_resume, t_delegate, t_execute_code)}
 
 
 def run_task(name, binary, model, env, timeout, provider="custom"):

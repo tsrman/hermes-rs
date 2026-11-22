@@ -16,7 +16,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-PORTED = ["memory", "web_search", "web_extract", "todo_list", "session_search", "browser_cdp", "process_manage", "skill_manage", "skill_view", "skills_list", "patch", "search_files", "write_file", "clarify"]
+PORTED = ["memory", "web_search", "web_extract", "todo_list", "session_search", "browser_cdp", "process_manage", "skill_manage", "skill_view", "skills_list", "patch", "search_files", "write_file", "clarify", "delegate_task"]
 
 
 # Tools the Rust CLI implements; the cases only record these.
@@ -48,6 +48,7 @@ def main():
     sys.path.insert(0, str(reference))
     os.chdir(reference)
     import model_tools
+    import toolsets as toolsets_module
     from tools.registry import registry
 
     schemas.mkdir(parents=True, exist_ok=True)
@@ -55,6 +56,11 @@ def main():
         schema = registry.get_schema(name)
         if schema is None:
             raise SystemExit(f"reference has no tool {name!r}")
+        if "(rebuilt at get_definitions() time)" in json.dumps(schema):
+            # Part of this schema is built per request; take the built one the model sees.
+            built = {t["function"]["name"]: t["function"] for t in model_tools.get_tool_definitions(
+                enabled_toolsets=sorted(toolsets_module.TOOLSETS), quiet_mode=True)}
+            schema = built.get(name, schema)
         (schemas / f"{name}.json").write_text(
             json.dumps(schema, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     import toolsets

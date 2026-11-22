@@ -120,9 +120,10 @@ impl Target {
             }
             return finished.commit(content, None);
         }
-        // Serialize approved writes in one directory across local CLI processes.
-        // The lock is held only during the write, never while waiting for approval.
-        self.parent.try_lock().map_err(|err| err.to_string())?;
+        // Serialize approved writes in one directory across local CLI processes and across
+        // subagents of this one. The lock is held only during the write, never while waiting
+        // for approval, so waiting for it is short.
+        self.parent.lock().map_err(|err| err.to_string())?;
         let current = Self::open(&self.root, &self.path)
             .map_err(|_| "The target directory changed while approval was pending".to_owned())?;
         let original_dir = self.parent.metadata().map_err(error)?;
@@ -243,4 +244,34 @@ fn open_file(parent: &File, name: &OsStr) -> rustix::io::Result<std::os::fd::Own
 
 fn error(err: impl std::fmt::Display) -> String {
     err.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn writers_in_one_directory_wait_for_each_other_instead_of_failing() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let handles: Vec<_> = (0..8)
+            .map(|index| {
+                let root = root.clone();
+                std::thread::spawn(move || {
+                    let target = Target::open(&root, &root.join(format!("f{index}.txt"))).unwrap();
+                    let before = target.inspect().unwrap();
+                    target.commit(&format!("content {index}"), before)
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap().unwrap();
+        }
+        for index in 0..8 {
+            assert_eq!(
+                std::fs::read_to_string(root.join(format!("f{index}.txt"))).unwrap(),
+                format!("content {index}")
+            );
+        }
+    }
 }

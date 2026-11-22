@@ -117,6 +117,11 @@ fn tracked_directory(session: &str) -> Option<PathBuf> {
     WORKING_DIRECTORIES.lock().ok()?.get(session).cloned()
 }
 
+/// Forget where a finished conversation (a subagent) left its working directory.
+pub(crate) fn forget_session(session: &str) {
+    track_directory(session, None);
+}
+
 fn track_directory(session: &str, path: Option<PathBuf>) {
     if let Ok(mut map) = WORKING_DIRECTORIES.lock() {
         match path {

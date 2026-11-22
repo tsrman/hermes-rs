@@ -21,6 +21,8 @@ BINARY = Path(os.environ.get("HERMES_TEST_BINARY", ROOT / "target/debug/hermes")
 
 
 class ToolTestCase(unittest.TestCase):
+    scenario = "local_tools"
+
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -28,7 +30,7 @@ class ToolTestCase(unittest.TestCase):
         self.profile = self.root / "profile"
         self.profile.mkdir()
         self.server = subprocess.Popen(
-            ["python3", str(ROOT / "compat/model_server.py"), "--scenario", "local_tools"],
+            ["python3", str(ROOT / "compat/model_server.py"), "--scenario", self.scenario],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         self.addCleanup(self.stop, self.server)
@@ -551,3 +553,65 @@ class UnattendedWorkTest(ToolTestCase):
         self.assertEqual(tool["name"], "terminal")
         self.assertNotIn(key, journal.read_text())
         self.assertEqual(oct(journal.stat().st_mode & 0o777), "0o600")
+
+
+@unittest.skipUnless(sys.platform == "linux", "requires Linux file approvals")
+class DelegationTest(ToolTestCase):
+    scenario = "delegate"
+
+    def delegate(self, *flags, config=""):
+        if config:
+            (self.profile / "config.yaml").write_text(self.config + config, encoding="utf-8")
+        journal = self.root / "journal.jsonl"
+        command = [str(BINARY), "chat", "--oneshot", "--debug-log", str(journal), "-q", "delegate", *flags]
+        run = subprocess.run(command, cwd=self.root, env=self.env, stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True, timeout=40)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        with urlopen(self.url + "/requests", timeout=4) as response:
+            requests = json.load(response)
+        events = [json.loads(line) for line in journal.read_text().splitlines()]
+        return run, requests, events
+
+    def test_children_run_in_isolation_and_their_summaries_come_back(self):
+        run, requests, events = self.delegate("--yolo")
+        children = [r for r in requests if r["messages"][0]["content"].startswith("You are a focused subagent")]
+        parents = [r for r in requests if r not in children]
+        self.assertGreaterEqual(len(children), 3)  # the mover needs two requests, the other one
+        names = {tool["function"]["name"] for tool in children[0]["tools"]}
+        self.assertIn("terminal", names)
+        for blocked in ("delegate_task", "clarify", "memory"):
+            self.assertNotIn(blocked, names)
+        self.assertIn("delegate_task", {t["function"]["name"] for t in parents[0]["tools"]})
+        first = next(c for c in children if "ctx A" in c["messages"][1]["content"])
+        self.assertEqual(first["messages"][1]["content"], "CONTEXT:\nctx A\n\nTASK:\nMOVE around the project")
+        # Only the goal and context reach a child: nothing of the parent's conversation.
+        for child in children:
+            self.assertEqual([m["role"] for m in child["messages"][:2]], ["system", "user"])
+            self.assertNotIn("delegate", [m.get("content") for m in child["messages"]])
+        result = json.loads(next(m for m in parents[1]["messages"] if m.get("role") == "tool")["content"])
+        self.assertEqual([r["status"] for r in result["results"]], ["completed", "completed"])
+        self.assertEqual([r["exit_reason"] for r in result["results"]], ["completed", "completed"])
+        self.assertEqual(result["results"][0]["summary"], "child-done:MOVE around th", result)
+        self.assertEqual(result["results"][0]["tool_trace"], [{"tool": "terminal", "status": "ok"}])
+        self.assertEqual(result["results"][1]["tool_trace"], [])
+        self.assertIn("total_duration_seconds", result)
+        # The child's `cd` did not move the parent.
+        pwd = json.loads(next(m for m in reversed(parents[-1]["messages"]) if m.get("role") == "tool")["content"])
+        self.assertEqual(pwd["cwd"], str(self.root))
+        self.assertTrue((self.root / "moved").is_dir())
+        # The journal tells children apart.
+        self.assertEqual({e.get("child") for e in events if e["event"] == "request"}, {None, 0, 1})
+
+    def test_a_child_cannot_be_asked_so_what_the_rules_leave_open_is_refused(self):
+        run, requests, events = self.delegate(config="  allow: ['pwd']\n")
+        move = next(e for e in events if e["event"] == "tool" and e.get("child") == 0)
+        self.assertEqual(json.loads(move["output"])["status"], "approval_denied")
+        self.assertFalse((self.root / "moved").exists())
+        # With subagent_auto_approve the same child goes ahead.
+        run, requests, events = self.delegate(config="  allow: ['pwd']\ndelegation:\n  subagent_auto_approve: true\n")
+        self.assertTrue((self.root / "moved").is_dir())
+
+    def test_the_one_shot_budget_refuses_a_third_child(self):
+        run, requests, events = self.delegate("--yolo", config="delegation:\n  oneshot_max_children: 1\n")
+        result = json.loads(next(m for m in requests[1]["messages"] if m.get("role") == "tool")["content"])
+        self.assertIn("Delegation budget for this one-shot run is exhausted (0/1", result["error"])

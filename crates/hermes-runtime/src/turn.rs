@@ -43,6 +43,45 @@ pub struct CompletedTurn {
     pub(crate) replayed_history: Vec<Value>,
     pub(crate) messages: Vec<Value>,
     pub(crate) compaction: Option<CompactedHistory>,
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
+}
+
+impl CompletedTurn {
+    /// Provider requests the turn made: one per assistant message.
+    pub(crate) fn assistant_messages(&self) -> usize {
+        self.messages
+            .iter()
+            .filter(|message| message["role"] == "assistant")
+            .count()
+    }
+
+    /// Tokens the provider reported for the turn.
+    pub(crate) fn usage(&self) -> (u64, u64) {
+        (self.input_tokens, self.output_tokens)
+    }
+
+    /// The text of the last assistant message.
+    pub(crate) fn final_text(&self) -> String {
+        self.messages
+            .iter()
+            .rev()
+            .find(|message| message["role"] == "assistant")
+            .and_then(|message| message["content"].as_str())
+            .unwrap_or("")
+            .to_owned()
+    }
+
+    /// The conversation so far, to continue it with another turn.
+    pub(crate) fn into_history(self) -> TurnHistory {
+        let mut messages = self.replayed_history;
+        messages.extend(self.messages);
+        TurnHistory {
+            system_prompt: Some(self.system_prompt),
+            messages,
+            ..TurnHistory::default()
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -241,6 +280,12 @@ pub struct TurnOptions<'a> {
     pub tools: &'a ToolPolicy,
     /// Where to record what the turn sent, received and ran, when asked.
     pub journal: Option<&'a crate::journal::Journal>,
+    /// Subagents: offered when set, and what a run may spend on them.
+    pub delegation: Option<&'a crate::delegation::Delegation>,
+    /// A subagent's own system prompt, used as is.
+    pub system_prompt_override: Option<&'a str>,
+    /// The index of the subagent this turn is, when it is one.
+    pub child: Option<usize>,
 }
 
 impl TurnOptions<'_> {
@@ -271,7 +316,10 @@ where
     // The task list lives in the history, so resuming a session keeps it.
     let mut todo = TodoStore::from_history(&history.messages);
     let saved_prompt = history.system_prompt.as_deref();
-    let mut system_prompt = primary.system_prompt(saved_prompt);
+    let mut system_prompt = match options.system_prompt_override {
+        Some(prompt) => prompt.to_owned(),
+        None => primary.system_prompt(saved_prompt),
+    };
     let (mut messages, original) = match &history.compaction {
         Some(compaction) => (compaction.replay(&history.messages), Some(history.messages)),
         None => (history.messages, None),
@@ -289,6 +337,7 @@ where
     tools::sort_by_name(&mut tools);
     tools::append_bridge(&env, &mut tools);
     let mut memory_turn = MemoryTurn::default();
+    let mut usage = (0u64, 0u64);
     let mut approve_dyn =
         |request: ApprovalRequest| -> tools::BoxFuture<'static, ApprovalDecision> {
             Box::pin(approve(request))
@@ -299,7 +348,7 @@ where
         let result = loop {
             let request = chat_request(&route.model, &messages, &tools);
             if let Some(journal) = options.journal {
-                journal.record("request", json!({"body": request}));
+                journal.record_for(options.child, "request", json!({"body": request}));
             }
             let mut emitted_text = false;
             let result = route
@@ -311,8 +360,13 @@ where
                 .await;
             match result {
                 Ok(result) => {
+                    if let Some(reported) = result.usage {
+                        usage.0 += reported.input_tokens;
+                        usage.1 += reported.output_tokens;
+                    }
                     if let Some(journal) = options.journal {
-                        journal.record(
+                        journal.record_for(
+                            options.child,
                             "response",
                             json!({
                                 "content": result.content,
@@ -331,7 +385,11 @@ where
                 }
                 Err(error) => {
                     if let Some(journal) = options.journal {
-                        journal.record("provider_error", json!({"error": format!("{error:?}")}));
+                        journal.record_for(
+                            options.child,
+                            "provider_error",
+                            json!({"error": format!("{error:?}")}),
+                        );
                     }
                     if emitted_text || !error.allows_fallback() {
                         return Err(TurnError::Provider(error));
@@ -340,7 +398,9 @@ where
                         return Err(TurnError::Provider(error));
                     };
                     route = next;
-                    system_prompt = route.system_prompt(saved_prompt);
+                    if options.system_prompt_override.is_none() {
+                        system_prompt = route.system_prompt(saved_prompt);
+                    }
                     messages[0] = json!({"role": "system", "content": system_prompt});
                     on_event(TurnEvent::Fallback(&route.model));
                 }
@@ -357,6 +417,8 @@ where
                     replayed_history: original.unwrap_or(messages),
                     messages: appended,
                     compaction: history.compaction,
+                    input_tokens: usage.0,
+                    output_tokens: usage.1,
                 }));
             }
             Some("tool_calls") if !result.tool_calls.is_empty() => {}
@@ -414,6 +476,8 @@ where
                     memory_turn: &mut memory_turn,
                     todo: &mut todo,
                     approve: &mut approve_dyn,
+                    route,
+                    fallbacks,
                 };
                 tool.call(&mut context, &arguments).await
             } else {
@@ -432,7 +496,8 @@ where
                 && structured["success"].as_bool() != Some(false)
                 && (name != TERMINAL || structured["exit_code"].as_i64() == Some(0));
             if let Some(journal) = options.journal {
-                journal.record(
+                journal.record_for(
+                    options.child,
                     "tool",
                     json!({
                         "id": call.id, "name": name, "via": call.name, "arguments": arguments,

@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 
 use crate::browser_cdp::{self, BrowserSettings, BROWSER_CDP};
 use crate::clarify::{self, CLARIFY};
+use crate::delegation::{self, DELEGATE_TASK};
 use crate::file_tools::{
     patch_schema, search_schema, write_schema, FileWorkspace, PATCH, SEARCH_FILES, WRITE_FILE,
 };
@@ -41,6 +42,8 @@ pub(crate) const READ_FILE: &str = "read_file";
 pub(crate) struct ToolEnv {
     pub write_files: bool,
     pub terminal: bool,
+    /// The most subagents one call may start, when this turn may delegate.
+    pub delegation: Option<usize>,
     pub has_profile: bool,
     pub web: Option<WebSettings>,
     pub browser: Option<BrowserSettings>,
@@ -58,6 +61,10 @@ impl ToolEnv {
         Self {
             write_files: options.can_write_files(),
             terminal: options.can_run_terminal(),
+            delegation: options
+                .delegation
+                .filter(|_| options.child.is_none())
+                .map(|delegation| delegation.settings.max_concurrent_children),
             has_profile: options.profile.is_some(),
             web: options.web.cloned(),
             browser: options.browser.cloned(),
@@ -77,6 +84,9 @@ pub(crate) struct ToolContext<'c, 'w> {
     pub memory_turn: &'c mut MemoryTurn,
     pub todo: &'c mut TodoStore,
     pub approve: &'c mut Approver<'c>,
+    /// The model this turn is talking to, which a subagent talks to as well.
+    pub route: &'c crate::turn::ModelRoute,
+    pub fallbacks: &'c [crate::turn::ModelRoute],
 }
 
 type Call = for<'a, 'b, 'w> fn(&'a mut ToolContext<'b, 'w>, &'a str) -> BoxFuture<'a, Value>;
@@ -337,6 +347,11 @@ static TOOLS: &[ToolDef] = &[
         call: clarify_call,
     },
     ToolDef {
+        name: DELEGATE_TASK,
+        offered: |env| env.delegation.map(delegation::schema),
+        call: delegation::call,
+    },
+    ToolDef {
         name: MEMORY,
         offered: |env| memory_available(env).map(|_| memory_tool::schema()),
         call: memory_call,
@@ -525,6 +540,7 @@ mod tests {
         let env = ToolEnv {
             write_files: true,
             terminal: true,
+            delegation: Some(10),
             has_profile: true,
             skills_indexed: true,
             skill_desc_limit: 0,
@@ -548,10 +564,11 @@ mod tests {
             .filter(|name| ours.contains(name))
             .collect();
         assert_eq!(ours, reference);
-        assert_eq!(ours.len(), 12);
+        assert_eq!(ours.len(), 13);
         // These tools carry the reference's schema verbatim; the rest are still hand-written.
         let verbatim = [
             "clarify",
+            "delegate_task",
             "memory",
             "patch",
             "search_files",

@@ -40,6 +40,9 @@ pub struct ToolPolicy {
     /// How the bridge searches and lists the deferred tools.
     #[serde(default)]
     search: SearchSettings,
+    /// Tools withheld whatever the toolsets say (a subagent's blocked tools).
+    #[serde(default)]
+    denied: BTreeSet<String>,
 }
 
 /// `tools.tool_search`'s limits and listing, clamped as the reference clamps them.
@@ -120,6 +123,7 @@ impl ToolPolicy {
             allowed: None,
             deferred: BTreeSet::new(),
             search: SearchSettings::default(),
+            denied: BTreeSet::new(),
         }
     }
 
@@ -183,6 +187,7 @@ impl ToolPolicy {
             allowed: Some(allowed),
             deferred: deferred_tools(config),
             search: SearchSettings::from_config(config),
+            denied: BTreeSet::new(),
         }
     }
 
@@ -203,10 +208,20 @@ impl ToolPolicy {
         }
     }
 
+    /// A copy without `tools`: offered to nobody, callable by nobody, bridge included.
+    pub(crate) fn without_tools(&self, tools: &[&str]) -> Self {
+        let mut copy = self.clone();
+        copy.denied
+            .extend(tools.iter().map(|tool| (*tool).to_owned()));
+        copy
+    }
+
     pub fn allows(&self, tool: &str) -> bool {
-        self.allowed
-            .as_ref()
-            .is_none_or(|allowed| allowed.contains(tool))
+        !self.denied.contains(tool)
+            && self
+                .allowed
+                .as_ref()
+                .is_none_or(|allowed| allowed.contains(tool))
     }
 
     /// The skills index is built only when a skills tool is enabled.

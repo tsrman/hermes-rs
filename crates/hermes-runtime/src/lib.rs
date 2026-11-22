@@ -5,6 +5,7 @@ mod clarify;
 mod compaction;
 pub mod config;
 pub mod cron;
+pub mod delegation;
 mod difflib;
 mod file_tools;
 mod fuzzy;

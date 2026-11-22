@@ -49,6 +49,14 @@ impl Journal {
         })
     }
 
+    /// Write one event of subagent number `child`, or of the main conversation.
+    pub fn record_for(&self, child: Option<usize>, event: &str, mut fields: Value) {
+        if let (Some(child), Some(map)) = (child, fields.as_object_mut()) {
+            map.insert("child".into(), Value::from(child));
+        }
+        self.record(event, fields);
+    }
+
     /// Write one event. A failed write is ignored: the journal must never break a run.
     pub fn record(&self, event: &str, mut fields: Value) {
         let at = SystemTime::now()

@@ -12,19 +12,15 @@ pub fn available() -> bool {
     }
 }
 
-use std::sync::OnceLock;
-
-use hermes_runtime::approval_policy::{ApprovalPolicy, ApprovalSettings, Verdict};
-
-static POLICY: OnceLock<ApprovalPolicy> = OnceLock::new();
+use hermes_runtime::approval_policy::{self, ApprovalSettings, Verdict};
 
 /// Set the rules that decide before the person is asked. The first call wins.
 pub fn install(settings: ApprovalSettings) {
-    let _ = POLICY.set(ApprovalPolicy::new(settings));
+    approval_policy::install(settings);
 }
 
 pub async fn prompt(request: ApprovalRequest) -> ApprovalDecision {
-    if let Some(policy) = POLICY.get() {
+    if let Some(policy) = approval_policy::installed() {
         match policy.decide(&request) {
             Verdict::Allow => return ApprovalDecision::Approved,
             Verdict::Deny => return ApprovalDecision::Denied,
@@ -33,7 +29,7 @@ pub async fn prompt(request: ApprovalRequest) -> ApprovalDecision {
     }
     let (decision, always) = ask_person(&request).await;
     if always && matches!(decision, ApprovalDecision::Approved) {
-        if let Some(policy) = POLICY.get() {
+        if let Some(policy) = approval_policy::installed() {
             policy.remember(&request);
         }
     }

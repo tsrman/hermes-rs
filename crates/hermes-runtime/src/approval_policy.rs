@@ -85,6 +85,18 @@ struct Grants {
     commands: HashSet<String>,
 }
 
+static GLOBAL: std::sync::OnceLock<ApprovalPolicy> = std::sync::OnceLock::new();
+
+/// Set the rules this process applies to every approval, subagents included. The first call wins.
+pub fn install(settings: ApprovalSettings) {
+    let _ = GLOBAL.set(ApprovalPolicy::new(settings));
+}
+
+/// The installed rules, if any.
+pub fn installed() -> Option<&'static ApprovalPolicy> {
+    GLOBAL.get()
+}
+
 pub struct ApprovalPolicy {
     settings: ApprovalSettings,
     grants: Mutex<Grants>,

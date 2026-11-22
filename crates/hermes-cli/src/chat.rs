@@ -70,6 +70,10 @@ pub struct ChatRequest {
     #[serde(default)]
     approvals: hermes_runtime::approval_policy::ApprovalSettings,
     #[serde(default)]
+    delegation: hermes_runtime::delegation::DelegationSettings,
+    #[serde(default)]
+    oneshot: bool,
+    #[serde(default)]
     approval_timeout_secs: Option<u32>,
     #[serde(default)]
     terminal_local: bool,
@@ -192,6 +196,8 @@ pub fn prepare(home: Option<&Path>, args: ChatArgs) -> Result<ChatRequest, Strin
         prompt: settings.prompt,
         compression: settings.compression,
         debug_log: args.debug_log.clone(),
+        delegation: settings.delegation.clone(),
+        oneshot: args.oneshot,
         approvals: {
             let mut approvals = settings.approvals.clone();
             approvals.approve_all |= args.yolo;
@@ -284,8 +290,13 @@ where
         Some(path) => Some(hermes_runtime::journal::Journal::open(Path::new(path))?),
         None => None,
     };
+    let delegation =
+        hermes_runtime::delegation::Delegation::new(request.delegation.clone(), request.oneshot);
     let options = TurnOptions {
         journal: journal.as_ref(),
+        delegation: Some(&delegation),
+        system_prompt_override: None,
+        child: None,
         mcp: Some(&mcp),
         web: Some(&request.web),
         browser: Some(&request.browser),
