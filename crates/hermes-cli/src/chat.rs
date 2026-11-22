@@ -327,6 +327,12 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         .or(settings.api_key.clone())
         .or(vendor_api_key)
         .filter(|value| !value.is_empty())
+        // A custom endpoint may be a local server that wants no key; the reference sends this
+        // placeholder there, and the endpoint's own 401 is the answer if it does want one.
+        .or_else(|| {
+            hermes_runtime::config::ChatSettings::keyless_endpoint(settings.provider)
+                .then(|| "no-key-required".to_owned())
+        })
         .ok_or(format!("API key is required. {SETUP_HINT}"))?;
     if let Some(model) = args.model.as_deref().or(settings.model.as_deref()) {
         // The reference's order after `model.context_length`: an explicit `model_overrides`

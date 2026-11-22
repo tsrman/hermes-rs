@@ -422,6 +422,28 @@ class CliTest(unittest.TestCase):
         self.assertTrue(authorizations)
         self.assertEqual(set(authorizations), {"Bearer nv-secret"})
 
+    def test_a_custom_endpoint_without_a_key_sends_the_reference_placeholder(self):
+        home = self.workdir / "hermes"
+        home.mkdir(exist_ok=True)
+        # camelCase keys of a provider entry map onto the snake_case ones, as in the reference.
+        (home / "config.yaml").write_text(
+            f"model:\n  default: primary\n  provider: local\nproviders:\n  local:\n    baseUrl: {self.base}/v1\n",
+            encoding="utf-8")
+        env = {"PATH": os.environ.get("PATH", ""), "HERMES_HOME": str(home)}
+        result = subprocess.run([str(BINARY), "chat", "-q", "hello"], cwd=self.workdir, env=env,
+                                capture_output=True, text=True, timeout=45)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "Ответ модели\n")
+        with urlopen(self.base + "/authorizations", timeout=5) as response:
+            authorizations = json.load(response)
+        self.assertEqual(set(authorizations), {"Bearer no-key-required"})
+        # A vendor provider still stops without a key.
+        (home / "config.yaml").write_text("model:\n  default: primary\n  provider: openai\n", encoding="utf-8")
+        refused = subprocess.run([str(BINARY), "chat", "-q", "hello", "--base-url", f"{self.base}/v1"],
+                                 cwd=self.workdir, env=env, capture_output=True, text=True, timeout=45)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("API key is required", refused.stderr)
+
     def test_todo_list_is_hidden_by_default_and_survives_a_resume(self):
         hidden, recorded = self.chat_with_profile(query="read")
         self.assertEqual(hidden.returncode, 0, hidden.stderr)
@@ -1109,13 +1131,17 @@ class CliTest(unittest.TestCase):
         env = {"PATH": os.environ.get("PATH", ""), "HERMES_HOME": str(home)}
         result = subprocess.run([str(BINARY), "chat", "-q", "test"], cwd=self.workdir,
                                 env=env, capture_output=True, text=True, timeout=45)
-        self.assertNotEqual(result.returncode, 0)
-        with urlopen(self.base + "/requests", timeout=5) as response:
-            self.assertEqual(json.load(response), [])
+        # The key belongs to another URL, so it is never sent here; a custom endpoint then gets the
+        # reference's keyless placeholder instead.
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with urlopen(self.base + "/authorizations", timeout=5) as response:
+            self.assertEqual(set(json.load(response)), {"Bearer no-key-required"})
         (home / ".env").write_text(f"OPENAI_API_KEY=secret\nOPENAI_BASE_URL={self.base}/v1\n", encoding="utf-8")
         result = subprocess.run([str(BINARY), "chat", "-q", "test"], cwd=self.workdir,
                                 env=env, capture_output=True, text=True, timeout=45)
         self.assertEqual(result.returncode, 0, result.stderr)
+        with urlopen(self.base + "/authorizations", timeout=5) as response:
+            self.assertIn("Bearer secret", set(json.load(response)))
 
     def test_active_profile_and_command_line_model_override(self):
         home = self.workdir / "hermes"

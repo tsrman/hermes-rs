@@ -252,6 +252,12 @@ impl ChatSettings {
     }
 
     /// The vendor key allowed for `base_url`, chosen by provider name.
+    /// Custom endpoints and named providers may run without a key (local servers): the reference
+    /// sends the placeholder `no-key-required` there. Vendor providers need a real one.
+    pub fn keyless_endpoint(provider: &str) -> bool {
+        !matches!(provider, "openai" | "anthropic") && profiles::lookup(provider).is_none()
+    }
+
     pub fn vendor_key_for(&self, provider: &str, base_url: &str) -> Option<String> {
         match provider {
             "openai" => self.openai_key_for(base_url),
@@ -984,7 +990,55 @@ fn custom_providers(config: &serde_yaml::Value) -> Vec<CustomProvider> {
         .collect()
 }
 
+/// camelCase spellings the reference maps onto the snake_case keys of a provider entry when the
+/// snake_case one is absent (`providers.<name>.baseUrl` and friends).
+const CAMEL_ALIASES: [(&str, &str); 9] = [
+    ("apiKey", "api_key"),
+    ("baseUrl", "base_url"),
+    ("apiMode", "api_mode"),
+    ("keyEnv", "key_env"),
+    ("apiKeyEnv", "key_env"),
+    ("defaultModel", "default_model"),
+    ("contextLength", "context_length"),
+    ("rateLimitDelay", "rate_limit_delay"),
+    ("sessionAffinityHeader", "session_affinity_header"),
+];
+
+fn with_snake_case_keys(entry: &serde_yaml::Value) -> serde_yaml::Value {
+    let mut entry = entry.clone();
+    if let Some(map) = entry.as_mapping_mut() {
+        for (camel, snake) in CAMEL_ALIASES {
+            if map.contains_key(camel) && !map.contains_key(snake) {
+                if let Some(value) = map.get(camel).cloned() {
+                    map.insert(snake.into(), value);
+                }
+            }
+        }
+    }
+    entry
+}
+
+/// `is_provider_enabled`: absent means enabled; a string is enabled unless it is one of the false
+/// words; anything else follows Python truthiness (so `0` and an empty value disable the entry).
+fn provider_enabled(flag: Option<&serde_yaml::Value>) -> bool {
+    use serde_yaml::Value;
+    match flag {
+        None => true,
+        Some(Value::Bool(on)) => *on,
+        Some(Value::String(word)) => !matches!(
+            word.trim().to_lowercase().as_str(),
+            "false" | "0" | "no" | "off"
+        ),
+        Some(Value::Null) => false,
+        Some(Value::Number(number)) => number.as_f64().is_none_or(|n| n != 0.0),
+        Some(Value::Sequence(items)) => !items.is_empty(),
+        Some(Value::Mapping(map)) => !map.is_empty(),
+        Some(Value::Tagged(_)) => true,
+    }
+}
+
 fn custom_provider(key: Option<&str>, entry: &serde_yaml::Value) -> Option<CustomProvider> {
+    let entry = &with_snake_case_keys(entry);
     let text = |names: &[&str]| {
         names.iter().find_map(|name| {
             entry
@@ -998,17 +1052,7 @@ fn custom_provider(key: Option<&str>, entry: &serde_yaml::Value) -> Option<Custo
     // A provider needs a name, from the entry or its key.
     let key = key.map(str::trim).filter(|key| !key.is_empty());
     let name = text(&["name"]).or(key)?;
-    let enabled = match entry.get("enabled") {
-        Some(flag) => flag.as_bool().unwrap_or_else(|| {
-            !flag.as_str().is_some_and(|word| {
-                matches!(
-                    word.trim().to_lowercase().as_str(),
-                    "false" | "0" | "no" | "off"
-                )
-            })
-        }),
-        None => true,
-    };
+    let enabled = provider_enabled(entry.get("enabled"));
     let extra_body = entry
         .get("extra_body")
         .and_then(|body| serde_json::to_value(body).ok())
@@ -1266,6 +1310,54 @@ mod custom_provider_tests {
 
     fn entries(yaml: &str) -> Vec<CustomProvider> {
         custom_providers(&serde_yaml::from_str(yaml).unwrap())
+    }
+
+    #[test]
+    fn provider_entries_accept_camel_case_keys_and_python_truthiness_for_enabled() {
+        let parse = |text: &str| -> Option<CustomProvider> {
+            let entry: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
+            custom_provider(Some("p"), &entry)
+        };
+        let camel = parse(
+            "{baseUrl: 'https://x/v1', apiKey: k, apiMode: codex_responses, defaultModel: m, keyEnv: E}",
+        )
+        .unwrap();
+        assert_eq!(camel.base_url, "https://x/v1");
+        assert_eq!(camel.api_key.as_deref(), Some("k"));
+        assert_eq!(camel.model, "m");
+        assert_eq!(camel.key_env.as_deref(), Some("E"));
+        assert!(camel.api_mode.is_some());
+        // The snake_case key wins when both are present.
+        let both = parse("{base_url: 'https://a/v1', baseUrl: 'https://b/v1'}").unwrap();
+        assert_eq!(both.base_url, "https://a/v1");
+        for (flag, want) in [
+            ("true", true),
+            ("false", false),
+            ("'false'", false),
+            ("'No'", false),
+            ("'off'", false),
+            ("'0'", false),
+            ("'yes'", true),
+            ("0", false),
+            ("1", true),
+            ("null", false),
+            ("[]", false),
+            ("[a]", true),
+        ] {
+            let entry = parse(&format!("{{base_url: 'https://x/v1', enabled: {flag}}}")).unwrap();
+            assert_eq!(entry.enabled, want, "enabled: {flag}");
+        }
+        assert!(parse("{base_url: 'https://x/v1'}").unwrap().enabled);
+    }
+
+    #[test]
+    fn only_custom_endpoints_may_run_without_a_key() {
+        for custom in ["custom", "llm-api", "local"] {
+            assert!(ChatSettings::keyless_endpoint(custom), "{custom}");
+        }
+        for vendor in ["openai", "anthropic", "novita"] {
+            assert!(!ChatSettings::keyless_endpoint(vendor), "{vendor}");
+        }
     }
 
     #[test]

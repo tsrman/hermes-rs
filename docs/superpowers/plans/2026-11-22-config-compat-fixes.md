@@ -113,7 +113,25 @@ sections, `display.*` (the port prints plain text), `plugins`, `hooks`, `vault`/
 `computer_use`, `proxy`, `desktop`, `monitoring`, `updates`, `onboarding`, `local_runtime`, `bedrock`,
 `vertex`, `nous`. If a future port step adds one of these features, its config keys come with it.
 
-## Validation behaviour
+## Validation behaviour (recorded 2026-11-22, partly done)
+
+Reference behaviour recorded with `~/ref/hermes-reference-venv` (Python 3.14, the reference's direct
+dependencies; `uv` installed it) over 26 malformed shapes, and compared with the port:
+
+| Input | Reference | Port now |
+|---|---|---|
+| `enabled: 'false'` / `'no'` / `0` / empty | provider disabled (string false words, else Python truthiness) | same (done) |
+| `baseUrl`, `apiKey`, `apiMode`, `keyEnv`, `apiKeyEnv`, `defaultModel`, `contextLength` in a provider entry | mapped to the snake_case key when it is absent, with a log warning | mapped (done; no warning printed) |
+| `provider: custom` with a base URL and no key | request carries the placeholder `no-key-required` (keyless local servers) | same (done); vendor providers still stop with "API key is required" |
+| `providers:` a list or string, `custom_providers:` a string, `approvals:` a list, `compression:` a string, `agent:` null, unknown top-level keys | ignored, the run goes on | same |
+| `providers.<name>: 'https://…'` (entry not a mapping), `custom:<name>` not defined | error: unknown provider | same (an error) |
+| `model:` a string or null or a list | no usable provider: error | error |
+| `base_url: 5` | crashes (`AttributeError`) | error "model base URL is required" |
+| `extra_body: [1]` | ignored | ignored |
+| config file not valid YAML, tabs, or not a mapping | **runs on default settings** with a warning and saves a copy of the broken file | **refuses with an error, on purpose** |
+
+The last row stays different: silently dropping `approvals.deny`, `command_allowlist` and the provider
+settings on a typo is a worse failure than a refusal, and the message names the file.
 
 The reference merges `DEFAULT_CONFIG` under the user's file, migrates old shapes (`_config_version`),
 warns about unknown or camelCase provider keys, and tolerates malformed `custom_providers` (skips the
