@@ -2,9 +2,8 @@
 //! `_iter_dangerous_descriptions` of `approval_detection.py`). Pattern rows come from
 //! `dangerous_tables`, generated from the reference.
 //!
-//! Not ported: the macOS `osascript` classifier (`approval_applescript.py`) and the
-//! `cron.lifecycle_guard` splice check (`_is_shell_token_spliced_gateway_lifecycle`); a command that
-//! only those would flag is judged by the other rules here. The reference's lazy generator is
+//! Not ported: the `cron.lifecycle_guard` splice check (`_is_shell_token_spliced_gateway_lifecycle`); a
+//! command that only that would flag is judged by the other rules here. The reference's lazy generator is
 //! driven to the first match for the verdict; variants are collected up front.
 
 use std::sync::LazyLock;
@@ -27,7 +26,8 @@ use super::hardline::{
 use super::matchers::{
     char_at, dev_socket_redirect, download_then_run, pipe_remote_to_shell, wmic_shadow_delete,
 };
-use super::normalize::{lower_preserving_flags, normalize_command_for_detection, HomeEnv};
+use super::normalize::{lower_preserving_flags, nfkc, normalize_command_for_detection, HomeEnv};
+use super::osascript::classify_osascript;
 use super::py_isspace;
 use super::shell_words::{
     deobfuscate_shell_word_for_detection, read_shell_word, shlex_split, skip_shell_whitespace,
@@ -313,6 +313,12 @@ fn scan(
     if is_verification_artifact_cleanup(command) {
         return Ok(found);
     }
+    if only.is_none() {
+        // First, on the raw command: the osascript findings lead (they are asked about every time).
+        for description in classify_osascript(&nfkc(&command.replace('\0', "")))? {
+            emit!(description);
+        }
+    }
     let rules: Vec<&Rule> = RULES
         .iter()
         .filter(|r| only.is_none_or(|o| o.contains(&r.description)))
@@ -460,6 +466,12 @@ pub fn detect_content_rule_keys(command: &str, env: &HomeEnv) -> Vec<String> {
             Vec::new()
         }
     }
+}
+
+/// Findings a person answers for one command only: no session or "always" answer covers them (the
+/// reference's `SMART_MANUAL_ONLY_DESCRIPTIONS`, here without the guardian they are kept from).
+pub fn is_manual_only(key: &str) -> bool {
+    key == super::osascript::RISKY_DESCRIPTION || key == super::osascript::OPAQUE_DESCRIPTION
 }
 
 /// All approval keys for a pattern: its description plus the historical regex-derived key that

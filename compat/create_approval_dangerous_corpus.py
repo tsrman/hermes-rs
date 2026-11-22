@@ -3,9 +3,8 @@
 
 Usage: create_approval_dangerous_corpus.py <reference checkout> <output.json>
 
-Strings only: nothing is executed. The two features the Rust port does not carry yet (the macOS
-`osascript` classifier and the `cron.lifecycle_guard` splice check) are switched off in the
-reference here, so every row compares like with like. Rows: `{"command", "dangerous": [bool, key],
+Strings only: nothing is executed. The one feature the Rust port does not carry yet (the `cron.lifecycle_guard`
+splice check) is switched off in the reference here, so every row compares like with like. Rows: `{"command", "dangerous": [bool, key],
 "content": [keys]}` for the corpus commands of the earlier scripts plus the targeted list below.
 """
 
@@ -75,6 +74,8 @@ DANGEROUS = [
     "echo \u200b ls", "echo a\u202eb", "echo a\u2060b", "echo \ufeff", "echo \U0001F468\u200d\U0001F469", "echo a\ufe0f", "echo 1\ufe0f", "echo \u00a9\ufe0f", "echo a\u200d",
     "cat ~/.ssh/id_rsa", "cat .env", "cat /etc/shadow", "echo $OPENAI_API_KEY", "env", "printenv",
     "rm /tmp/hermes-verify-abc", "rm -f /tmp/hermes-verify-abc", "rm -f /tmp/hermes-ad-hoc-x.py", "rm -f /tmp/other", "rm -f /tmp/hermes-verify-abc /tmp/x", "rm -f /tmp/../hermes-verify-abc",
+    "osascript -e 'get name of first application process whose frontmost is true'", "osascript -e 'quit'", "osascript script.scpt", "osascript -l JavaScript -e x",
+    "osascript -e 'tell app \"X\" to close every window saving no'; rm -rf build", "sh -c 'osascript -e quit'", "osascript <<'EOF'\nquit\nEOF", "osascript <<EOF\nget $x\nEOF", "echo osascript",
     "echo hi", "ls -la", "pwd", "git status", "git diff", "cargo build", "python script.py", "make test", "cat README.md", "grep -rn foo src", "ls; echo done", "a && b || c",
 ]
 
@@ -85,7 +86,6 @@ def main():
     sys.path.insert(0, str(Path(sys.argv[1]).resolve()))
     from tools import approval_detection as d  # noqa: E402
 
-    d.classify_osascript = lambda command: []
     d._is_shell_token_spliced_gateway_lifecycle = lambda command: False
 
     commands = [c for rows in CORPUS.values() for c in rows]

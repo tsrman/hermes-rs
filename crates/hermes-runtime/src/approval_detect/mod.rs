@@ -31,6 +31,7 @@ pub mod hardline;
 mod hardline_tables;
 pub mod matchers;
 pub mod normalize;
+pub mod osascript;
 pub mod patterns;
 pub mod shell_heredoc;
 pub mod shell_scan;

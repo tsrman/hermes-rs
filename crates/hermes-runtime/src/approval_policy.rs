@@ -21,7 +21,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::approval_detect::dangerous::{
-    approval_key_aliases, dangerous_keys, fnmatchcase, SCAN_INCOMPLETE_DESCRIPTION,
+    approval_key_aliases, dangerous_keys, fnmatchcase, is_manual_only, SCAN_INCOMPLETE_DESCRIPTION,
 };
 use crate::approval_detect::hardline::{
     check_sudo_stdin_guard, detect_hardline_command, HardlineVerdict,
@@ -361,7 +361,7 @@ impl ApprovalPolicy {
     /// Whether a session or permanent answer covers this finding. A scan-incomplete finding is
     /// never covered: it is asked every time.
     fn covered(&self, key: &str, grants: &Grants) -> bool {
-        if key == SCAN_INCOMPLETE_DESCRIPTION {
+        if key == SCAN_INCOMPLETE_DESCRIPTION || is_manual_only(key) {
             return false;
         }
         let aliases = approval_key_aliases(key);
@@ -466,7 +466,7 @@ impl ApprovalPolicy {
         let env = HomeEnv::from_process();
         self.findings(command, &env)
             .into_iter()
-            .filter(|key| key != SCAN_INCOMPLETE_DESCRIPTION)
+            .filter(|key| key != SCAN_INCOMPLETE_DESCRIPTION && !is_manual_only(key))
             .collect()
     }
 
@@ -771,6 +771,22 @@ mod tests {
             ..ApprovalSettings::default()
         });
         assert_eq!(yolo.decide(&code), Verdict::Allow);
+    }
+
+    #[test]
+    fn an_osascript_finding_is_answered_for_that_command_only() {
+        let policy = ApprovalPolicy::new(ApprovalSettings::default());
+        let quit = command("osascript -e 'tell application \"Notes\" to quit'");
+        assert_eq!(policy.decide(&quit), Verdict::Ask);
+        policy.remember(&quit);
+        assert_eq!(policy.decide(&quit), Verdict::Ask);
+        let (keys, _) = policy.remember_always(&quit);
+        assert!(keys.is_empty(), "{keys:?}");
+        assert_eq!(policy.decide(&quit), Verdict::Ask);
+        assert_eq!(
+            policy.decide(&command("osascript -e 'get the name of every disk'")),
+            Verdict::Allow
+        );
     }
 
     #[test]
