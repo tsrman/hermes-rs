@@ -1,6 +1,7 @@
 import json
 import os
 import select
+import sqlite3
 import signal
 import subprocess
 import sys
@@ -515,6 +516,15 @@ class UnattendedWorkTest(ToolTestCase):
         self.assertIn("... [OUTPUT TRUNCATED - 900 chars omitted out of 1,000 total] ...", result["output"])
         self.assertEqual(result["output"].count("x"), 100)
 
+    def test_terminal_timeout_sets_the_default_foreground_timeout(self):
+        result, _ = self.run_tool("terminal", {"command": "sleep 5"}, "--yolo",
+                                  config="terminal:\n  timeout: 1\n")
+        self.assertEqual(result["status"], "timeout", result)
+        # A call's own timeout still wins.
+        quick, _ = self.run_tool("terminal", {"command": "sleep 2; echo done", "timeout": 10}, "--yolo",
+                                 config="terminal:\n  timeout: 1\n")
+        self.assertEqual(quick["output"], "done\n", quick)
+
     def test_yolo_approves_work_without_a_terminal_and_the_deny_list_still_blocks(self):
         result, _ = self.run_tool(
             "write_file", {"path": "made/by/yolo.txt", "content": "hello"}, "--yolo")
@@ -810,3 +820,44 @@ class CustomEndpointConfigTest(ToolTestCase):
         self.assertEqual(seen["authorization"], "Bearer sk-key")
         self.assertNotIn("secret-token", journal.read_text(encoding="utf-8"))
         self.assertNotIn("secret-token", run.stdout + run.stderr)
+
+
+class PrefillMessagesTest(ToolTestCase):
+    scenario = "text"
+
+    def ask(self, config, prefill=None, raw=None):
+        if prefill is not None or raw is not None:
+            (self.profile / "prefill.json").write_text(
+                raw if raw is not None else json.dumps(prefill), encoding="utf-8")
+        (self.profile / "config.yaml").write_text(self.config + config, encoding="utf-8")
+        run = subprocess.run([str(BINARY), "chat", "--oneshot", "--save-session", "-q", "real question"],
+                             cwd=self.root, env=self.env, stdin=subprocess.DEVNULL, capture_output=True,
+                             text=True, timeout=30)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        with urlopen(self.url + "/requests", timeout=4) as response:
+            return json.load(response)[-1]["messages"], run
+
+    def test_prefill_messages_follow_the_system_prompt_and_are_not_saved(self):
+        examples = [{"role": "user", "content": "example question"},
+                    {"role": "assistant", "content": "example answer"}]
+        messages, _ = self.ask("prefill_messages_file: prefill.json\n", prefill=examples)
+        self.assertEqual([m["role"] for m in messages], ["system", "user", "assistant", "user"])
+        self.assertEqual(messages[1:3], examples)
+        self.assertEqual(messages[3]["content"], "real question")
+        with sqlite3.connect(self.profile / "state.db") as db:
+            contents = [row[0] for row in db.execute("SELECT content FROM messages ORDER BY id")]
+        self.assertNotIn("example question", contents)
+        self.assertIn("real question", contents)
+
+    def test_the_environment_names_the_file_first_and_problems_only_warn(self):
+        messages, run = self.ask("prefill_messages_file: missing.json\n")
+        self.assertEqual([m["role"] for m in messages], ["system", "user"])
+        self.assertIn("Prefill messages file not found", run.stderr)
+        self.env["HERMES_PREFILL_MESSAGES_FILE"] = str(self.profile / "other.json")
+        (self.profile / "other.json").write_text('[{"role": "user", "content": "from env"}]')
+        messages, _ = self.ask("prefill_messages_file: missing.json\n")
+        self.assertEqual(messages[1]["content"], "from env")
+        del self.env["HERMES_PREFILL_MESSAGES_FILE"]
+        messages, run = self.ask("agent:\n  prefill_messages_file: prefill.json\n", raw='{"not": "a list"}')
+        self.assertEqual(len(messages), 2)
+        self.assertIn("must contain a JSON array", run.stderr)

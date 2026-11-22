@@ -443,6 +443,7 @@ async fn run_child(index: usize, task: &Task, family: &Family<'_>) -> ChildRun {
         tools: &policy,
         system_prompt_override: Some(&prompt),
         state_scope: None,
+        prefill: None,
         child: Some(index),
         // Memory and clarify are off for children; the rest follows the parent.
         memory: None,

@@ -89,7 +89,7 @@ routes ignore it); `auxiliary.compression.extra_body` is not read; fallback rout
     and `agent.disabled_toolsets`; top-level `toolsets` is not read [keys].
 18. **`skills.*`**: only part of the settings are read; `external_dirs`, `project_discovery`,
     `trusted_project_dirs`, `auto_load`, `template_vars`, `inline_shell` are not [keys].
-19. **Top-level `prefill_messages_file`, `quick_commands`, `personalities`, `display.personality`,
+19. **(prefill and terminal.timeout done) Top-level `prefill_messages_file`, `quick_commands`, `personalities`, `display.personality`,
     `timezone`** (the last is used for the prompt date, the others not) [keys].
 20. **`model_overrides`, `model_catalog`, `models_dev`** are not read [keys]; they feed context-window and
     pricing lookup.
@@ -292,3 +292,18 @@ turn; matching the reference adds about 2000 tokens to every request (more with 
   now. Decision needed before any work: keep the stricter default and add `command_allowlist` as persistent
   `approvals.allow` entries, or port the detector and its patterns (large, security-critical, needs a recorded
   corpus like the redactor's).
+
+## Notes on prefill messages, terminal.timeout, terminal.cwd (done / not applicable)
+
+- `prefill_messages_file` (`HERMES_PREFILL_MESSAGES_FILE` first, then the top-level key, then
+  `agent.prefill_messages_file`; a relative path from the profile directory, `~/` expanded) is a JSON array
+  of message objects sent right after the system prompt on every request and never saved in the session,
+  as in the reference. A missing file, a non-array or invalid JSON only prints a warning. Subagents get none.
+- `terminal.timeout` (`TERMINAL_TIMEOUT` first) is the foreground timeout when a call gives none (1 to 600).
+  The reference promotes an over-cap foreground timeout to a background run; the port still refuses it.
+- `terminal.cwd` is not read on purpose: in the reference the local CLI leaves `TERMINAL_CWD` unset and uses
+  the launch directory; the key is bridged only for the gateway and cron.
+- `quick_commands` (user-defined slash commands that run shell scripts) and `personalities` /
+  `display.personality` (an ephemeral system prompt chosen by name) are interactive-surface features. They
+  belong with the REPL slash commands; `quick_commands` runs commands without a model call and so needs its own
+  approval decision before it is ported.

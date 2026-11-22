@@ -83,6 +83,9 @@ impl OutputLimits {
 pub struct TerminalSettings {
     #[serde(default)]
     pub output: OutputLimits,
+    /// `terminal.timeout` (or `TERMINAL_TIMEOUT`): the foreground timeout when a call gives none.
+    #[serde(default)]
+    pub default_timeout: Option<u32>,
     pub env_passthrough: Vec<String>,
     /// `code_execution.timeout`: seconds one `execute_code` call may run.
     #[serde(default)]
@@ -147,6 +150,15 @@ impl TerminalSettings {
         let section = &config["code_execution"];
         Self {
             output: OutputLimits::from_config(config),
+            default_timeout: std::env::var("TERMINAL_TIMEOUT")
+                .ok()
+                .and_then(|text| text.trim().parse::<u32>().ok())
+                .or_else(|| {
+                    config["terminal"]["timeout"]
+                        .as_u64()
+                        .and_then(|seconds| u32::try_from(seconds).ok())
+                })
+                .filter(|seconds| (1..=600).contains(seconds)),
             env_passthrough: names,
             code_timeout: section["timeout"].as_u64().filter(|seconds| *seconds > 0),
             code_max_tool_calls: section["max_tool_calls"]
@@ -352,7 +364,9 @@ mod shell {
         } else {
             None
         };
-        let seconds = args.timeout.unwrap_or(180);
+        let seconds = args
+            .timeout
+            .unwrap_or(settings.default_timeout.unwrap_or(180));
         if !(1..=600).contains(&seconds) {
             return Err("terminal timeout must be between 1 and 600 seconds".into());
         }

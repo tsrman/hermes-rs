@@ -323,6 +323,8 @@ pub struct TurnOptions<'a> {
     pub system_prompt_override: Option<&'a str>,
     /// The index of the subagent this turn is, when it is one.
     pub child: Option<usize>,
+    /// Messages sent after the system prompt on every request (`prefill_messages_file`).
+    pub prefill: Option<&'a [Value]>,
     /// Keeps the working directory, background processes and Python kernel of an interactive
     /// conversation together across turns, whatever session id each turn is saved under.
     pub state_scope: Option<&'a str>,
@@ -396,7 +398,12 @@ where
     let mut fallback_routes = fallbacks.iter();
     for _ in 0..options.max_turns {
         let result = loop {
-            let request = chat_request(&route.model, &messages, &tools);
+            let request = chat_request(
+                &route.model,
+                &messages,
+                &tools,
+                options.prefill.unwrap_or(&[]),
+            );
             if let Some(journal) = options.journal {
                 journal.record_for(options.child, "request", json!({"body": request}));
             }
@@ -565,7 +572,12 @@ where
     }
     on_event(TurnEvent::IterationLimit(options.max_turns));
     messages.push(json!({"role": "user", "content": ITERATION_SUMMARY_REQUEST}));
-    let request = chat_request(&route.model, &messages, &tools);
+    let request = chat_request(
+        &route.model,
+        &messages,
+        &tools,
+        options.prefill.unwrap_or(&[]),
+    );
     // Keep the active route and tool definitions so the provider can reuse its prompt prefix.
     // Emit the summary only after verifying that the completion contains no tool calls.
     let summary = route
@@ -584,8 +596,15 @@ where
 }
 
 /// A chat request. An empty `tools` array is omitted, since providers reject it.
-fn chat_request(model: &str, messages: &[Value], tools: &[Value]) -> Value {
-    let mut request = json!({"model": model, "messages": messages});
+/// The request body. `prefill` messages go right after the system prompt in what is sent, but
+/// never into the conversation that is kept.
+fn chat_request(model: &str, messages: &[Value], tools: &[Value], prefill: &[Value]) -> Value {
+    let mut sent: Vec<Value> = messages.to_vec();
+    let at = usize::from(sent.first().is_some_and(|first| first["role"] == "system"));
+    for (index, message) in prefill.iter().enumerate() {
+        sent.insert(at + index, message.clone());
+    }
+    let mut request = json!({"model": model, "messages": sent});
     if !tools.is_empty() {
         request["tools"] = json!(tools);
     }

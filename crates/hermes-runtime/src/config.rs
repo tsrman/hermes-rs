@@ -44,6 +44,8 @@ pub struct ChatSettings {
     /// `HERMES_REDACT_SECRETS` (environment or profile `.env`), else `security.redact_secrets`;
     /// on unless it says otherwise.
     pub redact_secrets: bool,
+    /// `prefill_messages_file` (environment `HERMES_PREFILL_MESSAGES_FILE` first), as written.
+    pub prefill_file: Option<String>,
     /// `model.provider` named an entry of `providers:`.
     pub named_custom: bool,
     /// `auxiliary.compression`: where the compression summary is made.
@@ -154,6 +156,7 @@ impl Default for ChatSettings {
             api_key: None,
             config_api_key: None,
             redact_secrets: true,
+            prefill_file: None,
             named_custom: false,
             compression_route: AuxiliaryRoute::default(),
             delegation_route: AuxiliaryRoute::default(),
@@ -553,6 +556,20 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.openai_base_url = secrets.get("OPENAI_BASE_URL").cloned();
     settings.anthropic_api_key = secrets.get("ANTHROPIC_API_KEY").cloned();
     settings.anthropic_base_url = secrets.get("ANTHROPIC_BASE_URL").cloned();
+    settings.prefill_file = [
+        std::env::var("HERMES_PREFILL_MESSAGES_FILE").unwrap_or_default(),
+        config["prefill_messages_file"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned(),
+        config["agent"]["prefill_messages_file"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned(),
+    ]
+    .into_iter()
+    .map(|path| path.trim().to_owned())
+    .find(|path| !path.is_empty());
     settings.compression_route = AuxiliaryRoute::from_config(&config, "compression");
     settings.delegation_route = AuxiliaryRoute {
         // A subagent route has no timeout or body fields of its own.
@@ -1281,5 +1298,56 @@ mod context_length_tests {
             Some(100_000)
         );
         assert_eq!(custom_context_length(&entries, "https://y/v1", "big"), None);
+    }
+}
+
+/// The messages of a prefill file: a JSON array of message objects. A relative path is taken
+/// from the profile directory. Problems are returned as warnings and give no messages.
+pub fn load_prefill(path: &str, home: Option<&Path>) -> (Vec<serde_json::Value>, Option<String>) {
+    let expanded = match path.strip_prefix("~/") {
+        Some(rest) => {
+            std::env::home_dir().map_or_else(|| PathBuf::from(path), |home| home.join(rest))
+        }
+        None => PathBuf::from(path),
+    };
+    let full = if expanded.is_absolute() {
+        expanded
+    } else {
+        home.map_or(expanded.clone(), |home| home.join(&expanded))
+    };
+    if !full.exists() {
+        return (
+            Vec::new(),
+            Some(format!(
+                "Prefill messages file not found: {}",
+                full.display()
+            )),
+        );
+    }
+    let loaded = std::fs::read_to_string(&full)
+        .map_err(|error| error.to_string())
+        .and_then(|text| {
+            serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
+                .map_err(|error| error.to_string())
+        });
+    match loaded {
+        Ok(serde_json::Value::Array(items)) => (
+            items.into_iter().filter(|item| item.is_object()).collect(),
+            None,
+        ),
+        Ok(_) => (
+            Vec::new(),
+            Some(format!(
+                "Prefill messages file must contain a JSON array: {}",
+                full.display()
+            )),
+        ),
+        Err(error) => (
+            Vec::new(),
+            Some(format!(
+                "Failed to load prefill messages from {}: {error}",
+                full.display()
+            )),
+        ),
     }
 }

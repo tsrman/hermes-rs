@@ -174,6 +174,9 @@ pub struct ChatRequest {
     /// Where subagents run; the main route when unset.
     #[serde(default)]
     delegate: Option<Route>,
+    /// Messages sent after the system prompt on every request.
+    #[serde(default)]
+    prefill: Vec<serde_json::Value>,
     root: OsString,
     query: String,
     resume: Option<String>,
@@ -368,6 +371,16 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
     )?;
     Ok(ChatRequest {
         state_scope: None,
+        prefill: match settings.prefill_file.as_deref() {
+            Some(path) => {
+                let (messages, warning) = hermes_runtime::config::load_prefill(path, home);
+                if let Some(warning) = warning {
+                    eprintln!("Warning: {warning}");
+                }
+                messages
+            }
+            None => Vec::new(),
+        },
         summary,
         delegate,
         root: std::env::current_dir()
@@ -498,6 +511,7 @@ where
         delegation: Some(&delegation),
         system_prompt_override: None,
         child: None,
+        prefill: (!request.prefill.is_empty()).then_some(request.prefill.as_slice()),
         state_scope: request.state_scope.as_deref(),
         mcp: Some(&mcp),
         web: Some(&request.web),
