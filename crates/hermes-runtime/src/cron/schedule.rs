@@ -16,14 +16,16 @@ const ONESHOT_GRACE_SECONDS: i64 = 120;
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct Schedule {
     pub kind: String,
-    #[serde(default)]
-    pub display: String,
+    // The fields serialize in the reference's order (`kind`, the payload, then `display`),
+    // because a stored record keeps the order it was written in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minutes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expr: Option<String>,
+    #[serde(default)]
+    pub display: String,
 }
 
 impl Schedule {

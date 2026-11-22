@@ -87,10 +87,7 @@ async fn run() -> Result<u8, String> {
         Command::Profile { command } => {
             profile::run(home.ok_or("profile root is unavailable")?, command)
         }
-        Command::Cron { command } => {
-            cron::run(home, command).await?;
-            Ok(0)
-        }
+        Command::Cron { command } => cron::run(home, command).await,
         Command::Config {
             command: ConfigCommand::Set { key, value },
         } => {

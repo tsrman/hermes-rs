@@ -1,6 +1,8 @@
 //! Scheduled-job primitives: schedule parsing, next-run computation and the job store.
 
 mod expr;
+pub mod manage;
+pub mod scan;
 pub mod schedule;
 pub mod store;
 pub mod tick;

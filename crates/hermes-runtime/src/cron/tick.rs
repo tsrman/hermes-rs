@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::DateTime;
 use chrono_tz::Tz;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use super::expr::CronExpr;
 use super::schedule::{compute_next_run, iso_instant, parse_iso_instant, Schedule};
@@ -24,6 +24,8 @@ use super::store::{cron_dir, job_zone, with_jobs};
 
 const ONESHOT_GRACE_SECONDS: i64 = 120;
 const ONESHOT_CLAIM_TTL_SECONDS: i64 = 1800;
+/// How long a fire claim stays live without a heartbeat.
+pub(super) const FIRE_CLAIM_TTL_SECONDS: i64 = 300;
 const MIN_GRACE_SECONDS: i64 = 120;
 const MAX_GRACE_SECONDS: i64 = 7200;
 const LATE_TOLERANCE_SECONDS: f64 = 300.0;
@@ -112,7 +114,8 @@ pub fn unsupported_reason(job: &Value) -> Option<String> {
         .then(|| format!("delivers to '{deliver}', and only local delivery is supported"))
 }
 
-fn machine_id() -> String {
+/// This machine's claim stamp: `HERMES_MACHINE_ID`, or `host:pid`.
+pub fn machine_id() -> String {
     if let Ok(explicit) = std::env::var("HERMES_MACHINE_ID") {
         if !explicit.trim().is_empty() {
             return explicit.trim().to_owned();
@@ -193,7 +196,7 @@ fn lateness_kind(lateness: f64, grace: i64) -> &'static str {
     }
 }
 
-fn claim_is_live(claim: &Value, now: DateTime<Tz>) -> bool {
+pub(super) fn claim_is_live(claim: &Value, now: DateTime<Tz>, ttl: i64) -> bool {
     let Some(at) = claim["at"]
         .as_str()
         .and_then(|at| parse_iso_instant(at, now.timezone()))
@@ -202,7 +205,7 @@ fn claim_is_live(claim: &Value, now: DateTime<Tz>) -> bool {
     };
     // A claim dated in the future is clock skew, never eternally fresh.
     let age = now.timestamp() - at;
-    (0..ONESHOT_CLAIM_TTL_SECONDS).contains(&age)
+    (0..ttl).contains(&age)
 }
 
 /// Take the cross-process tick lock without waiting. `Ok(None)` when another ticker holds it.
@@ -235,7 +238,7 @@ pub fn acquire_tick_lock(_home: &Path) -> Result<Option<std::fs::File>, String> 
     Err("the cron tick is not supported on this platform yet".into())
 }
 
-fn truthy(value: &Value) -> bool {
+pub(super) fn truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Bool(flag) => *flag,
@@ -288,7 +291,7 @@ pub fn scan_due(home: &Path, now: DateTime<Tz>, settings: TickSettings) -> Resul
                 continue;
             };
             let once = schedule.kind == "once";
-            if once && claim_is_live(&job["run_claim"], now) {
+            if once && claim_is_live(&job["run_claim"], now, ONESHOT_CLAIM_TTL_SECONDS) {
                 continue;
             }
             let zone = job_zone(job);
@@ -488,6 +491,22 @@ pub fn save_output(
     Ok(path)
 }
 
+/// Save a run document only while the job is still in the store. Taken under the store lock,
+/// so it cannot interleave with a removal: a removed job's output is never written back.
+pub fn save_output_if_present(
+    home: &Path,
+    id: &str,
+    now: DateTime<Tz>,
+    text: &str,
+) -> Result<Option<PathBuf>, String> {
+    with_jobs(home, now, |jobs| {
+        if !jobs.iter().any(|job| job["id"].as_str() == Some(id)) {
+            return Ok((None, false));
+        }
+        Ok((Some(save_output(home, id, now, text)?), false))
+    })
+}
+
 /// The run document the reference writes: a header, the prompt, and the response. The
 /// unframed form is what its `context_from` reader accepts for older runs.
 pub fn run_document(job: &Value, prompt: &str, response: &str, now: DateTime<Tz>) -> String {
@@ -506,10 +525,14 @@ pub struct Outcome<'a> {
     pub success: bool,
     pub error: Option<&'a str>,
     pub status: Option<&'a str>,
+    /// The fire claim this run holds. A completion whose claim has since changed hands is
+    /// discarded, as the reference does (`expected_fire_owner`).
+    pub owner: Option<&'a str>,
 }
 
 /// `mark_job_run`: stamp the run, count it, and move the schedule on (or retire a finished
-/// one-shot).
+/// one-shot). A manual run on a slot that is still ahead is an extra fire and leaves both the
+/// slot and the repeat budget alone.
 pub fn mark_job_run(
     home: &Path,
     now: DateTime<Tz>,
@@ -521,7 +544,15 @@ pub fn mark_job_run(
             // The job was removed while it ran.
             return Ok(((), false));
         };
+        if let Some(owner) = outcome.owner {
+            if job["fire_claim"]["by"].as_str() != Some(owner) {
+                // The claim changed hands: this completion is stale.
+                return Ok(((), false));
+            }
+        }
         let now_iso = iso_instant(now);
+        let extra = truthy(&job["fire_claim"]["extra_slot"]);
+        let held = if extra { held_markers(job) } else { Map::new() };
         let Some(record) = job.as_object_mut() else {
             return Ok(((), false));
         };
@@ -574,9 +605,66 @@ pub fn mark_job_run(
         {
             record.insert("run_claim".into(), Value::Null);
         }
-        advance_after_run(job, now);
+        if let Some(record) = job.as_object_mut() {
+            for (key, value) in held {
+                record.insert(key, value);
+            }
+        }
+        if extra {
+            settle_extra_fire(job, now);
+        } else {
+            advance_after_run(job, now);
+        }
         Ok(((), true))
     })
+}
+
+/// A run-now queued by the reference (`manual_run_at` equal to `next_run_at`, with the slot it
+/// overwrote saved) and not yet claimed.
+fn manual_run_queued(job: &Value) -> bool {
+    !job["manual_run_at"].is_null()
+        && job["manual_run_at"] == job["next_run_at"]
+        && job.get("manual_run_restore_at").is_some()
+}
+
+/// The run-now markers of a trigger that landed while this extra fire was in flight: it is its
+/// own run, so the outcome must not clear them.
+fn held_markers(job: &Value) -> Map<String, Value> {
+    let mut held = Map::new();
+    if manual_run_queued(job) {
+        for key in [
+            "manual_run_at",
+            "manual_run_restore_at",
+            "manual_run_prompt",
+        ] {
+            if let Some(value) = job.get(key) {
+                held.insert(key.to_owned(), value.clone());
+            }
+        }
+    }
+    held
+}
+
+/// After an extra fire: the repeat budget is untouched and the job keeps its pending slot. A
+/// slot that passed during the run is taken by a one-shot at once; a recurring job drops it for
+/// its next natural slot.
+fn settle_extra_fire(job: &mut Value, now: DateTime<Tz>) {
+    let in_future = job["next_run_at"].as_str().is_some_and(|slot| {
+        parse_iso_instant(slot, now.timezone()).is_some_and(|at| at > now.timestamp())
+    });
+    if manual_run_queued(job) || in_future {
+        return;
+    }
+    let now_iso = iso_instant(now);
+    if job["schedule"]["kind"].as_str() == Some("once") {
+        job["next_run_at"] = json!(now_iso);
+        return;
+    }
+    if let Ok(schedule) = serde_json::from_value::<Schedule>(job["schedule"].clone()) {
+        if let Some(next) = compute_next_run(&schedule, Some(&now_iso), job_zone(job), now) {
+            job["next_run_at"] = json!(next);
+        }
+    }
 }
 
 fn complete(job: &mut Value) {

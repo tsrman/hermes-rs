@@ -171,7 +171,7 @@ class CronWriteTest(CronCliTest):
         ambiguous = self.hermes("pause", "Other")
         self.assertIn("ambiguous", ambiguous.stderr)
         terminal = self.hermes("pause", "twin")
-        self.assertIn("terminal state", terminal.stderr)
+        self.assertIn("Cannot activate terminal cron job", terminal.stderr)
         escape = self.hermes("remove", "x")
         self.assertNotEqual(escape.returncode, 0)
         self.assertEqual((self.home / "cron" / "jobs.json").read_bytes(), before)

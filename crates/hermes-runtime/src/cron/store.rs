@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use chrono::DateTime;
 use chrono_tz::Tz;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
+use super::manage::{py_repr, resolve_for, update_job};
 use super::schedule::{compute_next_run, iso_instant, parse_iso_instant, Schedule};
 
 #[derive(Debug, Serialize)]
@@ -76,6 +77,11 @@ fn optional(job: &Value, key: &str) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+/// The operator-facing summary of a stored job record.
+pub fn summarize_job(job: &Value) -> JobSummary {
+    summarize(job)
 }
 
 pub(super) fn summarize(job: &Value) -> JobSummary {
@@ -172,6 +178,19 @@ pub(super) fn cron_dir(home: &Path) -> PathBuf {
     home.join("cron")
 }
 
+/// The cron directory and its `output` directory, owner-only, as the reference keeps them.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn ensure_dirs(dir: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    for directory in [dir.to_path_buf(), dir.join("output")] {
+        std::fs::create_dir_all(&directory)
+            .map_err(|error| format!("cannot create cron directory: {error}"))?;
+        let _ = std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700));
+    }
+    Ok(())
+}
+
 /// Run `change` on the job list under the cross-process lock and save it atomically when it
 /// reports a change. Only the canonical `{"jobs": [...]}` shape is written: anything else could
 /// lose data, so it is refused rather than repaired.
@@ -187,8 +206,7 @@ pub(super) fn with_jobs<T>(
     use rustix::fs::{flock, FlockOperation};
 
     let dir = cron_dir(home);
-    std::fs::create_dir_all(&dir)
-        .map_err(|error| format!("cannot create cron directory: {error}"))?;
+    ensure_dirs(&dir)?;
     let lock = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -256,54 +274,6 @@ pub(super) fn with_jobs<T>(
     Err("changing cron jobs is not supported on this platform yet".into())
 }
 
-/// The index of the job named by an ID or, failing that, a case-insensitive name.
-fn resolve(jobs: &[Value], reference: &str) -> Result<usize, String> {
-    if reference.is_empty() {
-        return Err("job reference is empty".into());
-    }
-    if let Some(index) = jobs
-        .iter()
-        .position(|job| job["id"].as_str() == Some(reference))
-    {
-        return Ok(index);
-    }
-    let lower = reference.to_lowercase();
-    let matches: Vec<usize> = jobs
-        .iter()
-        .enumerate()
-        .filter(|(_, job)| {
-            job["name"]
-                .as_str()
-                .is_some_and(|name| name.to_lowercase() == lower)
-        })
-        .map(|(index, _)| index)
-        .collect();
-    match matches.as_slice() {
-        [] => Err(format!("job '{reference}' was not found")),
-        [index] => Ok(*index),
-        many => {
-            let ids: Vec<&str> = many
-                .iter()
-                .map(|i| jobs[*i]["id"].as_str().unwrap_or("?"))
-                .collect();
-            Err(format!(
-                "Job name '{reference}' is ambiguous — matches {} jobs: {}. Use the job ID instead.",
-                many.len(),
-                ids.join(", ")
-            ))
-        }
-    }
-}
-
-fn reject_terminal(job: &Value, action: &str) -> Result<(), String> {
-    match job["state"].as_str() {
-        Some(state @ ("completed" | "error")) => Err(format!(
-            "Cannot {action} a job in the terminal state '{state}' with this version"
-        )),
-        _ => Ok(()),
-    }
-}
-
 pub(super) fn job_zone(job: &Value) -> Option<Tz> {
     job["timezone"]
         .as_str()
@@ -317,23 +287,20 @@ pub fn pause_job(
     reason: Option<&str>,
 ) -> Result<JobSummary, String> {
     with_jobs(home, now, |jobs| {
-        let index = resolve(jobs, reference)?;
-        reject_terminal(&jobs[index], "pause")?;
-        let job = jobs[index].as_object_mut().ok_or("invalid job record")?;
-        job.insert("enabled".into(), json!(false));
-        job.insert("state".into(), json!("paused"));
-        job.insert("paused_at".into(), json!(iso_instant(now)));
-        job.insert("paused_reason".into(), json!(reason));
-        // An explicit lifecycle change supersedes an occurrence left unclaimed before it.
-        job.shift_remove("pending_slot");
+        let index = resolve_for(jobs, reference, "pause")?;
+        let mut updates = Map::new();
+        updates.insert("enabled".into(), json!(false));
+        updates.insert("state".into(), json!("paused"));
+        updates.insert("paused_at".into(), json!(iso_instant(now)));
+        updates.insert("paused_reason".into(), json!(reason));
+        update_job(jobs, index, updates, now)?;
         Ok((summarize(&jobs[index]), true))
     })
 }
 
 pub fn resume_job(home: &Path, now: DateTime<Tz>, reference: &str) -> Result<JobSummary, String> {
     with_jobs(home, now, |jobs| {
-        let index = resolve(jobs, reference)?;
-        reject_terminal(&jobs[index], "resume")?;
+        let index = resolve_for(jobs, reference, "resume")?;
         let schedule: Schedule = serde_json::from_value(jobs[index]["schedule"].clone())
             .map_err(|_| "job has an unreadable schedule")?;
         let zone = job_zone(&jobs[index]);
@@ -357,33 +324,91 @@ pub fn resume_job(home: &Path, now: DateTime<Tz>, reference: &str) -> Result<Job
                 schedule.run_at.as_deref().unwrap_or("unknown")
             ));
         }
-        let job = jobs[index].as_object_mut().ok_or("invalid job record")?;
-        job.insert("enabled".into(), json!(true));
-        job.insert("state".into(), json!("scheduled"));
-        job.insert("paused_at".into(), Value::Null);
-        job.insert("paused_reason".into(), Value::Null);
-        job.insert("next_run_at".into(), json!(next));
-        job.shift_remove("pending_slot");
+        let mut updates = Map::new();
+        updates.insert("enabled".into(), json!(true));
+        updates.insert("state".into(), json!("scheduled"));
+        updates.insert("paused_at".into(), Value::Null);
+        updates.insert("paused_reason".into(), Value::Null);
+        updates.insert("next_run_at".into(), json!(next));
+        update_job(jobs, index, updates, now)?;
         Ok((summarize(&jobs[index]), true))
     })
 }
 
-/// Remove a job and, once the store is saved, its saved output. Returns the removed ID.
+/// Whether the job is still in the store. Reads without the lock, so a run can poll it; a store
+/// that cannot be read counts as present, because a run is never stopped on a guess.
+pub fn job_exists(home: &Path, id: &str) -> bool {
+    let path = cron_dir(home).join("jobs.json");
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return true;
+    };
+    let Ok(data) = serde_json::from_str::<Value>(raw.strip_prefix('\u{feff}').unwrap_or(&raw))
+    else {
+        return true;
+    };
+    match data.get("jobs") {
+        Some(Value::Array(jobs)) => jobs.iter().any(|job| job["id"].as_str() == Some(id)),
+        _ => true,
+    }
+}
+
+/// Delete the notepad rows of a removed job. A profile without a notepad is left alone.
+fn clear_notepad(home: &Path, id: &str) -> Result<(), String> {
+    let path = cron_dir(home).join("notepad.db");
+    if !path.is_file() {
+        return Ok(());
+    }
+    let connection = rusqlite::Connection::open(&path)
+        .map_err(|error| format!("cannot open the cron notepad: {error}"))?;
+    connection
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|error| format!("cannot open the cron notepad: {error}"))?;
+    match connection.execute("DELETE FROM cron_notepad WHERE job_id = ?1", [id]) {
+        Ok(_) => Ok(()),
+        // A notepad file without its table has nothing to clear.
+        Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+            if message.contains("no such table") =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(format!("cannot clear the cron notepad: {error}")),
+    }
+}
+
+/// Remove a job and, with the store still locked, its saved output and notepad. A run of the
+/// job that is still going sees the record vanish and stops, and nothing it writes afterwards
+/// is kept. Returns the removed ID.
 pub fn remove_job(home: &Path, now: DateTime<Tz>, reference: &str) -> Result<String, String> {
-    let (id, output) = with_jobs(home, now, |jobs| {
-        let index = resolve(jobs, reference)?;
+    with_jobs(home, now, |jobs| {
+        let index = resolve_for(jobs, reference, "remove")?;
         let id = jobs[index]["id"].as_str().unwrap_or_default().to_owned();
         // The ID becomes a path component, so only a single plain name may be used.
         if id.is_empty() || id == "." || id == ".." || id.contains(['/', '\\']) {
-            return Err(format!("Invalid cron job id for output path: {id:?}"));
+            return Err(format!(
+                "Invalid cron job id for output path: {}",
+                py_repr(&id)
+            ));
         }
         jobs.remove(index);
-        let output = cron_dir(home).join("output").join(&id);
-        Ok(((id, output), true))
-    })?;
-    if output.is_dir() {
-        std::fs::remove_dir_all(&output)
-            .map_err(|error| format!("job {id} was removed but its output was not: {error}"))?;
-    }
-    Ok(id)
+        Ok((id, true))
+    })
+    .and_then(|id| cleanup_removed(home, now, &id).map(|()| id))
+}
+
+/// Delete what a removed job left behind. Runs under the store lock, which a finishing run
+/// takes before it saves its output, so the output cannot reappear after this.
+fn cleanup_removed(home: &Path, now: DateTime<Tz>, id: &str) -> Result<(), String> {
+    with_jobs(home, now, |jobs| {
+        // The ID may have been taken again by a job created in the meantime.
+        if jobs.iter().any(|job| job["id"].as_str() == Some(id)) {
+            return Ok(((), false));
+        }
+        let output = cron_dir(home).join("output").join(id);
+        if output.is_dir() {
+            std::fs::remove_dir_all(&output)
+                .map_err(|error| format!("job {id} was removed but its output was not: {error}"))?;
+        }
+        clear_notepad(home, id)?;
+        Ok(((), false))
+    })
 }
