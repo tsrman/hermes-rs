@@ -1,3 +1,4 @@
+pub mod approval_detect;
 pub mod approval_policy;
 mod browser_cdp;
 mod browser_url_policy;
