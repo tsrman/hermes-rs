@@ -6,11 +6,19 @@ use std::sync::LazyLock;
 use fancy_regex::Regex as FancyRegex;
 use regex::Regex;
 
-use super::budget::{BudgetExceeded, Text};
+use super::budget::{mark_recursion_limit, BudgetExceeded, Text, RECURSION_LIMIT};
 use super::normalize::nfkc;
 use super::shell_scan::{scan_shell, substitution_depth, Kind, ScanOpts};
 
-fn mask_span(text: &Text, start: usize, end: usize) -> Result<String, BudgetExceeded> {
+fn mask_span(
+    text: &Text,
+    start: usize,
+    end: usize,
+    depth: usize,
+) -> Result<String, BudgetExceeded> {
+    if depth > RECURSION_LIMIT {
+        return Err(mark_recursion_limit());
+    }
     let chars = &text.chars;
     let mut out = String::new();
     let opts = ScanOpts {
@@ -30,7 +38,7 @@ fn mask_span(text: &Text, start: usize, end: usize) -> Result<String, BudgetExce
                 };
             let body_end = j - 1;
             out.extend(&chars[step.i..body_start]);
-            out.push_str(&mask_span(text, body_start, body_end)?);
+            out.push_str(&mask_span(text, body_start, body_end, depth + 1)?);
             out.extend(&chars[body_end..j]);
         } else if step.quote.is_some()
             && step.kind == Kind::Char
@@ -51,7 +59,7 @@ pub fn mask_quoted_newlines(command: &str) -> Result<String, BudgetExceeded> {
         return Ok(command.to_owned());
     }
     let text = Text::new(command);
-    mask_span(&text, 0, text.len())
+    mask_span(&text, 0, text.len(), 0)
 }
 
 /// Turn each escaped `;`/`&`/`|`, space, tab or quote into `_`, so it stays literal text inside

@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::ansi_c::is_shell_comment_start;
-use super::budget::{BudgetExceeded, Text};
+use super::budget::{mark_recursion_limit, BudgetExceeded, Text, RECURSION_LIMIT};
 use super::py_isspace;
 use super::shell_scan::{scan_shell, Kind, ScanOpts};
 use super::shell_words::{
@@ -25,7 +25,11 @@ fn scan_starts(
     start: usize,
     end: usize,
     starts: &mut Vec<usize>,
+    depth: usize,
 ) -> Result<(), BudgetExceeded> {
+    if depth > RECURSION_LIMIT {
+        return Err(mark_recursion_limit());
+    }
     let chars = &text.chars;
     let opts = ScanOpts {
         subst_unquoted: true,
@@ -41,7 +45,13 @@ fn scan_starts(
             Kind::Subst => {
                 let inner = step.i + if chars[step.i] == '`' { 1 } else { 2 };
                 starts.push(inner);
-                scan_starts(text, inner, step.j.map_or(end, |j| j - 1), starts)?;
+                scan_starts(
+                    text,
+                    inner,
+                    step.j.map_or(end, |j| j - 1),
+                    starts,
+                    depth + 1,
+                )?;
             }
             Kind::Char if step.quote.is_none() && Some(step.i) != skip => {
                 let (i, c) = (step.i, chars[step.i]);
@@ -67,7 +77,7 @@ fn scan_starts(
 pub fn iter_shell_command_starts(text: &Text) -> Result<Vec<usize>, BudgetExceeded> {
     let chars = &text.chars;
     let mut starts = vec![0usize];
-    scan_starts(text, 0, text.len(), &mut starts)?;
+    scan_starts(text, 0, text.len(), &mut starts, 0)?;
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     let (mut run_from, mut run_to) = (usize::MAX, 0usize);

@@ -38,7 +38,11 @@ impl Text {
     }
 }
 
+/// Nesting depth at which the recursive scanners give up (Python's `RecursionError` at ~1000 frames).
+pub const RECURSION_LIMIT: usize = 900;
+
 thread_local! {
+    static RECURSION_HIT: Cell<bool> = const { Cell::new(false) };
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
     static REMAINING: Cell<i64> = const { Cell::new(0) };
     static MEMO: RefCell<HashMap<(u8, u64, usize), Option<usize>>> = RefCell::new(HashMap::new());
@@ -65,6 +69,18 @@ pub fn with_budget<R>(len: usize, f: impl FnOnce() -> R) -> R {
     REMAINING.with(|r| r.set(MAX_SCAN_UNITS + SCAN_UNITS_PER_CHAR * len as i64));
     let _guard = Guard;
     f()
+}
+
+/// Record that a scanner hit [`RECURSION_LIMIT`]; the caller refuses the command, as Python does on
+/// `RecursionError`.
+pub fn mark_recursion_limit() -> BudgetExceeded {
+    RECURSION_HIT.with(|h| h.set(true));
+    BudgetExceeded
+}
+
+/// Whether a recursion limit was hit since the last call (clears the flag).
+pub fn take_recursion_limit() -> bool {
+    RECURSION_HIT.with(|h| h.replace(false))
 }
 
 pub fn active() -> bool {

@@ -3,8 +3,9 @@
 //! Built bottom-up against corpora recorded from the reference (`compat/create_approval_corpus.py`
 //! for verdicts, `compat/create_approval_scan_corpus.py` for the scanner primitives). Text is handled
 //! as `char` slices so every offset means what the reference's Python string offsets mean. Only the
-//! layers listed here exist so far; there is no verdict function yet, so nothing may rely on this
-//! module as a safety boundary.
+//! layers listed here exist so far: the hardline floor has a verdict function, the dangerous-command
+//! layer (`detect_dangerous_command`) does not, and nothing is wired into the approval policy yet.
+//! POSIX only (see `normalize`); Windows path spellings are not ported.
 //!
 //! Ported: `budget` (scan work bound), `shell_scan` (quote/escape state machine, substitution ends,
 //! `substitution_depth`), `ansi_c` (`$'...'` expansion), `normalize` (detection-time normalization;
@@ -13,13 +14,17 @@
 //! (wrapper peeling, literal heredoc bodies, `rm` dequoting), `env_split` (`env -S`), `text_masks`
 //! (quoted-newline masking, parser limits), `patterns` (`_CMDPOS`), `shell_heredoc` (inert heredoc
 //! masking), `shell_tokens` (top-level segments, span lexer, grep operands) and `exec_findings`
-//! (`-e`/`-c` interpreters, `bash -c`, read-tool program flags, `eval`).
+//! (`-e`/`-c` interpreters, `bash -c`, read-tool program flags, `eval`) and `hardline` (the hardline
+//! floor: detection variants, `detect_hardline_command`; its pattern table is generated into
+//! `hardline_tables` by `compat/generate_approval_tables.py`).
 
 pub mod ansi_c;
 pub mod budget;
 pub mod command_starts;
 pub mod env_split;
 pub mod exec_findings;
+pub mod hardline;
+mod hardline_tables;
 pub mod normalize;
 pub mod patterns;
 pub mod shell_heredoc;
