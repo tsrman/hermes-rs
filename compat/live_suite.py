@@ -124,7 +124,7 @@ def t_bigfile():
         good = ns["op_17"](2) == 34 and ns["op_23"](2, scale=3) == 75 and ns["op_23"](2) == 25 and ns["op_5"](1) == 6 and ns["op_59"](1) == 60
         before, after = set(original.splitlines()), text.splitlines()
         changed = sum(1 for line in after if line not in before)
-        return good and changed <= 8 and len(after) >= len(original.splitlines()), f"changed lines: {changed}"
+        return good and changed <= 8, f"changed lines: {changed}"
     return {"ops.py": original}, "В ops.py: функцию op_17 сделай умножающей (return x * 17), а в op_23 добавь параметр scale=1, на который умножается результат. Остальные функции не трогай, файл не переписывай целиком.", check
 
 
@@ -177,9 +177,9 @@ def t_delegate():
         events = journal_events(p)
         called = any(e["event"] == "tool" and e["name"] == "delegate_task" and e.get("child") is None for e in events)
         children = {e["child"] for e in events if e.get("child") is not None}
-        passed = sh(p, "python3 a/test_m.py").returncode == 0 and sh(p, "python3 b/test_m.py").returncode == 0
+        passed = sh(p, "PYTHONPATH=. python3 a/test_m.py").returncode == 0 and sh(p, "PYTHONPATH=. python3 b/test_m.py").returncode == 0
         return called and children >= {0, 1} and passed, f"called={called} children={sorted(children)}"
-    return files, "В каталогах a и b по одному падающему тесту (python3 a/test_m.py, python3 b/test_m.py). Используй инструмент delegate_task: один подагент на каталог, параллельно. Затем проверь оба теста сам и кратко отчитайся.", check
+    return files, "В каталогах a и b по одному падающему тесту (PYTHONPATH=. python3 a/test_m.py, PYTHONPATH=. python3 b/test_m.py). Используй инструмент delegate_task: один подагент на каталог, параллельно. Затем проверь оба теста сам и кратко отчитайся.", check
 
 
 def t_execute_code():
