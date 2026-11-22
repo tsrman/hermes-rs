@@ -7,6 +7,7 @@ use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -17,7 +18,7 @@ use crate::redact::{is_secret_file_arg, redact_file_read};
 pub(crate) const SEARCH_FILES: &str = "search_files";
 const ENTRY_LIMIT: usize = 20_000;
 const BYTE_BUDGET: u64 = 64 * 1024 * 1024;
-const MAX_LINE_BYTES: usize = 2048;
+const MAX_LINE_CHARS: usize = 500;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -105,9 +106,44 @@ impl Results {
 }
 
 impl FileWorkspace<'_> {
-    pub(crate) fn search(&self, arguments: &str) -> Value {
-        self.search_inner(arguments)
-            .unwrap_or_else(|error| json!({"error": error}))
+    pub(crate) fn search(&mut self, arguments: &str) -> Value {
+        let parsed: Value = serde_json::from_str(arguments).unwrap_or(Value::Null);
+        let text = |key: &str| parsed.get(key).and_then(Value::as_str).unwrap_or("");
+        let number =
+            |key: &str, default: i64| parsed.get(key).and_then(Value::as_i64).unwrap_or(default);
+        let offset = number("offset", 0).max(0);
+        let limit = number("limit", 50).clamp(1, 200);
+        // Paging is part of the key, so walking through truncated results is not a repeat.
+        let key = format!(
+            "search|{}|{}|{}|{}|{limit}|{offset}|{}",
+            text("pattern"),
+            text("target"),
+            text("path"),
+            text("file_glob"),
+            text("order")
+        );
+        let count = match &mut self.search_repeat {
+            (last, count) if last.as_deref() == Some(&key) => {
+                *count += 1;
+                *count
+            }
+            slot => {
+                *slot = (Some(key), 1);
+                1
+            }
+        };
+        if count >= 4 {
+            return json!({
+                "error": format!("BLOCKED: You have run this exact search {count} times in a row. The results have NOT changed. You already have this information. STOP re-searching and proceed with your task."),
+                "pattern": text("pattern"),
+                "already_searched": count,
+                "guardrail_refusal": true,
+            });
+        }
+        let found = self
+            .search_inner(arguments)
+            .unwrap_or_else(|error| json!({"error": error}));
+        shape_result(&found, count, offset, limit)
     }
 
     fn search_inner(&self, arguments: &str) -> Result<Value, String> {
@@ -216,10 +252,26 @@ impl FileWorkspace<'_> {
 
     fn search_paths(&self, root: &Path, start: PathBuf) -> (Vec<PathBuf>, bool) {
         let mut paths = Vec::new();
-        let mut pending = vec![start];
+        // Like ripgrep inside a git repository, skip what `.gitignore` and `.ignore` name.
+        let in_repository = start
+            .ancestors()
+            .take_while(|dir| dir.starts_with(root))
+            .any(|dir| dir.join(".git").exists());
+        let mut inherited: Vec<Gitignore> = Vec::new();
+        if in_repository {
+            let mut chain: Vec<&Path> = start
+                .ancestors()
+                .take_while(|dir| dir.starts_with(root))
+                .collect();
+            chain.reverse();
+            for dir in chain.into_iter().filter(|dir| *dir != start) {
+                inherited.extend(ignore_files(dir));
+            }
+        }
+        let mut pending = vec![(start, inherited)];
         let mut remaining = ENTRY_LIMIT;
         let mut truncated = false;
-        while let Some(path) = pending.pop() {
+        while let Some((path, mut matchers)) = pending.pop() {
             let Ok(metadata) = path.symlink_metadata() else {
                 continue;
             };
@@ -242,6 +294,9 @@ impl FileWorkspace<'_> {
             let Ok(entries) = fs::read_dir(&path) else {
                 continue;
             };
+            if in_repository {
+                matchers.extend(ignore_files(&path));
+            }
             let mut children = Vec::new();
             for entry in entries {
                 if remaining == 0 {
@@ -252,20 +307,50 @@ impl FileWorkspace<'_> {
                 let Ok(entry) = entry else { continue };
                 let name = entry.file_name();
                 let child = path.join(&name);
+                let kind = entry.file_type();
+                let is_dir = kind.as_ref().is_ok_and(|kind| kind.is_dir());
                 if !name.to_string_lossy().starts_with('.')
                     && self.check_path(root, &child).is_ok()
-                    && entry
-                        .file_type()
-                        .is_ok_and(|kind| kind.is_dir() || kind.is_file())
+                    && kind.is_ok_and(|kind| kind.is_dir() || kind.is_file())
+                    && !is_ignored(&matchers, &child, is_dir)
                 {
                     children.push(child);
                 }
             }
             children.sort_unstable_by(|a, b| b.cmp(a));
-            pending.extend(children);
+            pending.extend(children.into_iter().map(|child| (child, matchers.clone())));
         }
         (paths, truncated)
     }
+}
+
+/// The `.gitignore` and `.ignore` matchers of one directory.
+fn ignore_files(dir: &Path) -> Vec<Gitignore> {
+    [".gitignore", ".ignore"]
+        .iter()
+        .filter_map(|name| {
+            let file = dir.join(name);
+            file.is_file().then(|| {
+                let mut builder = GitignoreBuilder::new(dir);
+                builder.add(&file);
+                builder.build().ok()
+            })?
+        })
+        .collect()
+}
+
+/// Whether the nearest matcher that names `path` ignores it (a later, deeper file wins).
+fn is_ignored(matchers: &[Gitignore], path: &Path, is_dir: bool) -> bool {
+    for matcher in matchers.iter().rev() {
+        let found = matcher.matched(path, is_dir);
+        if found.is_ignore() {
+            return true;
+        }
+        if found.is_whitelist() {
+            return false;
+        }
+    }
+    false
 }
 
 fn add_content_results(
@@ -312,9 +397,70 @@ fn add_content_results(
     }
 }
 
+/// The result as the reference lays it out: sparse keys, matches grouped by path once there are
+/// five or more, and hints for truncation and repetition.
+fn shape_result(found: &Value, count: u32, offset: i64, limit: i64) -> Value {
+    if found.get("error").is_some() {
+        return found.clone();
+    }
+    let mut out = serde_json::Map::new();
+    out.insert("total_count".into(), found["total_count"].clone());
+    if let Some(matches) = found["matches"].as_array().filter(|m| !m.is_empty()) {
+        if matches.len() >= 5 {
+            let mut lines: Vec<String> = Vec::new();
+            let mut current: Option<&str> = None;
+            for entry in matches {
+                let path = entry["path"].as_str().unwrap_or("");
+                if current != Some(path) {
+                    lines.push(path.to_owned());
+                    current = Some(path);
+                }
+                lines.push(format!(
+                    "  {}: {}",
+                    entry["line"],
+                    entry["content"].as_str().unwrap_or("").trim_end()
+                ));
+            }
+            out.insert("matches_format".into(), json!("path-grouped: each file path on its own line, followed by indented '<line>: <content>' rows for matches in that file"));
+            out.insert("matches_text".into(), json!(lines.join("\n")));
+        } else {
+            out.insert("matches".into(), json!(matches));
+        }
+    }
+    if let Some(files) = found["files"].as_array().filter(|f| !f.is_empty()) {
+        out.insert("files".into(), json!(files));
+    }
+    if let Some(counts) = found["counts"].as_object().filter(|c| !c.is_empty()) {
+        out.insert("counts".into(), json!(counts));
+    }
+    let truncated = found["truncated"] == true;
+    if truncated {
+        out.insert("truncated".into(), json!(true));
+        out.insert("total_count_is_lower_bound".into(), json!(true));
+    }
+    for key in ["limit_reason", "warning"] {
+        if let Some(value) = found
+            .get(key)
+            .filter(|v| v.as_str().is_some_and(|t| !t.is_empty()))
+        {
+            out.insert(key.into(), value.clone());
+        }
+    }
+    if count >= 3 {
+        out.insert("_warning".into(), json!(format!("You have run this exact search {count} times consecutively. The results have not changed. Use the information you already have.")));
+    }
+    if truncated {
+        out.insert("_hint".into(), json!(format!(
+            "Results truncated. Use offset={} to see more, or narrow with a more specific pattern or file_glob.",
+            offset + limit
+        )));
+    }
+    Value::Object(out)
+}
+
 fn match_line(path: &str, line: usize, content: &str) -> Value {
-    let limit = content.floor_char_boundary(MAX_LINE_BYTES);
-    let text = redact_file_read(&content[..limit], is_secret_file_arg(path, &[]));
+    let shown: String = content.chars().take(MAX_LINE_CHARS).collect();
+    let text = redact_file_read(&shown, is_secret_file_arg(path, &[]));
     json!({"path": path, "line": line + 1, "content": text})
 }
 
@@ -368,19 +514,6 @@ impl Glob {
 }
 
 pub(crate) fn search_schema() -> Value {
-    json!({"type": "function", "function": {
-        "name": SEARCH_FILES,
-        "description": "Search UTF-8 text by regex or find files by a glob in the current working directory. Returns paths relative to that directory.",
-        "parameters": {"type": "object", "properties": {
-            "pattern": {"type": "string"},
-            "target": {"type": "string", "enum": ["content", "files"], "default": "content"},
-            "path": {"type": "string", "default": "."},
-            "file_glob": {"type": "string"},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
-            "offset": {"type": "integer", "minimum": 0, "default": 0},
-            "order": {"type": "string", "enum": ["discovery", "modified"], "default": "discovery"},
-            "output_mode": {"type": "string", "enum": ["content", "files_only", "count"], "default": "content"},
-            "context": {"type": "integer", "minimum": 0, "maximum": 10, "default": 0}
-        }, "required": ["pattern"], "additionalProperties": false}
-    }})
+    json!({"type": "function", "function":
+        serde_json::from_str::<Value>(include_str!("../schemas/search_files.json")).unwrap_or_default()})
 }

@@ -59,6 +59,8 @@ pub(crate) struct FileWorkspace<'a> {
     observed: HashMap<PathBuf, Observation>,
     /// Misses per file, so a model that keeps retrying a patch is told to stop.
     patch_failures: HashMap<PathBuf, u32>,
+    /// The last search and how many times in a row it ran.
+    search_repeat: (Option<String>, u32),
 }
 
 struct Observation {
@@ -113,6 +115,7 @@ impl<'a> FileWorkspace<'a> {
             profile,
             observed: HashMap::new(),
             patch_failures: HashMap::new(),
+            search_repeat: (None, 0),
         }
     }
 
@@ -632,5 +635,42 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("old_string not found"));
+    }
+
+    #[test]
+    fn search_follows_the_reference_layout_and_ignore_files() {
+        use super::FileWorkspace;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join("src/sub")).unwrap();
+        std::fs::write(root.join(".gitignore"), "*.log\nbuild/\n").unwrap();
+        std::fs::write(root.join("ignored.log"), "alpha log\n").unwrap();
+        std::fs::create_dir_all(root.join("build")).unwrap();
+        std::fs::write(root.join("build/out.txt"), "alpha build\n").unwrap();
+        std::fs::write(root.join("src/a.txt"), "alpha 1\nbeta\nalpha 2\n").unwrap();
+        std::fs::write(root.join("src/sub/b.txt"), "alpha 3\nalpha 4\nalpha 5\n").unwrap();
+        let mut workspace = FileWorkspace::new(root, None);
+        let few = workspace.search(r#"{"pattern": "alpha 1"}"#);
+        assert_eq!(few["matches"][0]["path"], "src/a.txt");
+        assert!(few.get("truncated").is_none());
+        // Five matches or more are grouped by path; ignored files and directories are skipped.
+        let many = workspace.search(r#"{"pattern": "alpha"}"#);
+        assert_eq!(many["total_count"], 5);
+        let text = many["matches_text"].as_str().unwrap();
+        assert!(
+            text.starts_with("src/a.txt\n  1: alpha 1\n  3: alpha 2\nsrc/sub/b.txt\n  1: alpha 3"),
+            "{text}"
+        );
+        assert!(!text.contains("log") && !text.contains("build"));
+        // A page that stops short says how to continue; the same search again warns, then stops.
+        let page = workspace.search(r#"{"pattern": "alpha", "limit": 2}"#);
+        assert_eq!(page["truncated"], true);
+        assert!(page["_hint"].as_str().unwrap().contains("offset=2"));
+        let _ = workspace.search(r#"{"pattern": "alpha", "limit": 2}"#);
+        let third = workspace.search(r#"{"pattern": "alpha", "limit": 2}"#);
+        assert!(third["_warning"].as_str().unwrap().contains("3 times"));
+        let fourth = workspace.search(r#"{"pattern": "alpha", "limit": 2}"#);
+        assert_eq!(fourth["guardrail_refusal"], true);
     }
 }

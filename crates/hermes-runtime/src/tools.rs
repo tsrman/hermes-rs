@@ -542,6 +542,7 @@ mod tests {
             "clarify",
             "memory",
             "patch",
+            "search_files",
             "skill_manage",
             "skill_view",
             "skills_list",
