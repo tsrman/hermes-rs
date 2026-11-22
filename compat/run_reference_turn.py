@@ -18,6 +18,7 @@ def main():
     parser.add_argument("profile", type=Path)
     parser.add_argument("base_url")
     parser.add_argument("--max-turns", type=int, default=sys.maxsize)
+    parser.add_argument("--model", default="fixture")
     args = parser.parse_args()
     checkout = args.checkout.resolve(strict=True)
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
@@ -38,7 +39,7 @@ def main():
         api_key="fixture",
         provider="custom",
         api_mode="chat_completions",
-        model="fixture",
+        model=args.model,
         platform="cli",
         max_iterations=args.max_turns,
         quiet_mode=True,

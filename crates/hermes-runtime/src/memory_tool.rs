@@ -75,8 +75,13 @@ impl MemorySettings {
     }
 }
 
-/// Prompt guidance that goes with the tool. `skill_manage` is not available in this CLI.
-pub(crate) fn guidance(memory_enabled: bool, user_profile_enabled: bool) -> Option<String> {
+/// Prompt guidance that goes with the tool; the routing sentence depends on whether
+/// `skill_manage` is offered.
+pub(crate) fn guidance(
+    memory_enabled: bool,
+    user_profile_enabled: bool,
+    skill_manage_available: bool,
+) -> Option<String> {
     if !memory_enabled && !user_profile_enabled {
         return None;
     }
@@ -85,8 +90,13 @@ pub(crate) fn guidance(memory_enabled: bool, user_profile_enabled: bool) -> Opti
     } else {
         "You have a persistent user profile, carried across sessions and loaded into each new session's context; save durable facts about the user with the memory tool (target='user') — the built-in notes store is disabled, so never target='memory'. "
     };
+    let routing = if skill_manage_available {
+        "Skills come first: when you learn something while doing a task — a procedure, a pitfall, and the user's preferences and corrections for that kind of work — record it in the skill you used or built for the task (skill_manage), where it loads only when relevant. "
+    } else {
+        "Task-specific knowledge — procedures, pitfalls, and the user's preferences and corrections for that kind of work — belongs in skills, not in memory, even when skill writing is unavailable. "
+    };
     Some(format!(
-        "{frame}Task-specific knowledge — procedures, pitfalls, and the user's preferences and corrections for that kind of work — belongs in skills, not in memory, even when skill writing is unavailable. Memory is the narrow exception for facts that apply to EVERY session regardless of task (who the user is, environment facts, standing conventions with no task home); it has a hard character budget, so when it fills, replace or consolidate stale entries rather than skipping the save. Write entries as declarative facts, not instructions to yourself: 'User prefers concise responses' ✓ — 'Always respond concisely' ✗ (imperative phrasing gets re-read as a directive in later sessions and can override the user's current request). A fact stale within a week belongs in session history; procedures and workflows belong in skills."
+        "{frame}{routing}Memory is the narrow exception for facts that apply to EVERY session regardless of task (who the user is, environment facts, standing conventions with no task home); it has a hard character budget, so when it fills, replace or consolidate stale entries rather than skipping the save. Write entries as declarative facts, not instructions to yourself: 'User prefers concise responses' ✓ — 'Always respond concisely' ✗ (imperative phrasing gets re-read as a directive in later sessions and can override the user's current request). A fact stale within a week belongs in session history; procedures and workflows belong in skills."
     ))
 }
 
@@ -1305,17 +1315,19 @@ mod tests {
     fn the_prompt_guidance_equals_the_reference_text() {
         let recorded: Value =
             serde_json::from_str(include_str!("../tests/fixtures/guidance.json")).unwrap();
-        for (memory, user) in [(true, true), (false, true), (true, false), (false, false)] {
-            let expected = recorded["memory"][format!("{memory}-{user}")
-                .replace("true", "True")
-                .replace("false", "False")]
-            .as_str()
-            .filter(|text| !text.is_empty());
-            assert_eq!(
-                guidance(memory, user).as_deref(),
-                expected,
-                "memory={memory} user={user}"
-            );
+        for (skills, table) in [(false, "memory"), (true, "memory_with_skills")] {
+            for (memory, user) in [(true, true), (false, true), (true, false), (false, false)] {
+                let expected = recorded[table][format!("{memory}-{user}")
+                    .replace("true", "True")
+                    .replace("false", "False")]
+                .as_str()
+                .filter(|text| !text.is_empty());
+                assert_eq!(
+                    guidance(memory, user, skills).as_deref(),
+                    expected,
+                    "memory={memory} user={user} skills={skills}"
+                );
+            }
         }
     }
 

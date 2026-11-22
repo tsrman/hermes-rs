@@ -98,6 +98,10 @@ def main():
             f"{mem}-{user}": prompt_builder.build_memory_guidance(mem, user, skill_manage_available=False)
             for mem, user in ((True, True), (False, True), (True, False), (False, False))
         },
+        "memory_with_skills": {
+            f"{mem}-{user}": prompt_builder.build_memory_guidance(mem, user, skill_manage_available=True)
+            for mem, user in ((True, True), (False, True), (True, False), (False, False))
+        },
         "skills": prompt_builder.SKILLS_GUIDANCE,
         "session_search": prompt_builder.SESSION_SEARCH_GUIDANCE,
     }

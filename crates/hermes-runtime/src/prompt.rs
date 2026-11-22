@@ -1,16 +1,16 @@
 //! Profile-scoped and project-scoped parts of the saved CLI system prompt.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use hermes_core::prompt::CliPromptContext;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 
 use crate::config::truthy;
 use crate::skills::SkillSettings;
+use crate::system_prompt::{self, PromptGates};
 
 mod patterns;
 pub(crate) mod threats;
@@ -31,6 +31,9 @@ pub struct PromptSettings {
     /// Whether the memory tool is enabled, which adds its guidance to the prompt.
     #[serde(default = "enabled")]
     pub(crate) memory_tool: bool,
+    /// `agent.*` gates, `platform_hints` and `timezone`, which shape the prompt.
+    #[serde(default)]
+    pub(crate) gates: PromptGates,
 }
 
 fn enabled() -> bool {
@@ -47,6 +50,7 @@ impl Default for PromptSettings {
             user_char_limit: 1_375,
             skills: SkillSettings::default(),
             memory_tool: true,
+            gates: PromptGates::default(),
         }
     }
 }
@@ -66,6 +70,7 @@ impl PromptSettings {
             user_char_limit: count(&memory["user_char_limit"]).unwrap_or(defaults.user_char_limit),
             skills: SkillSettings::from_config(&config["skills"]),
             memory_tool: true,
+            gates: PromptGates::from_config(config),
         }
     }
 }
@@ -77,15 +82,20 @@ fn count(value: &Value) -> Option<usize> {
         .and_then(|number| usize::try_from(number).ok())
 }
 
+/// The whole system prompt for a new session. `tools` are the names of the tools the model is
+/// offered, which decide the guidance paragraphs.
 pub(crate) fn load_cli_context(
     profile: Option<&Path>,
     root: &Path,
     settings: &PromptSettings,
     skills_prompt: Option<String>,
-) -> CliPromptContext {
-    let profile = profile.and_then(|path| path.canonicalize().ok());
+    tools: &BTreeSet<String>,
+    model: &str,
+    provider: &str,
+) -> String {
+    let canonical = profile.and_then(|path| path.canonicalize().ok());
     let cap = settings.context_file_max_chars;
-    let identity = profile.as_deref().and_then(|profile| {
+    let soul = canonical.as_deref().and_then(|profile| {
         let path = profile.join("SOUL.md");
         let mut text = read_prompt_file(&path, profile, false)?;
         if !user_owned_soul(profile) {
@@ -93,19 +103,17 @@ pub(crate) fn load_cli_context(
         }
         Some(truncate(&text, "SOUL.md", &path, cap))
     });
-    let mut tool_guidance = Vec::new();
-    if profile.is_some() && settings.memory_tool {
-        tool_guidance.extend(crate::memory_tool::guidance(
+    let memory_guidance = if canonical.is_some() && settings.memory_tool {
+        crate::memory_tool::guidance(
             settings.memory_enabled,
             settings.user_profile_enabled,
-        ));
-    }
-    let mut sections = Vec::new();
-    if let Some(context) = project_context(root, cap) {
-        sections.push(context);
-    }
-    sections.extend(skills_prompt);
-    if let Some(profile) = &profile {
+            tools.contains("skill_manage"),
+        )
+    } else {
+        None
+    };
+    let mut memory_blocks = Vec::new();
+    if let Some(profile) = &canonical {
         for (enabled, filename, title, budget) in [
             (
                 settings.memory_enabled,
@@ -122,16 +130,24 @@ pub(crate) fn load_cli_context(
         ] {
             if enabled {
                 if let Some(memory) = memory_block(profile, filename, title, budget) {
-                    sections.push(memory);
+                    memory_blocks.push(memory);
                 }
             }
         }
     }
-    CliPromptContext {
-        identity,
-        tool_guidance,
-        sections,
-    }
+    system_prompt::build(&system_prompt::Inputs {
+        model,
+        provider,
+        tools,
+        gates: &settings.gates,
+        profile: canonical.as_deref(),
+        root,
+        soul,
+        memory_guidance,
+        project_context: project_context(root, cap),
+        skills_prompt,
+        memory_blocks,
+    })
 }
 
 fn user_owned_soul(profile: &Path) -> bool {

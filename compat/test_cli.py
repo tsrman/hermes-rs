@@ -937,12 +937,13 @@ class CliTest(unittest.TestCase):
         primary = requests[1]["messages"]
         backup = requests[2]["messages"]
         self.assertEqual(primary[1:], backup[1:])
-        primary_prefix, _, primary_route = primary[0]["content"].rpartition("\n\n")
-        backup_prefix, _, backup_route = backup[0]["content"].rpartition("\n\n")
-        self.assertTrue(primary_prefix)
-        self.assertEqual(primary_prefix, backup_prefix)
-        self.assertEqual(primary_route, "Model: primary\nProvider: custom\nPlatform: cli")
-        self.assertEqual(backup_route, "Model: backup\nProvider: openai\nPlatform: cli")
+        primary_route = "Model: primary\nProvider: custom\nPlatform: cli"
+        backup_route = "Model: backup\nProvider: openai\nPlatform: cli"
+        self.assertIn(primary_route, primary[0]["content"])
+        self.assertIn(backup_route, backup[0]["content"])
+        # Only the route lines differ between the two prompts.
+        self.assertEqual(primary[0]["content"].replace(primary_route, "ROUTE"),
+                         backup[0]["content"].replace(backup_route, "ROUTE"))
         tool_result = requests[2]["messages"][-1]
         self.assertEqual(tool_result["tool_call_id"], "fixture-call")
         self.assertEqual(json.loads(tool_result["content"])["content"], "1|fixture content")
@@ -986,11 +987,14 @@ class CliTest(unittest.TestCase):
         self.assertEqual(len(requests), 2)
         system, user = requests[0]["messages"]
         self.assertEqual(system["role"], "system")
-        identity, tool_guidance, platform_hint, route = system["content"].split("\n\n")
-        self.assertTrue(identity.startswith("You are Hermes Agent, built by Nous Research."))
-        self.assertIn("read_file", tool_guidance)
-        self.assertIn("plain terminal", platform_hint)
-        self.assertEqual(route, "Model: fixture\nProvider: custom\nPlatform: cli")
+        content = system["content"]
+        self.assertTrue(content.startswith("You are Hermes Agent, built by Nous Research. Be direct:"))
+        self.assertIn("# Finishing the job", content)
+        self.assertIn("# Parallel tool calls", content)
+        self.assertIn("You are in a plain terminal (CLI).", content)
+        self.assertIn("Conversation started: ", content)
+        self.assertIn("\nModel: fixture\nProvider: custom\nPlatform: cli\n", content)
+        self.assertTrue(content.rstrip().endswith("<!-- End Hermes runtime environment -->"))
         self.assertEqual(user, {"role": "user", "content": "Прочитай fixture.txt"})
         self.assertEqual(requests[1]["messages"][:2], [system, user])
         self.assertEqual(result.stdout, "Ответ модели\n")

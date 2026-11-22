@@ -174,7 +174,7 @@ fixtures in `crates/hermes-runtime/tests/fixtures` and the 134 compat tests guar
   `abort_on_summary_failure`, `model_thresholds`, proactive pruning and micro-compaction. Each changes
   which messages are summarized, so each needs the reference's boundary selection recorded first.
 
-## Finding while recording the default request (item 11): the default system prompt is a different, much shorter text
+## Finding while recording the default request (item 11): the default system prompt was a different, much shorter text (fixed, see the end of this section)
 
 Recorded by running the reference (`compat/run_reference_turn.py`, model `fixture`, CLI platform) and the
 port against the same local server, then diffing the first request's system message. The reference sends
@@ -217,3 +217,37 @@ Plan (a project of its own, about 2700 lines of reference code in `agent/system_
 
 Decision needed before step 5: the port's prompt is currently shorter, which also costs fewer tokens per
 turn; matching the reference adds about 2000 tokens to every request (more with the workspace block).
+
+### Result: the system prompt is now assembled like the reference (done)
+
+- `crates/hermes-runtime/src/system_prompt.rs` builds the three tiers (stable, context, volatile) in the
+  reference's order. The paragraphs are recorded from the reference (`compat/create_prompt_fixture.py` writes
+  `src/prompt_text.json` and `tests/fixtures/prompt_cases.json`); the module holds the conditions.
+- Gates ported and checked against the reference's own functions on 260 (setting, model) pairs, 9 tool sets
+  for the execution guidance, and 20 models for the coding brief: `agent.tool_use_enforcement`,
+  `agent.execution_guidance` (booleans, boolean words, model lists, `auto`), `agent.task_completion_guidance`,
+  `agent.parallel_tool_call_guidance` (Python truthiness), `agent.coding_context` (`auto`/`on`/`off`; `focus`
+  acts as `auto`, its toolset collapse is not ported), `agent.coding_instructions`, `agent.environment_hint`
+  and `HERMES_ENVIRONMENT_HINT`, `platform_hints.cli` (`replace`/`append`), `timezone` and `HERMES_TIMEZONE`.
+- The workspace snapshot (root, branch with upstream and ahead/behind, linked worktree note, status counts,
+  last three commits, manifests and package managers, verify commands, context files) runs `git` hardened for
+  untrusted repositories: no prompts, no repository-configured fsmonitor, hooks, pagers or external diff, every
+  `filter.*` command overridden (the status probe is skipped when filters cannot be discovered), the user's
+  `safe.directory` entries kept, 2.5 s limit.
+- Runtime environment block: host (WSL, Linux with kernel release, macOS), home, working directory, the profile
+  scratch directory `cache/scratch` (owner-only, entries idle for 24 h removed at most hourly) which commands now
+  really get as `TMPDIR`/`TMP`/`TEMP`, the WSL hint and the embedder hint. The memory guidance now has the
+  `skill_manage` variant ("Skills come first") when that tool is offered, as recorded from the reference.
+- **Differential check** `compat/compare_prompt.py <reference> <reference python> [--model M] [--layout L]`
+  runs the reference agent and the CLI in the same temporary git project against the local server and diffs
+  the first system message after removing the steering section and the profile path: identical for the models
+  `fixture`, `deepseek-flash-1017`, `gpt-5`, `claude-sonnet-5-5`, `gemini-2.5-pro`, `qwen3-coder` and the
+  layouts repo, plain directory, dirty repo; with a Node/Make/pytest project only the `AGENTS.md` context
+  differs (the reference runner skips context files). Live suite on `deepseek-flash-1017`: 14 of 14 and about
+  as fast as before (the prompt costs about 2000 more input tokens per request).
+- **Not ported (intended):** the mid-turn steering section (no steering channel; the reference drops it for
+  one-shot runs too); the Python toolchain probe line (`agent.environment_probe`); Bot Mode and Bot Screen
+  blocks; remote-backend environment text; plugin sections; pinned `skills.auto_load` skills; the dynamic
+  `context_file_max_chars` cap derived from the model window (the port keeps 20000 unless configured); the
+  rule that `Conversation started` keeps the session's original date when a compaction rebuilds the prompt
+  (the port uses the rebuild day).

@@ -3,7 +3,6 @@
 use std::future::Future;
 use std::path::Path;
 
-use hermes_core::prompt::{cli_system_prompt, update_cli_prompt_route};
 use serde_json::{json, Value};
 
 use crate::browser_cdp::BrowserSettings;
@@ -140,13 +139,15 @@ impl TurnHistory {
         };
         self.env.skill_desc_limit = self.skills.desc_limit();
         if self.system_prompt.is_none() {
-            let context = load_cli_context(
+            self.system_prompt = Some(load_cli_context(
                 options.profile,
                 options.root,
                 settings,
                 self.skills.prompt(),
-            );
-            self.system_prompt = Some(context.render(&route.model, route.provider_name));
+                &offered_names(&self.env),
+                &route.model,
+                route.provider_name,
+            ));
         }
     }
 
@@ -214,6 +215,7 @@ impl TurnHistory {
         let model = route.model.clone();
         let provider = route.provider_name;
         let skills_allowed = self.policy.allows_skills();
+        let tools_offered = offered_names(&self.env);
         let refreshed = tokio::task::spawn_blocking(move || {
             let skills = if skills_allowed {
                 SkillCatalog::load(
@@ -226,8 +228,16 @@ impl TurnHistory {
             } else {
                 SkillCatalog::default()
             };
-            let prompt = load_cli_context(profile.as_deref(), &root, &settings, skills.prompt());
-            (prompt.render(&model, provider), skills)
+            let prompt = load_cli_context(
+                profile.as_deref(),
+                &root,
+                &settings,
+                skills.prompt(),
+                &tools_offered,
+                &model,
+                provider,
+            );
+            (prompt, skills)
         })
         .await;
         let Ok((system, skills)) = refreshed else {
@@ -244,6 +254,16 @@ impl TurnHistory {
     }
 }
 
+/// The names of the tools a model is offered under `env`, as the prompt gates see them.
+pub(crate) fn offered_names(env: &ToolEnv) -> std::collections::BTreeSet<String> {
+    let mut tools = tools::offered_schemas(env);
+    tools::append_bridge(env, &mut tools);
+    tools
+        .iter()
+        .filter_map(|schema| schema["function"]["name"].as_str().map(str::to_owned))
+        .collect()
+}
+
 pub struct ModelRoute {
     pub provider: Provider,
     pub provider_name: &'static str,
@@ -253,8 +273,13 @@ pub struct ModelRoute {
 impl ModelRoute {
     fn system_prompt(&self, saved: Option<&str>) -> String {
         match saved {
-            Some(saved) => update_cli_prompt_route(saved, &self.model, self.provider_name),
-            None => cli_system_prompt(&self.model, self.provider_name),
+            Some(saved) => {
+                crate::system_prompt::update_route_lines(saved, &self.model, self.provider_name)
+            }
+            None => format!(
+                "{}\n\nModel: {}\nProvider: {}\nPlatform: cli",
+                "You are Hermes Agent, built by Nous Research.", self.model, self.provider_name
+            ),
         }
     }
 }

@@ -90,6 +90,10 @@ GitHub Releases опубликовал v0.2.0 для всех семи целе�
 
 Сверено с эталоном и записано в фикстурах: раскрытие `${VAR}` и `${env:VAR}` во всех строковых значениях `config.yaml` (11 входов против `_expand_env_vars`), именованные провайдеры `providers:`/`custom_providers:` по ключу или имени с `base_url`, `api_key`, `key_env`, `api_mode`/`transport` и `model` записи (15 случаев `resolve_runtime_provider`, `compat/create_named_provider_fixture.py`), порядок ключей `--api-key` > `model.api_key` > `HERMES_API_KEY`. `extra_body` записи провайдера отправляется в запросах основного хода на всех транспортах и не отправляется в запросе на сжатие (в эталоне там только `auxiliary.compression.extra_body`), `extra_headers` и `model.default_headers` отправляются везде и не попадают в журнал. Расхождения и очередь работ: [план](../docs/superpowers/plans/2026-11-22-config-compat-fixes.md).
 
+## Системный промпт CLI
+
+Первое системное сообщение Rust CLI и эталона сравнено в одном временном git-проекте через локальный сервер (`compat/compare_prompt.py`): после удаления блока управления ходом (в CLI нет такого канала) и пути профиля текст совпадает для моделей `fixture`, `deepseek-flash-1017`, `gpt-5`, `claude-sonnet-5-5`, `gemini-2.5-pro`, `qwen3-coder` и для каталогов: репозиторий, пустой каталог, грязный репозиторий. Условия (`tool_use_enforcement`, `execution_guidance`, кодовая памятка с форматом правки по семейству модели) сверены с функциями эталона (`compat/create_prompt_fixture.py`). Отличия и непереносимое: [план](../docs/superpowers/plans/2026-11-22-config-compat-fixes.md).
+
 ## Настройки профиля
 
 Python и Rust получили одинаковые значения YAML после записи `model.base_url`, пустого `model`, поля существующего имени с точкой, нового имени с экранированной точкой и элемента списка. Неизвестные поля и `${PLUGIN_TOKEN}` в фикстуре сохранились. Rust форматирует документ заново, Python сохраняет комментарии. В Rust запись `config set` ограничена YAML. Отдельные проверки покрывают отклонение битого файла, параллельную запись и применение изменений в `chat` выбранного профиля.

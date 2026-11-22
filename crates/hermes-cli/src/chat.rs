@@ -307,6 +307,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
             settings.compression.set_context_length_if_unset(window);
         }
     }
+    settings.terminal_env.scratch = home.and_then(hermes_runtime::scratch::directory);
     let mut extras = hermes_runtime::providers::Extras::default();
     if let Some(model) = args.model.as_deref().or(settings.model.as_deref()) {
         if settings.provider == "custom" || settings.named_custom {

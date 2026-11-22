@@ -26,6 +26,9 @@ pub struct TerminalSettings {
     /// `code_execution.max_tool_calls`: tool calls one `execute_code` call may make.
     #[serde(default)]
     pub code_max_tool_calls: Option<usize>,
+    /// The profile's scratch directory; commands get it as `TMPDIR`, `TMP` and `TEMP`.
+    #[serde(default)]
+    pub scratch: Option<std::path::PathBuf>,
 }
 
 const DEFAULT_ENV: [&str; 22] = [
@@ -85,6 +88,7 @@ impl TerminalSettings {
                 .as_u64()
                 .filter(|calls| *calls > 0)
                 .map(|calls| calls as usize),
+            scratch: None,
         }
     }
 
@@ -101,6 +105,12 @@ impl TerminalSettings {
             }
             if let Ok(value) = std::env::var(name) {
                 out.push((name.to_owned(), value));
+            }
+        }
+        if let Some(scratch) = &self.scratch {
+            for name in ["TMPDIR", "TMP", "TEMP"] {
+                out.retain(|(known, _)| known != name);
+                out.push((name.to_owned(), scratch.display().to_string()));
             }
         }
         if !out.iter().any(|(name, _)| name == "PATH") {
@@ -583,7 +593,9 @@ mod tests {
             Some(5),
             background,
             &TerminalSettings::default(),
-            "terminal-test-session",
+            // One conversation per test directory, so tests running together do not share a
+            // remembered working directory.
+            &format!("terminal-test-{}", root.display()),
             &mut approve,
         )
         .await
