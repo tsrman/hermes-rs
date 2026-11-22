@@ -61,13 +61,7 @@ fn text(value: &Value) -> &str {
 fn joined(value: &Value, separator: &str) -> String {
     value
         .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .map(|item| text(item))
-                .collect::<Vec<_>>()
-                .join(separator)
-        })
+        .map(|items| items.iter().map(text).collect::<Vec<_>>().join(separator))
         .unwrap_or_default()
 }
 

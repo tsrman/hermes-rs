@@ -9,14 +9,13 @@ use std::time::Duration;
 use hermes_runtime::web_tools::{extract, search, Backend, WebSettings};
 use serde_json::{json, Value};
 
+/// (path, auth headers, JSON body) of one request.
+type Seen = (String, Value, Value);
+
 const CORPUS: &str = include_str!("fixtures/web_sdk_cases.json");
 
 /// Serve the same canned answer `count` times; returns (path, auth headers, JSON body) per request.
-fn serve(
-    status: u64,
-    body: String,
-    count: usize,
-) -> (String, thread::JoinHandle<Vec<(String, Value, Value)>>) {
+fn serve(status: u64, body: String, count: usize) -> (String, thread::JoinHandle<Vec<Seen>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let handle = thread::spawn(move || {
