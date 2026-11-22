@@ -32,6 +32,7 @@ pub enum Backend {
     Perplexity,
     Exa,
     Parallel,
+    Firecrawl,
     /// A backend of the Python agent that this crate does not implement.
     Unsupported(String),
 }
@@ -52,6 +53,8 @@ pub struct WebSettings {
     pub parallel_key: Option<String>,
     pub parallel_base: Option<String>,
     pub parallel_mode: Option<String>,
+    pub firecrawl_key: Option<String>,
+    pub firecrawl_url: Option<String>,
     pub char_limit: Option<usize>,
     pub allow_private_urls: bool,
 }
@@ -107,6 +110,7 @@ impl WebSettings {
                 "perplexity" => Backend::Perplexity,
                 "exa" => Backend::Exa,
                 "parallel" => Backend::Parallel,
+                "firecrawl" => Backend::Firecrawl,
                 // The managed subscription is served by Firecrawl.
                 "nous" => Backend::Unsupported("firecrawl".into()),
                 other => Backend::Unsupported(other.to_owned()),
@@ -140,6 +144,8 @@ impl WebSettings {
             parallel_key: env("PARALLEL_API_KEY"),
             parallel_base: env("PARALLEL_BASE_URL"),
             parallel_mode: env("PARALLEL_SEARCH_MODE"),
+            firecrawl_key: env("FIRECRAWL_API_KEY"),
+            firecrawl_url: env("FIRECRAWL_API_URL").map(|url| url.trim_end_matches('/').to_owned()),
             char_limit: web
                 .and_then(|web| web.get("extract_char_limit"))
                 .and_then(serde_yaml::Value::as_u64)
@@ -240,6 +246,7 @@ pub async fn search(settings: &WebSettings, arguments: &str) -> Value {
         Backend::Perplexity => perplexity_search(settings, query, limit).await,
         Backend::Exa => crate::web_vendors::exa_search(settings, query, limit).await,
         Backend::Parallel => crate::web_vendors::parallel_search(settings, query, limit).await,
+        Backend::Firecrawl => crate::web_vendors::firecrawl_search(settings, query, limit).await,
         Backend::Unsupported(name) => failure(unsupported(name)),
         Backend::None => {
             failure("No web search provider configured. Run `hermes tools` to set one up.")
@@ -250,7 +257,7 @@ pub async fn search(settings: &WebSettings, arguments: &str) -> Value {
 
 fn unsupported(name: &str) -> String {
     format!(
-        "The web backend '{name}' is not supported by the Rust CLI yet. Set web.backend to tavily, perplexity, exa, parallel, searxng (search only) or brave-free (search only)."
+        "The web backend '{name}' is not supported by the Rust CLI yet. Set web.backend to tavily, perplexity, exa, parallel, firecrawl, searxng (search only) or brave-free (search only)."
     )
 }
 
@@ -704,6 +711,7 @@ pub async fn extract(settings: &WebSettings, arguments: &str) -> Value {
             Backend::Perplexity => perplexity_extract(settings, &urls).await,
             Backend::Exa => crate::web_vendors::exa_extract(settings, &urls).await,
             Backend::Parallel => crate::web_vendors::parallel_extract(settings, &urls).await,
+            Backend::Firecrawl => crate::web_vendors::firecrawl_extract(settings, &urls).await,
             Backend::Searxng | Backend::BraveFree => {
                 let name = if settings.extract == Backend::Searxng {
                     "SearXNG"
@@ -1016,7 +1024,8 @@ mod settings_tests {
             &[],
         );
         assert_eq!(pinned.search, Backend::BraveFree);
-        assert_eq!(pinned.extract, Backend::Unsupported("firecrawl".into()));
+        assert_eq!(pinned.extract, Backend::Firecrawl);
+        // The managed subscription is served by Firecrawl through the Nous gateway, which this port lacks.
         assert_eq!(
             load("web: {backend: nous}", &[]).search,
             Backend::Unsupported("firecrawl".into())

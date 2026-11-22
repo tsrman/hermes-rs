@@ -1,0 +1,1738 @@
+[
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": true, \"data\": {\"web\": [{\"url\": \"http://93.184.216.34/a\", \"title\": \"A\", \"description\": \"alpha\", \"category\": \"x\", \"position\": 1}, {\"url\": \"http://93.184.216.34/b\", \"title\": null, \"description\": null}, {\"url\": \"http://93.184.216.34/c\"}]}}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "limit": 5,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "url": "http://93.184.216.34/a",
+      "title": "A",
+      "description": "alpha",
+      "position": 1,
+      "category": "x"
+     },
+     {
+      "url": "http://93.184.216.34/b",
+      "title": null,
+      "description": null,
+      "position": null,
+      "category": null
+     },
+     {
+      "url": "http://93.184.216.34/c",
+      "title": null,
+      "description": null,
+      "position": null,
+      "category": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": true, \"data\": {\"web\": [{\"url\": \"http://93.184.216.34/a\", \"title\": \"A\", \"description\": \"alpha\", \"category\": \"x\", \"position\": 1}, {\"url\": \"http://93.184.216.34/b\", \"title\": null, \"description\": null}, {\"url\": \"http://93.184.216.34/c\"}]}}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "one",
+     "limit": 1,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "url": "http://93.184.216.34/a",
+      "title": "A",
+      "description": "alpha",
+      "position": 1,
+      "category": "x"
+     },
+     {
+      "url": "http://93.184.216.34/b",
+      "title": null,
+      "description": null,
+      "position": null,
+      "category": null
+     },
+     {
+      "url": "http://93.184.216.34/c",
+      "title": null,
+      "description": null,
+      "position": null,
+      "category": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": true, \"data\": {\"web\": []}}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "limit": 5,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": true, \"data\": {\"web\": []}}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "one",
+     "limit": 1,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": true, \"data\": [{\"url\": \"http://93.184.216.34/l\", \"title\": \"L\", \"description\": \"list\"}]}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "limit": 5,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": true, \"data\": [{\"url\": \"http://93.184.216.34/l\", \"title\": \"L\", \"description\": \"list\"}]}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "one",
+     "limit": 1,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 402,
+   "raw": "{\"success\": false, \"error\": \"Payment required\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "limit": 5,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Payment Required: Failed to search. Payment required - No additional error details provided."
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 402,
+   "raw": "{\"success\": false, \"error\": \"Payment required\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "one",
+     "limit": 1,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Payment Required: Failed to search. Payment required - No additional error details provided."
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 500,
+   "raw": "{\"success\": false, \"error\": \"boom\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "limit": 5,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Internal Server Error: Failed to search. boom - No additional error details provided."
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 500,
+   "raw": "{\"success\": false, \"error\": \"boom\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "one",
+     "limit": 1,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Internal Server Error: Failed to search. boom - No additional error details provided."
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 400,
+   "raw": "{\"success\": false, \"error\": \"bad query\", \"details\": \"limit too big\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "limit": 5,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Bad Request: Failed to search. bad query - limit too big"
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 400,
+   "raw": "{\"success\": false, \"error\": \"bad query\", \"details\": \"limit too big\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "one",
+     "limit": 1,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Bad Request: Failed to search. bad query - limit too big"
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 401,
+   "raw": "{\"success\": false, \"error\": \"Unauthorized\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "limit": 5,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Unauthorized: Failed to search. Unauthorized - No additional error details provided."
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 401,
+   "raw": "{\"success\": false, \"error\": \"Unauthorized\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "one",
+     "limit": 1,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Unauthorized: Failed to search. Unauthorized - No additional error details provided."
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 403,
+   "raw": "{\"success\": false, \"error\": \"nope\", \"details\": \"why\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "limit": 5,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Website Not Supported: Failed to search. nope - why"
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 403,
+   "raw": "{\"success\": false, \"error\": \"nope\", \"details\": \"why\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "one",
+     "limit": 1,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Website Not Supported: Failed to search. nope - why"
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 404,
+   "raw": "{\"success\": false}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "limit": 5,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Unexpected error during search: Status code 404. No error message provided. - No additional error details provided."
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 404,
+   "raw": "{\"success\": false}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "one",
+     "limit": 1,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Unexpected error during search: Status code 404. No error message provided. - No additional error details provided."
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 408,
+   "raw": "{\"success\": false, \"error\": \"slow\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "limit": 5,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Request Timeout: Failed to search as the request timed out. slow - No additional error details provided."
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 408,
+   "raw": "{\"success\": false, \"error\": \"slow\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "one",
+     "limit": 1,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Request Timeout: Failed to search as the request timed out. slow - No additional error details provided."
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 502,
+   "raw": "<html>bad gateway</html>"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "limit": 5,
+     "origin": "python-sdk@4.53.2"
+    }
+   },
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "limit": 5,
+     "origin": "python-sdk@4.53.2"
+    }
+   },
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "limit": 5,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Unexpected error during search: Status code 502. Server returned non-JSON response: <html>bad gateway</html> - Full response status: 502"
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 502,
+   "raw": "<html>bad gateway</html>"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "one",
+     "limit": 1,
+     "origin": "python-sdk@4.53.2"
+    }
+   },
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "one",
+     "limit": 1,
+     "origin": "python-sdk@4.53.2"
+    }
+   },
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "one",
+     "limit": 1,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Unexpected error during search: Status code 502. Server returned non-JSON response: <html>bad gateway</html> - Full response status: 502"
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 500,
+   "raw": ""
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "limit": 5,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Internal Server Error: Failed to search. Server returned empty response with status 500 - No additional details available"
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 500,
+   "raw": ""
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "one",
+     "limit": 1,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Internal Server Error: Failed to search. Server returned empty response with status 500 - No additional details available"
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": false, \"error\": \"soft failure\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "python asyncio",
+     "limit": 5,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Unexpected error during search: Status code 200. soft failure - No additional error details provided."
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": false, \"error\": \"soft failure\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "Bearer <key>",
+    "body": {
+     "query": "one",
+     "limit": 1,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Firecrawl search failed: Unexpected error during search: Status code 200. soft failure - No additional error details provided."
+  }
+ },
+ {
+  "mode": "keyed",
+  "kind": "extract",
+  "format": null,
+  "urls": [
+   "http://93.184.216.34/a"
+  ],
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": true, \"data\": {\"markdown\": \"# alpha\", \"html\": \"<h1>alpha</h1>\", \"metadata\": {\"title\": \"A\", \"sourceURL\": \"http://93.184.216.34/a\", \"url\": \"http://93.184.216.34/a\", \"statusCode\": 200}}}"
+  },
+  "requests": [
+   {
+    "path": "/v2/scrape",
+    "auth": "Bearer <key>",
+    "body": {
+     "url": "http://93.184.216.34/a",
+     "onlyMainContent": true,
+     "skipTlsVerification": true,
+     "removeBase64Images": true,
+     "fastMode": false,
+     "blockAds": true,
+     "storeInCache": true,
+     "maxAge": 14400000,
+     "formats": [
+      "markdown",
+      "html"
+     ],
+     "timeout": 60000,
+     "mobile": false,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "A",
+    "content": "# alpha",
+    "raw_content": "# alpha",
+    "metadata": {
+     "title": "A",
+     "description": null,
+     "url": "http://93.184.216.34/a",
+     "language": null,
+     "keywords": null,
+     "robots": null,
+     "og_title": null,
+     "og_description": null,
+     "og_url": null,
+     "og_image": null,
+     "og_audio": null,
+     "og_determiner": null,
+     "og_locale": null,
+     "og_locale_alternate": null,
+     "og_site_name": null,
+     "og_video": null,
+     "favicon": null,
+     "dc_terms_created": null,
+     "dc_date_created": null,
+     "dc_date": null,
+     "dc_terms_type": null,
+     "dc_type": null,
+     "dc_terms_audience": null,
+     "dc_terms_subject": null,
+     "dc_subject": null,
+     "dc_description": null,
+     "dc_terms_keywords": null,
+     "modified_time": null,
+     "published_time": null,
+     "article_tag": null,
+     "article_section": null,
+     "source_url": "http://93.184.216.34/a",
+     "status_code": 200,
+     "scrape_id": null,
+     "num_pages": null,
+     "total_pages": null,
+     "content_type": null,
+     "proxy_used": null,
+     "timezone": null,
+     "cache_state": null,
+     "cached_at": null,
+     "credits_used": null,
+     "concurrency_limited": null,
+     "concurrency_queue_duration_ms": null,
+     "error": null,
+     "sourceURL": "http://93.184.216.34/a"
+    }
+   }
+  ]
+ },
+ {
+  "mode": "keyed",
+  "kind": "extract",
+  "format": null,
+  "urls": [
+   "http://93.184.216.34/a"
+  ],
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": true, \"data\": {\"markdown\": \"\", \"html\": \"<p>only html</p>\", \"metadata\": {\"title\": \"H\", \"sourceURL\": \"http://93.184.216.34/a\", \"url\": \"http://93.184.216.34/a\", \"statusCode\": 200}}}"
+  },
+  "requests": [
+   {
+    "path": "/v2/scrape",
+    "auth": "Bearer <key>",
+    "body": {
+     "url": "http://93.184.216.34/a",
+     "onlyMainContent": true,
+     "skipTlsVerification": true,
+     "removeBase64Images": true,
+     "fastMode": false,
+     "blockAds": true,
+     "storeInCache": true,
+     "maxAge": 14400000,
+     "formats": [
+      "markdown",
+      "html"
+     ],
+     "timeout": 60000,
+     "mobile": false,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "H",
+    "content": "<p>only html</p>",
+    "raw_content": "<p>only html</p>",
+    "metadata": {
+     "title": "H",
+     "description": null,
+     "url": "http://93.184.216.34/a",
+     "language": null,
+     "keywords": null,
+     "robots": null,
+     "og_title": null,
+     "og_description": null,
+     "og_url": null,
+     "og_image": null,
+     "og_audio": null,
+     "og_determiner": null,
+     "og_locale": null,
+     "og_locale_alternate": null,
+     "og_site_name": null,
+     "og_video": null,
+     "favicon": null,
+     "dc_terms_created": null,
+     "dc_date_created": null,
+     "dc_date": null,
+     "dc_terms_type": null,
+     "dc_type": null,
+     "dc_terms_audience": null,
+     "dc_terms_subject": null,
+     "dc_subject": null,
+     "dc_description": null,
+     "dc_terms_keywords": null,
+     "modified_time": null,
+     "published_time": null,
+     "article_tag": null,
+     "article_section": null,
+     "source_url": "http://93.184.216.34/a",
+     "status_code": 200,
+     "scrape_id": null,
+     "num_pages": null,
+     "total_pages": null,
+     "content_type": null,
+     "proxy_used": null,
+     "timezone": null,
+     "cache_state": null,
+     "cached_at": null,
+     "credits_used": null,
+     "concurrency_limited": null,
+     "concurrency_queue_duration_ms": null,
+     "error": null,
+     "sourceURL": "http://93.184.216.34/a"
+    }
+   }
+  ]
+ },
+ {
+  "mode": "keyed",
+  "kind": "extract",
+  "format": null,
+  "urls": [
+   "http://93.184.216.34/a"
+  ],
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": true, \"data\": {\"markdown\": \"gone\", \"html\": null, \"metadata\": {\"title\": \"\", \"sourceURL\": \"http://93.184.216.34/a\", \"url\": \"http://93.184.216.34/a\", \"statusCode\": 404, \"error\": \"Not Found\"}}}"
+  },
+  "requests": [
+   {
+    "path": "/v2/scrape",
+    "auth": "Bearer <key>",
+    "body": {
+     "url": "http://93.184.216.34/a",
+     "onlyMainContent": true,
+     "skipTlsVerification": true,
+     "removeBase64Images": true,
+     "fastMode": false,
+     "blockAds": true,
+     "storeInCache": true,
+     "maxAge": 14400000,
+     "formats": [
+      "markdown",
+      "html"
+     ],
+     "timeout": 60000,
+     "mobile": false,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "gone",
+    "raw_content": "gone",
+    "metadata": {
+     "title": "",
+     "description": null,
+     "url": "http://93.184.216.34/a",
+     "language": null,
+     "keywords": null,
+     "robots": null,
+     "og_title": null,
+     "og_description": null,
+     "og_url": null,
+     "og_image": null,
+     "og_audio": null,
+     "og_determiner": null,
+     "og_locale": null,
+     "og_locale_alternate": null,
+     "og_site_name": null,
+     "og_video": null,
+     "favicon": null,
+     "dc_terms_created": null,
+     "dc_date_created": null,
+     "dc_date": null,
+     "dc_terms_type": null,
+     "dc_type": null,
+     "dc_terms_audience": null,
+     "dc_terms_subject": null,
+     "dc_subject": null,
+     "dc_description": null,
+     "dc_terms_keywords": null,
+     "modified_time": null,
+     "published_time": null,
+     "article_tag": null,
+     "article_section": null,
+     "source_url": "http://93.184.216.34/a",
+     "status_code": 404,
+     "scrape_id": null,
+     "num_pages": null,
+     "total_pages": null,
+     "content_type": null,
+     "proxy_used": null,
+     "timezone": null,
+     "cache_state": null,
+     "cached_at": null,
+     "credits_used": null,
+     "concurrency_limited": null,
+     "concurrency_queue_duration_ms": null,
+     "error": "Not Found",
+     "sourceURL": "http://93.184.216.34/a"
+    },
+    "error": "HTTP 404 from origin: Not Found"
+   }
+  ]
+ },
+ {
+  "mode": "keyed",
+  "kind": "extract",
+  "format": null,
+  "urls": [
+   "http://93.184.216.34/a"
+  ],
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": true, \"data\": {\"markdown\": \"moved\", \"metadata\": {\"title\": \"R\", \"sourceURL\": \"http://93.184.216.34/a\", \"url\": \"http://93.184.216.34/final\", \"statusCode\": 200}}}"
+  },
+  "requests": [
+   {
+    "path": "/v2/scrape",
+    "auth": "Bearer <key>",
+    "body": {
+     "url": "http://93.184.216.34/a",
+     "onlyMainContent": true,
+     "skipTlsVerification": true,
+     "removeBase64Images": true,
+     "fastMode": false,
+     "blockAds": true,
+     "storeInCache": true,
+     "maxAge": 14400000,
+     "formats": [
+      "markdown",
+      "html"
+     ],
+     "timeout": 60000,
+     "mobile": false,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/final",
+    "title": "R",
+    "content": "moved",
+    "raw_content": "moved",
+    "metadata": {
+     "title": "R",
+     "description": null,
+     "url": "http://93.184.216.34/final",
+     "language": null,
+     "keywords": null,
+     "robots": null,
+     "og_title": null,
+     "og_description": null,
+     "og_url": null,
+     "og_image": null,
+     "og_audio": null,
+     "og_determiner": null,
+     "og_locale": null,
+     "og_locale_alternate": null,
+     "og_site_name": null,
+     "og_video": null,
+     "favicon": null,
+     "dc_terms_created": null,
+     "dc_date_created": null,
+     "dc_date": null,
+     "dc_terms_type": null,
+     "dc_type": null,
+     "dc_terms_audience": null,
+     "dc_terms_subject": null,
+     "dc_subject": null,
+     "dc_description": null,
+     "dc_terms_keywords": null,
+     "modified_time": null,
+     "published_time": null,
+     "article_tag": null,
+     "article_section": null,
+     "source_url": "http://93.184.216.34/a",
+     "status_code": 200,
+     "scrape_id": null,
+     "num_pages": null,
+     "total_pages": null,
+     "content_type": null,
+     "proxy_used": null,
+     "timezone": null,
+     "cache_state": null,
+     "cached_at": null,
+     "credits_used": null,
+     "concurrency_limited": null,
+     "concurrency_queue_duration_ms": null,
+     "error": null,
+     "sourceURL": "http://93.184.216.34/a"
+    }
+   }
+  ]
+ },
+ {
+  "mode": "keyed",
+  "kind": "extract",
+  "format": null,
+  "urls": [
+   "http://93.184.216.34/a"
+  ],
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": true, \"data\": {\"markdown\": \"x\", \"metadata\": {\"title\": \"P\", \"sourceURL\": \"http://93.184.216.34/a\", \"url\": \"http://10.0.0.5/secret\", \"statusCode\": 200}}}"
+  },
+  "requests": [
+   {
+    "path": "/v2/scrape",
+    "auth": "Bearer <key>",
+    "body": {
+     "url": "http://93.184.216.34/a",
+     "onlyMainContent": true,
+     "skipTlsVerification": true,
+     "removeBase64Images": true,
+     "fastMode": false,
+     "blockAds": true,
+     "storeInCache": true,
+     "maxAge": 14400000,
+     "formats": [
+      "markdown",
+      "html"
+     ],
+     "timeout": 60000,
+     "mobile": false,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://10.0.0.5/secret",
+    "title": "P",
+    "content": "",
+    "raw_content": "",
+    "error": "Blocked: URL targets a private or internal network address"
+   }
+  ]
+ },
+ {
+  "mode": "keyed",
+  "kind": "extract",
+  "format": null,
+  "urls": [
+   "http://93.184.216.34/a"
+  ],
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": true, \"data\": {\"markdown\": \"bare\"}}"
+  },
+  "requests": [
+   {
+    "path": "/v2/scrape",
+    "auth": "Bearer <key>",
+    "body": {
+     "url": "http://93.184.216.34/a",
+     "onlyMainContent": true,
+     "skipTlsVerification": true,
+     "removeBase64Images": true,
+     "fastMode": false,
+     "blockAds": true,
+     "storeInCache": true,
+     "maxAge": 14400000,
+     "formats": [
+      "markdown",
+      "html"
+     ],
+     "timeout": 60000,
+     "mobile": false,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "bare",
+    "raw_content": "bare",
+    "metadata": {
+     "sourceURL": "http://93.184.216.34/a"
+    }
+   }
+  ]
+ },
+ {
+  "mode": "keyed",
+  "kind": "extract",
+  "format": null,
+  "urls": [
+   "http://93.184.216.34/a"
+  ],
+  "answer": {
+   "status": 429,
+   "raw": "{\"success\": false, \"error\": \"Rate limit exceeded\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/scrape",
+    "auth": "Bearer <key>",
+    "body": {
+     "url": "http://93.184.216.34/a",
+     "onlyMainContent": true,
+     "skipTlsVerification": true,
+     "removeBase64Images": true,
+     "fastMode": false,
+     "blockAds": true,
+     "storeInCache": true,
+     "maxAge": 14400000,
+     "formats": [
+      "markdown",
+      "html"
+     ],
+     "timeout": 60000,
+     "mobile": false,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "error": "Rate Limit Exceeded: Failed to scrape. Rate limit exceeded - No additional error details provided."
+   }
+  ]
+ },
+ {
+  "mode": "keyed",
+  "kind": "extract",
+  "format": null,
+  "urls": [
+   "http://93.184.216.34/a"
+  ],
+  "answer": {
+   "status": 500,
+   "raw": "{\"success\": false, \"error\": \"boom\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/scrape",
+    "auth": "Bearer <key>",
+    "body": {
+     "url": "http://93.184.216.34/a",
+     "onlyMainContent": true,
+     "skipTlsVerification": true,
+     "removeBase64Images": true,
+     "fastMode": false,
+     "blockAds": true,
+     "storeInCache": true,
+     "maxAge": 14400000,
+     "formats": [
+      "markdown",
+      "html"
+     ],
+     "timeout": 60000,
+     "mobile": false,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "error": "Internal Server Error: Failed to scrape. boom - No additional error details provided."
+   }
+  ]
+ },
+ {
+  "mode": "keyed",
+  "kind": "extract",
+  "format": null,
+  "urls": [
+   "http://93.184.216.34/a"
+  ],
+  "answer": {
+   "status": 401,
+   "raw": "{\"success\": false, \"error\": \"Unauthorized\", \"details\": \"bad key\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/scrape",
+    "auth": "Bearer <key>",
+    "body": {
+     "url": "http://93.184.216.34/a",
+     "onlyMainContent": true,
+     "skipTlsVerification": true,
+     "removeBase64Images": true,
+     "fastMode": false,
+     "blockAds": true,
+     "storeInCache": true,
+     "maxAge": 14400000,
+     "formats": [
+      "markdown",
+      "html"
+     ],
+     "timeout": 60000,
+     "mobile": false,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "error": "Unauthorized: Failed to scrape. Unauthorized - bad key"
+   }
+  ]
+ },
+ {
+  "mode": "keyed",
+  "kind": "extract",
+  "format": null,
+  "urls": [
+   "http://93.184.216.34/a"
+  ],
+  "answer": {
+   "status": 403,
+   "raw": "{\"success\": false, \"error\": \"blocked site\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/scrape",
+    "auth": "Bearer <key>",
+    "body": {
+     "url": "http://93.184.216.34/a",
+     "onlyMainContent": true,
+     "skipTlsVerification": true,
+     "removeBase64Images": true,
+     "fastMode": false,
+     "blockAds": true,
+     "storeInCache": true,
+     "maxAge": 14400000,
+     "formats": [
+      "markdown",
+      "html"
+     ],
+     "timeout": 60000,
+     "mobile": false,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "error": "Website Not Supported: Failed to scrape. blocked site - No additional error details provided."
+   }
+  ]
+ },
+ {
+  "mode": "keyed",
+  "kind": "extract",
+  "format": null,
+  "urls": [
+   "http://93.184.216.34/a"
+  ],
+  "answer": {
+   "status": 408,
+   "raw": "{\"success\": false, \"error\": \"slow\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/scrape",
+    "auth": "Bearer <key>",
+    "body": {
+     "url": "http://93.184.216.34/a",
+     "onlyMainContent": true,
+     "skipTlsVerification": true,
+     "removeBase64Images": true,
+     "fastMode": false,
+     "blockAds": true,
+     "storeInCache": true,
+     "maxAge": 14400000,
+     "formats": [
+      "markdown",
+      "html"
+     ],
+     "timeout": 60000,
+     "mobile": false,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "error": "Request Timeout: Failed to scrape as the request timed out. slow - No additional error details provided."
+   }
+  ]
+ },
+ {
+  "mode": "keyed",
+  "kind": "extract",
+  "format": null,
+  "urls": [
+   "http://93.184.216.34/a"
+  ],
+  "answer": {
+   "status": 502,
+   "raw": "<html>bad gateway</html>"
+  },
+  "requests": [
+   {
+    "path": "/v2/scrape",
+    "auth": "Bearer <key>",
+    "body": {
+     "url": "http://93.184.216.34/a",
+     "onlyMainContent": true,
+     "skipTlsVerification": true,
+     "removeBase64Images": true,
+     "fastMode": false,
+     "blockAds": true,
+     "storeInCache": true,
+     "maxAge": 14400000,
+     "formats": [
+      "markdown",
+      "html"
+     ],
+     "timeout": 60000,
+     "mobile": false,
+     "origin": "python-sdk@4.53.2"
+    }
+   },
+   {
+    "path": "/v2/scrape",
+    "auth": "Bearer <key>",
+    "body": {
+     "url": "http://93.184.216.34/a",
+     "onlyMainContent": true,
+     "skipTlsVerification": true,
+     "removeBase64Images": true,
+     "fastMode": false,
+     "blockAds": true,
+     "storeInCache": true,
+     "maxAge": 14400000,
+     "formats": [
+      "markdown",
+      "html"
+     ],
+     "timeout": 60000,
+     "mobile": false,
+     "origin": "python-sdk@4.53.2"
+    }
+   },
+   {
+    "path": "/v2/scrape",
+    "auth": "Bearer <key>",
+    "body": {
+     "url": "http://93.184.216.34/a",
+     "onlyMainContent": true,
+     "skipTlsVerification": true,
+     "removeBase64Images": true,
+     "fastMode": false,
+     "blockAds": true,
+     "storeInCache": true,
+     "maxAge": 14400000,
+     "formats": [
+      "markdown",
+      "html"
+     ],
+     "timeout": 60000,
+     "mobile": false,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "error": "Unexpected error during scrape: Status code 502. Server returned non-JSON response: <html>bad gateway</html> - Full response status: 502"
+   }
+  ]
+ },
+ {
+  "mode": "keyed",
+  "kind": "extract",
+  "format": null,
+  "urls": [
+   "http://93.184.216.34/a"
+  ],
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": false, \"error\": \"soft failure\"}"
+  },
+  "requests": [
+   {
+    "path": "/v2/scrape",
+    "auth": "Bearer <key>",
+    "body": {
+     "url": "http://93.184.216.34/a",
+     "onlyMainContent": true,
+     "skipTlsVerification": true,
+     "removeBase64Images": true,
+     "fastMode": false,
+     "blockAds": true,
+     "storeInCache": true,
+     "maxAge": 14400000,
+     "formats": [
+      "markdown",
+      "html"
+     ],
+     "timeout": 60000,
+     "mobile": false,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "error": "Unexpected error during scrape: Status code 200. soft failure - No additional error details provided."
+   }
+  ]
+ },
+ {
+  "mode": "self_hosted",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": true, \"data\": {\"web\": [{\"url\": \"http://93.184.216.34/a\", \"title\": \"A\", \"description\": \"alpha\", \"category\": \"x\", \"position\": 1}, {\"url\": \"http://93.184.216.34/b\", \"title\": null, \"description\": null}, {\"url\": \"http://93.184.216.34/c\"}]}}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "",
+    "body": {
+     "query": "python asyncio",
+     "limit": 5,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "url": "http://93.184.216.34/a",
+      "title": "A",
+      "description": "alpha",
+      "position": 1,
+      "category": "x"
+     },
+     {
+      "url": "http://93.184.216.34/b",
+      "title": null,
+      "description": null,
+      "position": null,
+      "category": null
+     },
+     {
+      "url": "http://93.184.216.34/c",
+      "title": null,
+      "description": null,
+      "position": null,
+      "category": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "mode": "self_hosted",
+  "kind": "search",
+  "query": "one",
+  "limit": 1,
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": true, \"data\": {\"web\": [{\"url\": \"http://93.184.216.34/a\", \"title\": \"A\", \"description\": \"alpha\", \"category\": \"x\", \"position\": 1}, {\"url\": \"http://93.184.216.34/b\", \"title\": null, \"description\": null}, {\"url\": \"http://93.184.216.34/c\"}]}}"
+  },
+  "requests": [
+   {
+    "path": "/v2/search",
+    "auth": "",
+    "body": {
+     "query": "one",
+     "limit": 1,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "url": "http://93.184.216.34/a",
+      "title": "A",
+      "description": "alpha",
+      "position": 1,
+      "category": "x"
+     },
+     {
+      "url": "http://93.184.216.34/b",
+      "title": null,
+      "description": null,
+      "position": null,
+      "category": null
+     },
+     {
+      "url": "http://93.184.216.34/c",
+      "title": null,
+      "description": null,
+      "position": null,
+      "category": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "mode": "self_hosted",
+  "kind": "extract",
+  "format": null,
+  "urls": [
+   "http://93.184.216.34/a"
+  ],
+  "answer": {
+   "status": 200,
+   "raw": "{\"success\": true, \"data\": {\"markdown\": \"# alpha\", \"html\": \"<h1>alpha</h1>\", \"metadata\": {\"title\": \"A\", \"sourceURL\": \"http://93.184.216.34/a\", \"url\": \"http://93.184.216.34/a\", \"statusCode\": 200}}}"
+  },
+  "requests": [
+   {
+    "path": "/v2/scrape",
+    "auth": "",
+    "body": {
+     "url": "http://93.184.216.34/a",
+     "onlyMainContent": true,
+     "skipTlsVerification": true,
+     "removeBase64Images": true,
+     "fastMode": false,
+     "blockAds": true,
+     "storeInCache": true,
+     "maxAge": 14400000,
+     "formats": [
+      "markdown",
+      "html"
+     ],
+     "timeout": 60000,
+     "mobile": false,
+     "origin": "python-sdk@4.53.2"
+    }
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "A",
+    "content": "# alpha",
+    "raw_content": "# alpha",
+    "metadata": {
+     "title": "A",
+     "description": null,
+     "url": "http://93.184.216.34/a",
+     "language": null,
+     "keywords": null,
+     "robots": null,
+     "og_title": null,
+     "og_description": null,
+     "og_url": null,
+     "og_image": null,
+     "og_audio": null,
+     "og_determiner": null,
+     "og_locale": null,
+     "og_locale_alternate": null,
+     "og_site_name": null,
+     "og_video": null,
+     "favicon": null,
+     "dc_terms_created": null,
+     "dc_date_created": null,
+     "dc_date": null,
+     "dc_terms_type": null,
+     "dc_type": null,
+     "dc_terms_audience": null,
+     "dc_terms_subject": null,
+     "dc_subject": null,
+     "dc_description": null,
+     "dc_terms_keywords": null,
+     "modified_time": null,
+     "published_time": null,
+     "article_tag": null,
+     "article_section": null,
+     "source_url": "http://93.184.216.34/a",
+     "status_code": 200,
+     "scrape_id": null,
+     "num_pages": null,
+     "total_pages": null,
+     "content_type": null,
+     "proxy_used": null,
+     "timezone": null,
+     "cache_state": null,
+     "cached_at": null,
+     "credits_used": null,
+     "concurrency_limited": null,
+     "concurrency_queue_duration_ms": null,
+     "error": null,
+     "sourceURL": "http://93.184.216.34/a"
+    }
+   }
+  ]
+ }
+]

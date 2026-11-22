@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use crate::url_safety::is_safe_url;
 use crate::web_tools::{align_pages, client, entry, failure, read_body, search_ok, WebSettings};
 
 const LIMIT_CAP: usize = 20;
@@ -388,4 +389,224 @@ pub(crate) async fn parallel_extract(settings: &WebSettings, urls: &[String]) ->
         ));
     }
     align_pages(urls, pages)
+}
+
+// ---- Firecrawl (keyed cloud or self-hosted, the SDK path of the reference) ----
+
+const FIRECRAWL_UNCONFIGURED: &str = "Web tools are not configured. Set FIRECRAWL_API_KEY for cloud Firecrawl or set FIRECRAWL_API_URL for a self-hosted Firecrawl instance.";
+const FIRECRAWL_ORIGIN: &str = "python-sdk@4.53.2";
+const SCRAPE_TIMEOUT: &str =
+    "Scrape timed out after 60s \u{2014} page may be too large or unresponsive. Try browser_exec instead.";
+const BLOCKED_REDIRECT: &str = "Blocked: URL targets a private or internal network address";
+
+/// The text the SDK raises for a failed call (`action` is "search" or "scrape").
+fn firecrawl_error(status: u16, body: &str, action: &str) -> String {
+    let parsed = serde_json::from_str::<Value>(body)
+        .ok()
+        .filter(Value::is_object);
+    let (message, details) = match &parsed {
+        Some(object) => (
+            object
+                .get("error")
+                .map_or("No error message provided.".to_owned(), |v| {
+                    crate::web_tools::text_of(v)
+                }),
+            object
+                .get("details")
+                .map_or("No additional error details provided.".to_owned(), |v| {
+                    crate::web_tools::text_of(v)
+                }),
+        ),
+        None if !body.trim().is_empty() => (
+            format!(
+                "Server returned non-JSON response: {}",
+                body.chars().take(500).collect::<String>()
+            ),
+            format!("Full response status: {status}"),
+        ),
+        None => (
+            format!("Server returned empty response with status {status}"),
+            "No additional details available".to_owned(),
+        ),
+    };
+    if let Some(code) = parsed.as_ref().and_then(|o| o["code"].as_str()) {
+        if matches!(code, "SCRAPE_DNS_RESOLUTION_ERROR" | "SCRAPE_SSL_ERROR") {
+            let mut text = format!("Failed to {action}. {message}");
+            if details != "No additional error details provided." {
+                text = format!("{text} - {details}");
+            }
+            return text;
+        }
+    }
+    let tail = format!("{message} - {details}");
+    match status {
+        400 => format!("Bad Request: Failed to {action}. {tail}"),
+        401 => format!("Unauthorized: Failed to {action}. {tail}"),
+        402 => format!("Payment Required: Failed to {action}. {tail}"),
+        403 if parsed.as_ref().and_then(|o| o["code"].as_str())
+            == Some("THIRD_PARTY_DATA_TERMS_REQUIRED") =>
+        {
+            message
+        }
+        403 => format!("Website Not Supported: Failed to {action}. {tail}"),
+        408 => format!("Request Timeout: Failed to {action} as the request timed out. {tail}"),
+        429 => format!("Rate Limit Exceeded: Failed to {action}. {tail}"),
+        500 => format!("Internal Server Error: Failed to {action}. {tail}"),
+        other => format!("Unexpected error during {action}: Status code {other}. {tail}"),
+    }
+}
+
+enum Fire {
+    Json(Value),
+    Failed(String),
+    TimedOut,
+}
+
+async fn firecrawl_post(
+    settings: &WebSettings,
+    route: &str,
+    action: &str,
+    payload: &Value,
+) -> Fire {
+    let base = settings
+        .firecrawl_url
+        .as_deref()
+        .unwrap_or("https://api.firecrawl.dev");
+    let http = match client(Duration::from_secs(60)) {
+        Ok(http) => http,
+        Err(error) => return Fire::Failed(error),
+    };
+    // The SDK makes up to three attempts: a 502 answer or a failed connection waits 0.5 s, then 1 s.
+    let mut attempt: u32 = 0;
+    let (status, body) = loop {
+        let mut request = http.post(format!("{base}{route}")).json(payload);
+        if let Some(key) = settings.firecrawl_key.as_deref() {
+            request = request.bearer_auth(key);
+        }
+        let backoff = Duration::from_millis(500 << attempt);
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) if attempt < 2 => {
+                let _ = error;
+                tokio::time::sleep(backoff).await;
+                attempt += 1;
+                continue;
+            }
+            Err(error) if error.is_timeout() => return Fire::TimedOut,
+            Err(error) => return Fire::Failed(error.without_url().to_string()),
+        };
+        let status = response.status().as_u16();
+        let body = match read_body(response).await {
+            Ok(body) => String::from_utf8_lossy(&body).into_owned(),
+            Err(error) => return Fire::Failed(error),
+        };
+        if status == 502 && attempt < 2 {
+            tokio::time::sleep(backoff).await;
+            attempt += 1;
+            continue;
+        }
+        break (status, body);
+    };
+    let parsed = serde_json::from_str::<Value>(&body).ok();
+    // The SDK treats `success: false` in a 200 answer like any other failure.
+    match parsed {
+        Some(value) if status < 400 && value["success"].as_bool().unwrap_or(false) => {
+            Fire::Json(value)
+        }
+        _ => Fire::Failed(firecrawl_error(status, &body, action)),
+    }
+}
+
+fn configured(settings: &WebSettings) -> bool {
+    settings.firecrawl_key.is_some() || settings.firecrawl_url.is_some()
+}
+
+pub(crate) async fn firecrawl_search(settings: &WebSettings, query: &str, limit: usize) -> Value {
+    if !configured(settings) {
+        return failure(format!("{FIRECRAWL_UNCONFIGURED} ({KEYLESS})"));
+    }
+    let payload = json!({"query": query, "limit": limit, "origin": FIRECRAWL_ORIGIN});
+    match firecrawl_post(settings, "/v2/search", "search", &payload).await {
+        Fire::Json(response) => search_ok(
+            response["data"]["web"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|item| item.is_object())
+                .map(|item| {
+                    // The SDK's result model: these five fields, absent ones are null.
+                    json!({
+                        "url": item["url"], "title": item["title"], "description": item["description"],
+                        "position": item["position"], "category": item["category"]
+                    })
+                })
+                .collect(),
+        ),
+        Fire::Failed(error) => failure(format!("Firecrawl search failed: {error}")),
+        Fire::TimedOut => failure("Firecrawl search failed: request timed out"),
+    }
+}
+
+pub(crate) async fn firecrawl_extract(settings: &WebSettings, urls: &[String]) -> Vec<Value> {
+    if !configured(settings) {
+        let message = format!("{FIRECRAWL_UNCONFIGURED} ({KEYLESS})");
+        return urls.iter().map(|url| entry(url, Some(&message))).collect();
+    }
+    let mut pages = Vec::new();
+    for url in urls {
+        pages.push(firecrawl_scrape(settings, url).await);
+    }
+    pages
+}
+
+fn scrape_failure(url: &str, title: &str, error: &str) -> Value {
+    json!({"url": url, "title": title, "content": "", "raw_content": "", "error": error})
+}
+
+async fn firecrawl_scrape(settings: &WebSettings, url: &str) -> Value {
+    let payload = json!({
+        "url": url, "onlyMainContent": true, "skipTlsVerification": true, "removeBase64Images": true,
+        "fastMode": false, "blockAds": true, "storeInCache": true, "maxAge": 14_400_000,
+        "formats": ["markdown", "html"], "timeout": 60_000, "mobile": false, "origin": FIRECRAWL_ORIGIN
+    });
+    let response = match firecrawl_post(settings, "/v2/scrape", "scrape", &payload).await {
+        Fire::Json(response) => response,
+        Fire::Failed(error) => return scrape_failure(url, "", &error),
+        Fire::TimedOut => return entry(url, Some(SCRAPE_TIMEOUT)),
+    };
+    let payload = if response["data"].is_object() {
+        &response["data"]
+    } else {
+        &response
+    };
+    let metadata = &payload["metadata"];
+    let title = metadata["title"].as_str().unwrap_or("");
+    let final_url = metadata["url"]
+        .as_str()
+        .filter(|u| !u.is_empty())
+        .unwrap_or(url);
+    if !is_safe_url(final_url, settings.allow_private_urls).await {
+        return scrape_failure(final_url, title, BLOCKED_REDIRECT);
+    }
+    let markdown = text(&payload["markdown"]);
+    let html = text(&payload["html"]);
+    let content = if !markdown.is_empty() {
+        markdown
+    } else if !html.is_empty() {
+        html
+    } else {
+        ""
+    };
+    let status = [&metadata["statusCode"], &metadata["status_code"]]
+        .iter()
+        .find_map(|value| value.as_i64());
+    let reason = text(&metadata["error"]);
+    let error = origin_error(status).map(|origin| {
+        if reason.is_empty() {
+            origin
+        } else {
+            format!("{origin}: {reason}")
+        }
+    });
+    json!({"url": final_url, "title": title, "content": content, "raw_content": content, "error": error})
 }
