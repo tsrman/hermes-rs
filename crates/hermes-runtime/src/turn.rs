@@ -88,11 +88,15 @@ pub struct TurnHistory {
     pub(crate) system_prompt: Option<String>,
     pub(crate) messages: Vec<Value>,
     pub(crate) skills: SkillCatalog,
+    /// `skills.auto_load` blocks, rendered once and kept across prompt rebuilds.
+    pub(crate) pinned: Option<String>,
     pub(crate) policy: ToolPolicy,
     pub(crate) env: ToolEnv,
     pub(crate) compaction: Option<CompactedHistory>,
     pub(crate) write_files: bool,
     pub(crate) terminal_enabled: bool,
+    /// A `-q` run: the skills guidance is the shorter one.
+    pub(crate) single_query: bool,
 }
 
 /// Why a compaction pass runs.
@@ -123,6 +127,7 @@ impl TurnHistory {
     ) {
         self.write_files = options.can_write_files();
         self.terminal_enabled = options.can_run_terminal();
+        self.single_query = options.single_query;
         self.policy = options.tools.clone();
         self.env = ToolEnv::from_options(options);
         // The skills index is built only when a skills tool is enabled.
@@ -138,12 +143,30 @@ impl TurnHistory {
             SkillCatalog::default()
         };
         self.env.skill_desc_limit = self.skills.desc_limit();
+        // The skills tools are offered when the prompt carries the index, so the index decides
+        // the tool names the prompt's own gates see.
+        let index = self.skills.prompt(
+            self.single_query,
+            offered_names(&self.env).contains("web_search"),
+        );
+        if self.system_prompt.is_none() {
+            self.env.skills_indexed = index.is_some();
+        }
+        if self.pinned.is_none() {
+            self.pinned = Some(pinned_skills(
+                &self.skills,
+                self.policy.allows_skills(),
+                options.profile,
+                options.session_id,
+            ));
+        }
         if self.system_prompt.is_none() {
             self.system_prompt = Some(load_cli_context(
                 options.profile,
                 options.root,
                 settings,
-                self.skills.prompt(),
+                index,
+                self.pinned.clone(),
                 &offered_names(&self.env),
                 &route.model,
                 route.provider_name,
@@ -216,6 +239,8 @@ impl TurnHistory {
         let provider = route.provider_name;
         let skills_allowed = self.policy.allows_skills();
         let tools_offered = offered_names(&self.env);
+        let pinned = self.pinned.clone();
+        let single_query = self.single_query;
         let refreshed = tokio::task::spawn_blocking(move || {
             let skills = if skills_allowed {
                 SkillCatalog::load(
@@ -232,7 +257,8 @@ impl TurnHistory {
                 profile.as_deref(),
                 &root,
                 &settings,
-                skills.prompt(),
+                skills.prompt(single_query, tools_offered.contains("web_search")),
+                pinned,
                 &tools_offered,
                 &model,
                 provider,
@@ -252,6 +278,37 @@ impl TurnHistory {
         self.compaction = Some(compaction);
         CompactionOutcome::Applied
     }
+}
+
+/// The `skills.auto_load` blocks for a new agent. Like the reference it is empty when no skills
+/// tool is offered or `HERMES_IGNORE_RULES` is set, and skills that cannot be loaded are named on
+/// stderr and skipped.
+fn pinned_skills(
+    skills: &SkillCatalog,
+    offered: bool,
+    profile: Option<&Path>,
+    session_id: Option<&str>,
+) -> String {
+    let ignored = std::env::var("HERMES_IGNORE_RULES").is_ok_and(|value| {
+        matches!(
+            value.trim().to_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    });
+    if !offered || ignored {
+        return String::new();
+    }
+    if skills.settings().inline_shell() {
+        eprintln!("warning: skills.inline_shell is set but the port never runs a skill's !`cmd` snippets; they stay as written");
+    }
+    let (text, missing) = skills.pinned(profile, session_id);
+    if !missing.is_empty() {
+        eprintln!(
+            "warning: skills.auto_load: skill(s) not found or disabled, skipped: {}",
+            missing.join(", ")
+        );
+    }
+    text
 }
 
 /// The names of the tools a model is offered under `env`, as the prompt gates see them.
@@ -306,6 +363,8 @@ pub struct TurnOptions<'a> {
     pub profile: Option<&'a Path>,
     /// The saved session this turn continues, which `session_search` leaves out of recall.
     pub session_id: Option<&'a str>,
+    /// This is a `-q` run, not an interactive conversation.
+    pub single_query: bool,
     pub max_turns: u32,
     pub approval_timeout_secs: Option<u32>,
     pub terminal_local: bool,

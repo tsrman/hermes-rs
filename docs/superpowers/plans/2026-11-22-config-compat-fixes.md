@@ -85,10 +85,15 @@ routes ignore it); `auxiliary.compression.extra_body` is not read; fallback rout
     `request_overrides`, `reasoning_effort`, `child_timeout_seconds`, `max_summary_chars`,
     `max_spawn_depth`, `orchestrator_enabled`, `inherit_mcp_toolsets`. Children therefore always use the
     parent's route.
-17. **`toolsets` / `platform_toolsets` / `agent.disabled_toolsets`**: the port reads `platform_toolsets`
-    and `agent.disabled_toolsets`; top-level `toolsets` is not read [keys].
-18. **`skills.*`**: only part of the settings are read; `external_dirs`, `project_discovery`,
-    `trusted_project_dirs`, `auto_load`, `template_vars`, `inline_shell` are not [keys].
+17. **(done: no runtime effect) `toolsets` / `platform_toolsets` / `agent.disabled_toolsets`**: the port reads
+    `platform_toolsets` and `agent.disabled_toolsets`. The top-level `toolsets` list is not used to pick the
+    CLI's tools in the reference either: `_get_platform_tools` reads only `platform_toolsets`, and `toolsets`
+    appears in `dump.py`, `debug_summary.py`, `left_core_migration.py` and a kanban default check
+    (`tools_config.py:637`) [code]. Nothing to port.
+18. **(done except `inline_shell`) `skills.*`**: `external_dirs`, `project_discovery`, `trusted_project_dirs`,
+    `create_dir`, `disabled`, `index_desc_limit` were read already. `auto_load`, `template_vars` and the
+    `skills.config.*` values are read now; `inline_shell` is read but deliberately never run (see the notes
+    below).
 19. **(prefill and terminal.timeout done) Top-level `prefill_messages_file`, `quick_commands`, `personalities`, `display.personality`,
     `timezone`** (the last is used for the prompt date, the others not) [keys].
 20. **`model_overrides`, `model_catalog`, `models_dev`** are not read [keys]; they feed context-window and
@@ -247,7 +252,7 @@ turn; matching the reference adds about 2000 tokens to every request (more with 
   as fast as before (the prompt costs about 2000 more input tokens per request).
 - **Not ported (intended):** the mid-turn steering section (no steering channel; the reference drops it for
   one-shot runs too); the Python toolchain probe line (`agent.environment_probe`); Bot Mode and Bot Screen
-  blocks; remote-backend environment text; plugin sections; pinned `skills.auto_load` skills; the dynamic
+  blocks; remote-backend environment text; plugin sections; the dynamic
   `context_file_max_chars` cap derived from the model window (the port keeps 20000 unless configured); the
   rule that `Conversation started` keeps the session's original date when a compaction rebuilds the prompt
   (the port uses the rebuild day).
@@ -307,3 +312,39 @@ turn; matching the reference adds about 2000 tokens to every request (more with 
   `display.personality` (an ephemeral system prompt chosen by name) are interactive-surface features. They
   belong with the REPL slash commands; `quick_commands` runs commands without a model call and so needs its own
   approval decision before it is ported.
+
+## Notes on `skills.auto_load`, `template_vars`, `inline_shell` and the skills index (done)
+
+- `skills.auto_load` (a list of names; strings only, trimmed, repeats dropped) pins skills into the **stable**
+  tier of the system prompt, right after the guidance paragraphs and before the coding brief, as the
+  reference does. A block is the activation note, the SKILL.md text, `[Skill directory: ...]` and its
+  note, `[Skill config (from <home>/config.yaml): ...]` for `metadata.hermes.config` values (`skills.config.<key>`
+  or the declared default, `(not set)` when empty, `~`/`$VAR` expanded), the setup note when required
+  environment variables are missing, and the supporting-file list with the `skill_view` footer. Blocks are
+  joined with a blank line. Names that cannot be loaded (unknown, ambiguous, disabled) are skipped with one
+  stderr warning. Nothing is pinned without the skills toolset or when `HERMES_IGNORE_RULES` is truthy. The
+  text is rendered once per process (`TurnHistory.pinned`) and reused when compaction rebuilds the prompt;
+  a resumed session keeps the stored prompt as before.
+- Checked byte for byte against the reference (`compare_prompt.py --auto-load`: a pinned skill with config
+  values, a missing credential, supporting files in four directories, a disabled name, a missing name, a
+  duplicate and a non-string entry, plus the `hermes-agent` skill). Five Python tests and three Rust tests
+  cover the rest (`PinnedSkillsTest`).
+- `skills.template_vars` (default on) substitutes `${HERMES_SKILL_DIR}`; `${HERMES_SESSION_ID}` is replaced only
+  when the session already has an id. **Divergence:** the port gives a new session its id on the first save,
+  after the prompt is built, so a pinned skill keeps the literal token in that session (the reference has the
+  id from the start). The compare script normalizes this one token.
+- **`skills.inline_shell` is not executed, on purpose.** The reference expands `` !`cmd` `` snippets of a
+  skill with `bash -c` while it builds the message (and in `skill_view`), outside the approval policy; a
+  skill file would become a command source. The port prints a warning when the key is on and leaves the text as
+  written. It needs the same decision as `quick_commands`.
+- Absolute skill paths as `auto_load` identifiers are not resolved (the reference maps them under the skills
+  directory); names and `category/name` work.
+- Found while comparing: the `## Skills` wrapper of the index was the port's own short text, never the
+  reference's. Now both variants are recorded: the long guidance for a conversation (with `web_search or
+  terminal` or just `terminal` by the tools offered), and the short one for `chat -q` (the reference's
+  `HERMES_SINGLE_QUERY_SESSION`). `ChatRequest.single_query` carries that; a REPL turn is never one.
+  Not ported: categories demoted to names only in a coding session, and the note for unloadable duplicates.
+- Found while comparing: the prompt's own gates (the `hermes-agent` help paragraph, memory and skill
+  guidance) saw a tool list without `skill_view`/`skills_list`, because those tools are offered only once the
+  prompt carries the index. The index is now computed first, so the gates see the same names as the model.
+

@@ -84,11 +84,13 @@ fn count(value: &Value) -> Option<usize> {
 
 /// The whole system prompt for a new session. `tools` are the names of the tools the model is
 /// offered, which decide the guidance paragraphs.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn load_cli_context(
     profile: Option<&Path>,
     root: &Path,
     settings: &PromptSettings,
     skills_prompt: Option<String>,
+    pinned_skills: Option<String>,
     tools: &BTreeSet<String>,
     model: &str,
     provider: &str,
@@ -146,6 +148,7 @@ pub(crate) fn load_cli_context(
         memory_guidance,
         project_context: project_context(root, cap),
         skills_prompt,
+        pinned_skills: pinned_skills.filter(|text| !text.is_empty()),
         memory_blocks,
     })
 }

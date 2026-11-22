@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +20,10 @@ def main():
     parser.add_argument("base_url")
     parser.add_argument("--max-turns", type=int, default=sys.maxsize)
     parser.add_argument("--model", default="fixture")
+    parser.add_argument("--seed", type=Path, help="directory copied to become the profile (config.yaml, skills/)")
+    parser.add_argument("--context-files", action="store_true",
+                        help="let the agent read project context files and pinned skills (the CLI does)")
+    parser.add_argument("--single-query", action="store_true", help="behave like `chat -q` (HERMES_SINGLE_QUERY_SESSION)")
     args = parser.parse_args()
     checkout = args.checkout.resolve(strict=True)
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
@@ -28,8 +33,13 @@ def main():
     if url.scheme != "http" or url.hostname != "127.0.0.1" or url.path != "/v1":
         parser.error("base_url must be http://127.0.0.1:<port>/v1")
     profile = args.profile.resolve()
-    profile.mkdir(parents=True, exist_ok=False)
+    if args.seed:
+        shutil.copytree(args.seed, profile)
+    else:
+        profile.mkdir(parents=True, exist_ok=False)
     os.environ["HERMES_HOME"] = str(profile)
+    if args.single_query:
+        os.environ["HERMES_SINGLE_QUERY_SESSION"] = "1"
     sys.path.insert(0, str(checkout))
 
     from run_agent import AIAgent
@@ -44,7 +54,7 @@ def main():
         max_iterations=args.max_turns,
         quiet_mode=True,
         skip_memory=True,
-        skip_context_files=True,
+        skip_context_files=not args.context_files,
         skip_background_review=True,
     )
     try:

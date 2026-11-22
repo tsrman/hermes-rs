@@ -7,8 +7,8 @@
 //! conditions that decide which ones appear.
 //!
 //! Not ported: the mid-turn steering note (there is no steering channel), the Python toolchain
-//! probe line, Bot Mode and Bot Screen blocks, remote-backend environment text, plugin sections
-//! and pinned `skills.auto_load` blocks.
+//! probe line, Bot Mode and Bot Screen blocks, remote-backend environment text and plugin
+//! sections.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
@@ -240,6 +240,8 @@ pub(crate) struct Inputs<'a> {
     pub memory_guidance: Option<String>,
     pub project_context: Option<String>,
     pub skills_prompt: Option<String>,
+    /// `skills.auto_load` blocks: per-agent constants, so they sit in the stable tier.
+    pub pinned_skills: Option<String>,
     pub memory_blocks: Vec<String>,
 }
 
@@ -297,6 +299,8 @@ pub(crate) fn build(inputs: &Inputs<'_>) -> String {
             stable.push(execution_text(inputs.tools));
         }
     }
+
+    stable.extend(inputs.pinned_skills.clone());
 
     // Coding posture.
     let coding = coding_workspace(inputs.root, inputs.gates.coding, has_tools);

@@ -438,6 +438,7 @@ async fn run_child(index: usize, task: &Task, family: &Family<'_>) -> ChildRun {
     let policy = parent.tools.without_tools(&BLOCKED_FOR_CHILDREN);
     let prompt = child_system_prompt(workspace);
     let options = TurnOptions {
+        single_query: false,
         session_id: Some(&session),
         max_turns: delegation.settings.max_iterations,
         tools: &policy,

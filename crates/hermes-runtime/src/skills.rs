@@ -56,6 +56,22 @@ pub(crate) struct SkillSettings {
     /// `skills.write_approval`: the reference stages skill writes for later approval when on.
     #[serde(default)]
     write_approval: bool,
+    /// `skills.auto_load`: skills pinned into the system prompt of every session.
+    #[serde(default)]
+    auto_load: Vec<String>,
+    /// `skills.template_vars` (default on): `${HERMES_SKILL_DIR}` and `${HERMES_SESSION_ID}`.
+    #[serde(default = "enabled")]
+    template_vars: bool,
+    /// `skills.inline_shell`: the reference runs `!`cmd`` snippets of a skill; the port never does.
+    #[serde(default)]
+    inline_shell: bool,
+    /// `skills.config`: the values skills declare under `metadata.hermes.config`.
+    #[serde(default)]
+    config: Yaml,
+}
+
+fn enabled() -> bool {
+    true
 }
 
 impl Default for SkillSettings {
@@ -69,6 +85,10 @@ impl Default for SkillSettings {
             index_desc_limit: 60,
             guard_agent_created: false,
             write_approval: false,
+            auto_load: Vec::new(),
+            template_vars: true,
+            inline_shell: false,
+            config: Yaml::Null,
         }
     }
 }
@@ -97,7 +117,15 @@ impl SkillSettings {
                 .clamp(60, 1024) as usize,
             guard_agent_created: truthy(&config["guard_agent_created"]),
             write_approval: truthy(&config["write_approval"]),
+            auto_load: auto_load_names(&config["auto_load"]),
+            template_vars: config.get("template_vars").is_none_or(py_truthy),
+            inline_shell: py_truthy(&config["inline_shell"]),
+            config: config["config"].clone(),
         }
+    }
+
+    pub(crate) fn inline_shell(&self) -> bool {
+        self.inline_shell
     }
 
     pub(crate) fn create_dir(&self) -> Option<&str> {
@@ -115,6 +143,18 @@ impl SkillSettings {
     pub(crate) fn write_approval(&self) -> bool {
         self.write_approval
     }
+}
+
+/// `skills.auto_load`: the string entries of a list, trimmed, without blanks and repeats.
+fn auto_load_names(value: &Yaml) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for entry in value.as_sequence().into_iter().flatten() {
+        let name = entry.as_str().map(str::trim).unwrap_or("");
+        if !name.is_empty() && !names.iter().any(|seen| seen == name) {
+            names.push(name.to_owned());
+        }
+    }
+    names
 }
 
 /// The reference's truthy settings: a boolean, or one of `1`, `true`, `yes`, `on`.
@@ -312,7 +352,9 @@ impl SkillCatalog {
         }
     }
 
-    pub(crate) fn prompt(&self) -> Option<String> {
+    /// The `## Skills` block. A `-q` run (`single_query`) gets the shorter guidance; `web_search`
+    /// says whether the session has web tools, which the long guidance names.
+    pub(crate) fn prompt(&self, single_query: bool, web_search: bool) -> Option<String> {
         if self.rows.is_empty() {
             return None;
         }
@@ -345,9 +387,19 @@ impl SkillCatalog {
                 });
             }
         }
+        let index = index.join("\n");
+        if single_query {
+            return Some(format!(
+                "{ONESHOT_SKILLS_GUIDANCE}\n<available_skills>\n{index}\n</available_skills>"
+            ));
+        }
+        let basic = if web_search {
+            "web_search or terminal"
+        } else {
+            "terminal"
+        };
         Some(format!(
-            "## Skills\n\nLoad relevant skills with skill_view(name) before proceeding.\n\n<available_skills>\n{}\n</available_skills>",
-            index.join("\n")
+            "## Skills\nBefore replying, scan the skills below. If a skill matches or is even partially relevant to your task, you MUST load it with skill_view(name) and follow its instructions. Err on the side of loading — it is always better to have context you don't need than to miss critical steps, pitfalls, or established workflows. Skills contain specialized knowledge — API endpoints, tool-specific commands, and proven workflows that outperform general-purpose approaches. Load the skill even if you think you could handle the task with basic tools like {basic}. Skills also encode the user's preferred approach, conventions, and quality standards for tasks like code review, planning, and testing — load them even for tasks you already know how to do, because the skill defines how it should be done here.\nIf a skill has issues, fix it with skill_manage(action='patch').\nAfter difficult/iterative tasks, offer to save as a skill. If a skill you loaded was missing steps, had wrong commands, or needed pitfalls you discovered, update it before finishing.\n\n<available_skills>\n{index}\n</available_skills>\n\nOnly proceed without loading a skill if genuinely none are relevant to the task."
         ))
     }
 
@@ -490,6 +542,122 @@ impl SkillCatalog {
             );
         }
         Value::Object(result)
+    }
+
+    /// The `skills.auto_load` blocks of the system prompt, and the names that could not be
+    /// loaded (missing, ambiguous or disabled). Each block is the skill as the reference renders
+    /// a pinned skill: activation note, SKILL.md, directory, config values, setup note and
+    /// supporting files.
+    pub(crate) fn pinned(
+        &self,
+        home: Option<&Path>,
+        session_id: Option<&str>,
+    ) -> (String, Vec<String>) {
+        let mut blocks = Vec::new();
+        let mut missing = Vec::new();
+        for identifier in &self.settings.auto_load {
+            let name = identifier.trim_start_matches('/');
+            let payload = self.view(&json!({ "name": name }).to_string(), home);
+            let name = payload["name"].as_str().unwrap_or(name).to_owned();
+            let leaf = name.split_once(':').map_or(name.as_str(), |(_, rest)| rest);
+            let disabled = [identifier.as_str(), name.as_str(), leaf]
+                .iter()
+                .any(|candidate| self.settings.disabled.contains(*candidate));
+            if payload["success"] != true || disabled {
+                missing.push(identifier.clone());
+                continue;
+            }
+            blocks.push(self.pinned_block(&payload, &name, home, session_id));
+        }
+        (blocks.join("\n\n"), missing)
+    }
+
+    fn pinned_block(
+        &self,
+        payload: &Value,
+        name: &str,
+        home: Option<&Path>,
+        session_id: Option<&str>,
+    ) -> String {
+        let dir = payload["skill_dir"].as_str().map(PathBuf::from);
+        let raw = dir
+            .as_ref()
+            .and_then(|dir| std::fs::read(dir.join(SKILL_FILE)).ok())
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default();
+        let raw = raw.trim_start_matches('\u{feff}');
+        let content = if self.settings.template_vars {
+            let mut text = dir
+                .as_deref()
+                .map_or_else(|| raw.to_owned(), |dir| render_template(raw, dir));
+            if let Some(id) = session_id.filter(|id| !id.is_empty()) {
+                text = text.replace("${HERMES_SESSION_ID}", id);
+            }
+            text
+        } else {
+            raw.to_owned()
+        };
+        let mut parts = vec![
+            format!(
+                "[IMPORTANT: The \"{name}\" skill is auto-loaded via config (skills.auto_load). Treat its instructions as active guidance for the duration of this session unless the user overrides them.]"
+            ),
+            String::new(),
+            content.trim().to_owned(),
+        ];
+        if let Some(dir) = &dir {
+            parts.push(String::new());
+            parts.push(format!("[Skill directory: {}]", dir.display()));
+            parts.push(SKILL_DIR_NOTE.to_owned());
+        }
+        let metadata = frontmatter(raw).unwrap_or(Yaml::Null);
+        let resolved = skill_config_values(&metadata, &self.settings.config);
+        if !resolved.is_empty() {
+            let shown = home.map_or_else(|| "~/.hermes".to_owned(), display_home);
+            parts.push(String::new());
+            parts.push(format!("[Skill config (from {shown}/config.yaml):"));
+            parts.extend(
+                resolved
+                    .iter()
+                    .map(|(key, value)| format!("  {key} = {value}")),
+            );
+            parts.push("]".to_owned());
+        }
+        if payload["setup_skipped"] == true {
+            parts.push(String::new());
+            parts.push(format!("[Skill setup note: {SETUP_SKIPPED_NOTE}]"));
+        } else if payload["setup_needed"] == true {
+            if let Some(note) = payload["setup_note"]
+                .as_str()
+                .filter(|note| !note.is_empty())
+            {
+                parts.push(String::new());
+                parts.push(format!("[Skill setup note: {note}]"));
+            }
+        }
+        if let Some(dir) = &dir {
+            let supporting = supporting_files(dir);
+            if !supporting.is_empty() {
+                let target = self
+                    .roots
+                    .iter()
+                    .find_map(|root| dir.strip_prefix(root).ok())
+                    .map_or_else(
+                        || name.to_owned(),
+                        |relative| relative.to_string_lossy().replace('\\', "/"),
+                    );
+                parts.push(String::new());
+                parts.push(
+                    "[This skill has supporting files (paths relative to the skill directory above):]"
+                        .to_owned(),
+                );
+                parts.extend(supporting.iter().map(|file| format!("- {file}")));
+                parts.push(format!(
+                    "\nLoad any of these with skill_view(name=\"{target}\", file_path=\"<path>\"), or run scripts directly by absolute path (e.g. `node {}/scripts/foo.js`).",
+                    dir.display()
+                ));
+            }
+        }
+        parts.join("\n")
     }
 
     fn ambiguous(&self, name: &str) -> Value {
@@ -1060,6 +1228,160 @@ fn readiness(metadata: &Yaml, home: Option<&Path>) -> (Fields, Fields) {
     (fields, extras)
 }
 
+const ONESHOT_SKILLS_GUIDANCE: &str = "## Skills\nScan the skills below and load one with skill_view(name) only when it carries domain knowledge you lack for THIS task (an API, a tool's commands, a project's conventions). Do not load general process skills (testing, debugging, review methodology) for work you already know how to do.\n";
+const SKILL_DIR_NOTE: &str = "Resolve any relative paths in this skill (e.g. `scripts/foo.js`, `templates/config.yaml`) against that directory, then run them with the terminal tool using the absolute path.";
+const SETUP_SKIPPED_NOTE: &str = "Required environment setup was skipped. Continue loading the skill and explain any reduced functionality if it matters.";
+
+/// `~/…` for a directory under the user's home, else the path as is.
+fn display_home(home: &Path) -> String {
+    std::env::var_os("HOME")
+        .and_then(|user| home.strip_prefix(user).ok().map(Path::to_owned))
+        .map_or_else(
+            || home.display().to_string(),
+            |relative| format!("~/{}", relative.to_string_lossy().replace('\\', "/")),
+        )
+}
+
+/// Skill-relative support files: the linked files in the reference's directory order, or, when
+/// there are none, every file under the four support directories.
+fn supporting_files(dir: &Path) -> Vec<String> {
+    let linked = linked_files(dir);
+    let mut files: Vec<String> = ["references", "templates", "assets", "scripts"]
+        .iter()
+        .filter_map(|key| linked.get(key))
+        .flatten()
+        .cloned()
+        .collect();
+    if files.is_empty() {
+        for sub in ["references", "templates", "scripts", "assets"] {
+            let mut found = Vec::new();
+            walk(&dir.join(sub), true, &mut found);
+            found.sort();
+            files.extend(
+                found
+                    .iter()
+                    .filter(|path| {
+                        path.is_file()
+                            && !path
+                                .symlink_metadata()
+                                .is_ok_and(|meta| meta.file_type().is_symlink())
+                    })
+                    .filter_map(|path| path.strip_prefix(dir).ok())
+                    .map(|relative| relative.to_string_lossy().replace('\\', "/")),
+            );
+        }
+    }
+    files
+}
+
+/// The `metadata.hermes.config` declarations of a skill resolved against `skills.config`:
+/// the configured value, else the declared default, else empty (shown as `(not set)`).
+fn skill_config_values(metadata: &Yaml, config: &Yaml) -> Vec<(String, String)> {
+    let declared = &metadata["metadata"]["hermes"]["config"];
+    let items: Vec<&Yaml> = match declared {
+        Yaml::Mapping(_) => vec![declared],
+        Yaml::Sequence(items) => items.iter().collect(),
+        _ => Vec::new(),
+    };
+    let mut out: Vec<(String, String)> = Vec::new();
+    for item in items {
+        let text = |field: &str| match &item[field] {
+            Yaml::String(text) => text.trim().to_owned(),
+            Yaml::Null => String::new(),
+            other => python_str(other),
+        };
+        let (key, description) = (text("key"), text("description"));
+        if key.is_empty() || description.is_empty() || out.iter().any(|(seen, _)| *seen == key) {
+            continue;
+        }
+        let mut value = key
+            .split('.')
+            .try_fold(config, |current, part| current.get(part))
+            .cloned()
+            .unwrap_or(Yaml::Null);
+        if matches!(&value, Yaml::Null) || value.as_str().is_some_and(|v| v.trim().is_empty()) {
+            value = match item.get("default") {
+                Some(Yaml::Null) | None => Yaml::String(String::new()),
+                Some(default) => default.clone(),
+            };
+        }
+        let shown = match &value {
+            Yaml::String(text) if text.contains('~') || text.contains('$') => expand_path(text),
+            other => python_str(other),
+        };
+        out.push((
+            key,
+            if py_truthy(&value) {
+                shown
+            } else {
+                "(not set)".to_owned()
+            },
+        ));
+    }
+    out
+}
+
+/// Python's `str()` of a config scalar, as the reference prints skill config values.
+fn python_str(value: &Yaml) -> String {
+    match value {
+        Yaml::Null => "None".to_owned(),
+        Yaml::Bool(true) => "True".to_owned(),
+        Yaml::Bool(false) => "False".to_owned(),
+        Yaml::Number(number) => number.to_string(),
+        Yaml::String(text) => text.clone(),
+        Yaml::Sequence(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(|item| match item {
+                    Yaml::String(text) => format!("'{text}'"),
+                    other => python_str(other),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
+
+/// `os.path.expanduser(os.path.expandvars(value))`: unknown variables stay as written.
+fn expand_path(value: &str) -> String {
+    let mut out = String::new();
+    let mut rest = value;
+    while let Some(index) = rest.find('$') {
+        out.push_str(&rest[..index]);
+        let tail = &rest[index + 1..];
+        let (name, used) = if let Some(braced) = tail.strip_prefix('{') {
+            match braced.find('}') {
+                Some(end) => (&braced[..end], end + 2),
+                None => ("", 0),
+            }
+        } else {
+            let end = tail
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(tail.len());
+            (&tail[..end], end)
+        };
+        match (name.is_empty(), std::env::var(name)) {
+            (false, Ok(found)) => {
+                out.push_str(&found);
+                rest = &tail[used..];
+            }
+            _ => {
+                out.push('$');
+                rest = tail;
+            }
+        }
+    }
+    out.push_str(rest);
+    match (out.strip_prefix('~'), std::env::var("HOME")) {
+        (Some(tail), Ok(home)) if tail.is_empty() || tail.starts_with('/') => {
+            format!("{home}{tail}")
+        }
+        _ => out,
+    }
+}
+
 fn failure(error: &str) -> Value {
     json!({"success": false, "error": error})
 }
@@ -1454,5 +1776,53 @@ mod reference_tests {
                 case["kind"]
             );
         }
+    }
+
+    #[test]
+    fn auto_load_names_keep_order_and_drop_blanks_repeats_and_non_strings() {
+        let list: Yaml = serde_yaml::from_str("[a, ' a ', '', 7, b, a]").unwrap();
+        assert_eq!(auto_load_names(&list), ["a", "b"]);
+        let scalar: Yaml = serde_yaml::from_str("a").unwrap();
+        assert!(auto_load_names(&scalar).is_empty());
+    }
+
+    #[test]
+    fn skill_config_values_follow_the_reference_rules() {
+        let metadata: Yaml = serde_yaml::from_str(
+            "metadata: {hermes: {config: [\
+             {key: demo.path, description: Where, default: '~/dflt'},\
+             {key: demo.flag, description: Flag},\
+             {key: demo.count, description: Count},\
+             {key: demo.on, description: On},\
+             {key: demo.list, description: List, default: [a, 2]},\
+             {key: demo.path, description: Repeat},\
+             {key: nodesc}]}}",
+        )
+        .unwrap();
+        let config: Yaml = serde_yaml::from_str("demo: {flag: true, count: 0, on: yes}").unwrap();
+        let home = std::env::var("HOME").unwrap_or_default();
+        let values = skill_config_values(&metadata, &config);
+        assert_eq!(
+            values,
+            [
+                ("demo.path".to_owned(), format!("{home}/dflt")),
+                ("demo.flag".to_owned(), "True".to_owned()),
+                ("demo.count".to_owned(), "(not set)".to_owned()),
+                ("demo.on".to_owned(), "yes".to_owned()),
+                ("demo.list".to_owned(), "['a', 2]".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn config_paths_expand_known_variables_only() {
+        std::env::set_var("HERMES_TEST_SKILL_VAR", "/srv");
+        assert_eq!(expand_path("$HERMES_TEST_SKILL_VAR/x"), "/srv/x");
+        assert_eq!(expand_path("${HERMES_TEST_SKILL_VAR}/x"), "/srv/x");
+        assert_eq!(
+            expand_path("$HERMES_TEST_SKILL_UNSET/x"),
+            "$HERMES_TEST_SKILL_UNSET/x"
+        );
+        assert_eq!(expand_path("a$"), "a$");
     }
 }

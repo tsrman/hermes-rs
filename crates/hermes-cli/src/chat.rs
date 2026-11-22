@@ -195,6 +195,9 @@ pub struct ChatRequest {
     delegation: hermes_runtime::delegation::DelegationSettings,
     #[serde(default)]
     oneshot: bool,
+    /// `chat -q`: one question, then exit. An interactive turn is not one.
+    #[serde(default)]
+    single_query: bool,
     #[serde(default)]
     approval_timeout_secs: Option<u32>,
     #[serde(default)]
@@ -386,6 +389,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         root: std::env::current_dir()
             .map_err(|error| error.to_string())?
             .into_os_string(),
+        single_query: args.query.is_some(),
         query: args.query.unwrap_or_default(),
         resume: args.resume,
         save_session: args.save_session,
@@ -507,6 +511,7 @@ where
         hermes_runtime::delegation::Delegation::new(request.delegation.clone(), request.oneshot)
             .with_route(delegate_route);
     let options = TurnOptions {
+        single_query: request.single_query,
         journal: journal.as_ref(),
         delegation: Some(&delegation),
         system_prompt_override: None,
@@ -718,6 +723,7 @@ impl ChatRequest {
     /// session, later ones continue it.
     pub fn for_turn(mut self, query: &str, scope: &str, session: Option<&str>) -> Self {
         self.query = query.to_owned();
+        self.single_query = false;
         self.state_scope = Some(scope.to_owned());
         self.resume = session.map(str::to_owned);
         self.save_session = session.is_none();

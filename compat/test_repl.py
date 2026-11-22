@@ -227,5 +227,92 @@ class ReplInterruptTest(ReplBase):
         self.assertEqual(self.finish(process, master), 0)
 
 
+class PinnedSkillsTest(ReplBase):
+    """`skills.auto_load` and the skills guidance of a conversation versus a `-q` run."""
+
+    scenario = "text"
+
+    def pin(self, extra="", names="[pinned-demo, ' pinned-demo ', missing-one, off-one]"):
+        skill = self.profile / "skills" / "devtools" / "pinned-demo"
+        (skill / "references").mkdir(parents=True)
+        (skill / "references" / "a.md").write_text("a\n")
+        (skill / "SKILL.md").write_text(
+            "---\nname: pinned-demo\ndescription: Demo skill\n---\n\nUse ${HERMES_SKILL_DIR}/x.\n")
+        other = self.profile / "skills" / "devtools" / "off-one"
+        other.mkdir(parents=True)
+        (other / "SKILL.md").write_text("---\nname: off-one\ndescription: Off\n---\n\nOff body\n")
+        (self.profile / "config.yaml").write_text(
+            self.config + f"skills:\n  auto_load: {names}\n  disabled: [off-one]\n{extra}")
+
+    def system(self):
+        return self.requests()[0]["messages"][0]["content"]
+
+    def converse(self, env=None):
+        if env:
+            self.env = {**self.env, **env}
+        process, _ = self.start(tty=False)
+        _, err = process.communicate("hi\n", timeout=30)
+        self.assertEqual(process.returncode, 0, err)
+        return err
+
+    def test_a_conversation_pins_the_skill_once_and_warns_about_the_others(self):
+        self.pin()
+        err = self.converse()
+        system = self.system()
+        self.assertEqual(system.count('The "pinned-demo" skill is auto-loaded via config'), 1)
+        self.assertIn(f"Use {self.profile}/skills/devtools/pinned-demo/x.", system)
+        self.assertIn("- references/a.md", system)
+        self.assertNotIn("Off body", system)
+        self.assertIn("not found or disabled, skipped: missing-one, off-one", err)
+        self.assertIn("Before replying, scan the skills below.", system)
+        self.assertLess(system.index("is auto-loaded via config"), system.index("## Skills"))
+
+    def test_a_single_query_gets_the_short_skills_guidance(self):
+        self.pin()
+        result = subprocess.run(
+            [str(BINARY), "chat", "-q", "hi", "--oneshot"], cwd=self.root, env=self.env,
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        system = self.system()
+        self.assertIn("Scan the skills below and load one with skill_view(name) only when", system)
+        self.assertNotIn("Before replying, scan the skills below.", system)
+        self.assertIn("is auto-loaded via config", system)
+
+    def test_template_vars_off_keeps_the_token(self):
+        self.pin(extra="  template_vars: false\n")
+        self.converse()
+        self.assertIn("Use ${HERMES_SKILL_DIR}/x.", self.system())
+
+    def test_ignore_rules_and_a_disabled_skills_toolset_pin_nothing(self):
+        self.pin()
+        self.converse({"HERMES_IGNORE_RULES": "1"})
+        self.assertNotIn("is auto-loaded via config", self.system())
+
+    def test_without_the_skills_toolset_nothing_is_pinned(self):
+        self.pin()
+        (self.profile / "config.yaml").write_text(
+            (self.profile / "config.yaml").read_text() + "agent:\n  disabled_toolsets: [skills]\n")
+        self.converse()
+        self.assertNotIn("is auto-loaded via config", self.system())
+        self.assertNotIn("<available_skills>", self.system())
+
+    def test_the_hermes_agent_skill_selects_the_skill_pointer_guidance(self):
+        self.pin(names="[]")
+        skill = self.profile / "skills" / "hermes-agent"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("---\nname: hermes-agent\ndescription: Help\n---\n\nBody\n")
+        self.converse()
+        self.assertIn("The `hermes-agent` skill has the actual commands", self.system())
+
+    def test_inline_shell_is_not_run_and_is_reported(self):
+        self.pin(extra="  inline_shell: true\n")
+        skill = self.profile / "skills" / "devtools" / "pinned-demo" / "SKILL.md"
+        skill.write_text(skill.read_text() + "Now: !`echo SHELL-RAN`.\n")
+        err = self.converse()
+        self.assertIn("!`echo SHELL-RAN`", self.system())
+        self.assertNotIn("Now: SHELL-RAN", self.system())
+        self.assertIn("skills.inline_shell is set", err)
+
+
 if __name__ == "__main__":
     unittest.main()
