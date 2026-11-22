@@ -345,8 +345,14 @@ pub enum TurnEvent<'a> {
     Text(&'a str),
     Fallback(&'a str),
     ToolStarted(&'a str),
-    ToolFinished { name: &'a str, succeeded: bool },
+    ToolFinished {
+        name: &'a str,
+        succeeded: bool,
+    },
     IterationLimit(u32),
+    /// The provider rejected the request as too large and the earlier steps of this turn were
+    /// replaced by a summary; the request is sent again.
+    ContextSqueezed,
 }
 
 #[derive(Clone, Copy)]
@@ -371,6 +377,10 @@ pub struct TurnOptions<'a> {
     /// offered to a run with no person to ask; a flagged one is refused there unless the run's mode approves.
     pub terminal_approval_timeout_secs: Option<u32>,
     pub terminal_local: bool,
+    /// Compression settings and the route that writes its summaries; a turn that overflows the
+    /// context after tool calls uses them to compress its own earlier steps and carry on.
+    pub compression: Option<&'a CompactionSettings>,
+    pub summarizer: Option<&'a ModelRoute>,
     /// Which environment variables commands see.
     pub terminal_env: Option<&'a crate::terminal::TerminalSettings>,
     /// Seconds to wait for an answer to `clarify`; 0 waits without limit.
@@ -441,6 +451,10 @@ where
     messages.insert(0, json!({"role": "system", "content": system_prompt}));
     let first_new_message = messages.len();
     messages.push(json!({"role": "user", "content": query}));
+    // What each request carries. It starts as the conversation and differs from it only after a
+    // mid-turn compression, which shortens this copy and never the conversation that is saved.
+    let mut sent = messages.clone();
+    let mut squeezes = 0usize;
     let mut env = ToolEnv::from_options(&options);
     env.skills_indexed = system_prompt.contains("\n<available_skills>\n");
     env.skill_desc_limit = history.skills.desc_limit();
@@ -460,12 +474,7 @@ where
     let mut fallback_routes = fallbacks.iter();
     for _ in 0..options.max_turns {
         let result = loop {
-            let request = chat_request(
-                &route.model,
-                &messages,
-                &tools,
-                options.prefill.unwrap_or(&[]),
-            );
+            let request = chat_request(&route.model, &sent, &tools, options.prefill.unwrap_or(&[]));
             if let Some(journal) = options.journal {
                 journal.record_for(options.child, "request", json!({"body": request}));
             }
@@ -510,6 +519,27 @@ where
                             json!({"error": format!("{error:?}")}),
                         );
                     }
+                    if matches!(error, ProviderError::ContextOverflow)
+                        && !emitted_text
+                        && squeezes < MAX_SQUEEZES
+                    {
+                        if let Some(settings) = options.compression.filter(|s| s.enabled()) {
+                            let summarizer = options.summarizer;
+                            if squeeze_turn(
+                                settings,
+                                summarizer.unwrap_or(route),
+                                summarizer.is_some(),
+                                &mut sent,
+                                first_new_message,
+                            )
+                            .await
+                            {
+                                squeezes += 1;
+                                on_event(TurnEvent::ContextSqueezed);
+                                continue;
+                            }
+                        }
+                    }
                     if emitted_text || !error.allows_fallback() {
                         return Err(TurnError::Provider(error));
                     }
@@ -521,6 +551,7 @@ where
                         system_prompt = route.system_prompt(saved_prompt);
                     }
                     messages[0] = json!({"role": "system", "content": system_prompt});
+                    sent[0] = messages[0].clone();
                     on_event(TurnEvent::Fallback(&route.model));
                 }
             }
@@ -554,7 +585,9 @@ where
                 })
             })
             .collect();
-        messages.push(json!({"role": "assistant", "content": if result.content.is_empty() { None } else { Some(result.content) }, "tool_calls": calls}));
+        let assistant = json!({"role": "assistant", "content": if result.content.is_empty() { None } else { Some(result.content) }, "tool_calls": calls});
+        sent.push(assistant.clone());
+        messages.push(assistant);
         for call in result.tool_calls {
             // The bridge answers searches and descriptions itself and hands a call back as the
             // real tool, which every later step then sees by its own name.
@@ -625,7 +658,9 @@ where
                     }),
                 );
             }
-            messages.push(json!({"role": "tool", "tool_call_id": call.id, "content": content}));
+            let tool_message = json!({"role": "tool", "tool_call_id": call.id, "content": content});
+            sent.push(tool_message.clone());
+            messages.push(tool_message);
             on_event(TurnEvent::ToolFinished {
                 name: &name,
                 succeeded,
@@ -634,12 +669,8 @@ where
     }
     on_event(TurnEvent::IterationLimit(options.max_turns));
     messages.push(json!({"role": "user", "content": ITERATION_SUMMARY_REQUEST}));
-    let request = chat_request(
-        &route.model,
-        &messages,
-        &tools,
-        options.prefill.unwrap_or(&[]),
-    );
+    sent.push(json!({"role": "user", "content": ITERATION_SUMMARY_REQUEST}));
+    let request = chat_request(&route.model, &sent, &tools, options.prefill.unwrap_or(&[]));
     // Keep the active route and tool definitions so the provider can reuse its prompt prefix.
     // Emit the summary only after verifying that the completion contains no tool calls.
     let summary = route
@@ -655,6 +686,50 @@ where
     }
     on_event(TurnEvent::Text(&summary.content));
     Ok(TurnOutcome::IterationLimit)
+}
+
+/// How many times one turn may replace its earlier steps with a summary after the provider rejects
+/// the request as too large.
+const MAX_SQUEEZES: usize = 3;
+
+/// Replace the steps of the running turn that come before its last two exchanges with a summary in
+/// `sent`, as the reference does when a request overflows the context window after tool calls.
+/// `false` when nothing can be replaced or the summary is no shorter than what it replaces.
+async fn squeeze_turn(
+    settings: &CompactionSettings,
+    route: &ModelRoute,
+    own_route: bool,
+    sent: &mut Vec<Value>,
+    query_index: usize,
+) -> bool {
+    let Some(range) = CompactionSettings::select_in_turn(sent, query_index) else {
+        return false;
+    };
+    let middle = &sent[range.clone()];
+    let Some(request) = settings.request(&route.model, middle) else {
+        return false;
+    };
+    // A configured summary route carries its own body fields; the main route's are left out.
+    let reply = if own_route {
+        route.provider.complete(&request, |_| {}).await
+    } else {
+        route.provider.complete_plain(&request, |_| {}).await
+    };
+    let Ok(reply) = reply else {
+        return false;
+    };
+    if reply.finish_reason.as_deref() != Some("stop") || !reply.tool_calls.is_empty() {
+        return false;
+    }
+    let Some(compaction) = CompactedHistory::new(range.clone(), &reply.content) else {
+        return false;
+    };
+    let summary = json!({"role": "user", "content": compaction.summary});
+    if messages_bytes(&[summary.clone()]) >= messages_bytes(middle) {
+        return false;
+    }
+    sent.splice(range, [summary]);
+    true
 }
 
 /// A chat request. An empty `tools` array is omitted, since providers reject it.

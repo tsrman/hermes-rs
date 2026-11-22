@@ -548,6 +548,8 @@ where
         approval_timeout_secs: request.approval_timeout_secs,
         terminal_approval_timeout_secs: request.terminal_approval_timeout_secs,
         terminal_local: request.terminal_local,
+        compression: Some(&request.compression),
+        summarizer: summarizer.as_ref(),
         terminal_env: Some(&request.terminal_env),
         clarify_timeout_secs: request.clarify_timeout_secs,
     };
@@ -672,6 +674,10 @@ fn format_event(event: TurnEvent<'_>) -> Event {
         TurnEvent::IterationLimit(limit) => Event::Stderr(format!(
             "Iteration limit reached ({limit}). Requesting summary."
         )),
+        TurnEvent::ContextSqueezed => Event::Stderr(
+            "Context window exceeded: replacing earlier steps of this turn with a summary and retrying."
+                .into(),
+        ),
     }
 }
 

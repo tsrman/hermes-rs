@@ -115,6 +115,19 @@ class Handler(BaseHTTPRequestHandler):
                 "message": "This model's maximum context length is 8192 tokens.",
             }})
             return
+        summarizing = bool(messages) and str(messages[0].get("content", "")).startswith("Summarize completed conversation history")
+        raw_tools = sum(m.get("role") == "tool" for m in messages)
+        if (
+            scenario == "overflow_midturn"
+            and not summarizing
+            and "[CONTEXT SUMMARY]" not in json.dumps(messages)
+            and raw_tools >= 3
+        ):
+            self.send_json(400, {"error": {
+                "code": "context_length_exceeded",
+                "message": "This model's maximum context length is 8192 tokens.",
+            }})
+            return
         if scenario == "compact" and messages and messages[-1].get("content") == "Cancel this turn":
             self.server.release.wait(timeout=15)
         function = {"name": "read_file", "arguments": '{"path":"fixture.txt"}'}
@@ -212,6 +225,9 @@ class Handler(BaseHTTPRequestHandler):
                 for message in messages
             )
             call_id = "fixture-call"
+            if scenario == "overflow_midturn":
+                wants_tool = not summarizing and raw_tools < 3 and "[CONTEXT SUMMARY]" not in json.dumps(messages)
+                call_id = f"midturn-call-{len(self.server.requests)}"
         if wants_tool:
             tool_call = {
                 "id": call_id,
@@ -224,7 +240,7 @@ class Handler(BaseHTTPRequestHandler):
             message = {"role": "assistant", "content": (
                 "[CRON_FAILURE]\nchild task failed" if scenario == "cron_failure" else (final_text or "Ответ модели"))}
             finish_reason = "stop"
-        if scenario in ("compact", "compact_failure", "overflow", "overflow_tools") and messages[0]["content"].startswith("Summarize completed conversation history"):
+        if scenario in ("compact", "compact_failure", "overflow", "overflow_tools", "overflow_midturn") and messages[0]["content"].startswith("Summarize completed conversation history"):
             message["content"] = "Earlier turns resolved the fixture checks."
             if scenario == "compact_failure":
                 finish_reason = "length"
@@ -277,7 +293,7 @@ def main():
         "text", "tool", "partial_tool", "stall", "tool_retry", "tool_rate_limit",
         "fallback_after_tool", "fallback_auth", "partial_text", "disconnect_once",
         "iteration_limit", "iteration_summary_tool", "partial_after_tool", "stall_on_resume", "burst", "skill",
-        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "mcp", "web", "memory", "cron_failure", "todo", "delegate", "code",
+        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "overflow_midturn", "mcp", "web", "memory", "cron_failure", "todo", "delegate", "code",
     ), default="text")
     args = parser.parse_args()
     if bool(args.tls_cert) != bool(args.tls_key):

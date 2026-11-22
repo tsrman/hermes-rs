@@ -104,6 +104,21 @@ impl CompactionSettings {
         Some(start..end)
     }
 
+    /// The steps of the running turn that a mid-turn compression may replace: everything between the
+    /// user's query and the last two exchanges, cut only before an assistant message that carries tool
+    /// calls so that a call and its results stay together. A summary an earlier pass left in that
+    /// stretch is summarized again with the rest. `None` when fewer than three exchanges have run.
+    pub(crate) fn select_in_turn(messages: &[Value], query_index: usize) -> Option<Range<usize>> {
+        let start = query_index + 1;
+        let exchanges: Vec<usize> = (start..messages.len())
+            .filter(|&index| {
+                messages[index]["role"] == "assistant" && messages[index]["tool_calls"].is_array()
+            })
+            .collect();
+        let end = *exchanges.get(exchanges.len().checked_sub(2)?)?;
+        (exchanges.len() >= 3 && end >= start + 2).then_some(start..end)
+    }
+
     pub(crate) fn request(&self, model: &str, messages: &[Value]) -> Option<Value> {
         let transcript = serde_json::to_string(messages).ok()?;
         let request_bytes = transcript.len() + SUMMARIZER.len();
@@ -206,5 +221,65 @@ mod tests {
             CompactionSettings::from_config(&config).threshold,
             Some(27200)
         );
+    }
+}
+
+#[cfg(test)]
+mod in_turn_tests {
+    use super::*;
+
+    fn exchange(id: &str) -> [Value; 2] {
+        [
+            json!({"role": "assistant", "content": null, "tool_calls": [{"id": id}]}),
+            json!({"role": "tool", "tool_call_id": id, "content": "output"}),
+        ]
+    }
+
+    fn turn(exchanges: usize) -> Vec<Value> {
+        let mut messages = vec![
+            json!({"role": "system", "content": "s"}),
+            json!({"role": "user", "content": "q"}),
+        ];
+        for index in 0..exchanges {
+            messages.extend(exchange(&format!("c{index}")));
+        }
+        messages
+    }
+
+    #[test]
+    fn the_last_two_exchanges_and_the_query_stay() {
+        assert_eq!(CompactionSettings::select_in_turn(&turn(2), 1), None);
+        assert_eq!(CompactionSettings::select_in_turn(&turn(3), 1), Some(2..4));
+        // Five exchanges: the first three are replaced, the cut falls before an assistant message.
+        let messages = turn(5);
+        let range = CompactionSettings::select_in_turn(&messages, 1).unwrap();
+        assert_eq!(range, 2..8);
+        assert_eq!(messages[range.end]["role"], "assistant");
+    }
+
+    #[test]
+    fn a_calls_results_stay_with_it_and_an_earlier_summary_is_included() {
+        let mut messages = turn(3);
+        // A parallel call: one assistant message with two results.
+        messages.insert(
+            5,
+            json!({"role": "tool", "tool_call_id": "c1b", "content": "more"}),
+        );
+        let range = CompactionSettings::select_in_turn(&messages, 1).unwrap();
+        assert!(messages[range.end..]
+            .iter()
+            .take(1)
+            .all(|m| m["role"] == "assistant"));
+        assert!(range.clone().all(|index| messages[index]["role"] != "user"));
+        // After a pass the summary sits where the first steps were and is summarized again.
+        let mut squeezed = vec![
+            json!({"role": "system", "content": "s"}),
+            json!({"role": "user", "content": "q"}),
+            json!({"role": "user", "content": "[CONTEXT SUMMARY]:\nx"}),
+        ];
+        for index in 0..3 {
+            squeezed.extend(exchange(&format!("d{index}")));
+        }
+        assert_eq!(CompactionSettings::select_in_turn(&squeezed, 1), Some(2..5));
     }
 }

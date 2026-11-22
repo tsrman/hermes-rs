@@ -30,6 +30,8 @@ class CliTest(unittest.TestCase):
             "test_cancel_after_summary_leaves_no_compaction": "compact",
             "test_context_overflow_compresses_history_and_retries_once": "overflow",
             "test_context_overflow_after_a_tool_call_is_not_retried": "overflow_tools",
+            "test_context_overflow_after_tool_calls_compresses_the_turns_earlier_steps": "overflow_midturn",
+            "test_mid_turn_overflow_with_compression_disabled_is_an_error": "overflow_midturn",
             "test_mcp_stdio_tool_is_exposed_and_called": "mcp",
             "test_todo_list_is_hidden_by_default_and_survives_a_resume": "todo",
             "test_memory_tool_writes_the_store_without_changing_the_prompt_snapshot": "memory",
@@ -269,6 +271,36 @@ class CliTest(unittest.TestCase):
         self.assertEqual(len(recorded) - len(original), 2)
         with sqlite3.connect(database) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM messages WHERE _compressed_summary = 1").fetchone(), (0,))
+
+    def test_context_overflow_after_tool_calls_compresses_the_turns_earlier_steps(self):
+        config = "compression:\n  threshold_tokens: '100000'\n"
+        result, recorded = self.chat_with_profile(extra_config=config, args=("--save-session",))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "Ответ модели\n")
+        self.assertIn("replacing earlier steps of this turn with a summary", result.stderr)
+        tool_count = lambda request: sum(m.get("role") == "tool" for m in request["messages"])
+        # Three tool calls, the rejected fourth request, the summary, then the same request, shorter.
+        self.assertEqual([tool_count(r) for r in recorded], [0, 1, 2, 3, 0, 2])
+        rejected, summary, answer = recorded[3], recorded[4], recorded[5]
+        self.assertNotIn("tools", summary)
+        self.assertNotIn("[CONTEXT SUMMARY]", json.dumps(rejected["messages"]))
+        self.assertIn("[CONTEXT SUMMARY]", json.dumps(answer["messages"]))
+        # The first exchange became the summary; the query and the last two exchanges are kept.
+        roles = [m["role"] for m in answer["messages"]]
+        self.assertEqual(roles, ["system", "user", "user", "assistant", "tool", "assistant", "tool"])
+        # What is saved is the whole turn: all three tool results and no summary.
+        session = result.stderr.splitlines()[-1].removeprefix("Session: ")
+        with sqlite3.connect(self.workdir / "hermes" / "state.db") as db:
+            self.assertEqual(db.execute(
+                "SELECT count(*) FROM messages WHERE session_id = ? AND role = 'tool'", (session,)).fetchone(), (3,))
+            self.assertEqual(db.execute(
+                "SELECT count(*) FROM messages WHERE session_id = ? AND _compressed_summary = 1", (session,)).fetchone(), (0,))
+
+    def test_mid_turn_overflow_with_compression_disabled_is_an_error(self):
+        result, recorded = self.chat_with_profile(extra_config="compression:\n  enabled: false\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("replacing earlier steps", result.stderr)
+        self.assertEqual(len(recorded), 4)
 
     def test_mcp_stdio_tool_is_exposed_and_called(self):
         server = ROOT / "compat" / "mcp_fixture_server.py"
