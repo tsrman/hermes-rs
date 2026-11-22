@@ -8,12 +8,20 @@ pub mod config;
 pub mod cron;
 pub mod delegation;
 mod difflib;
+#[cfg(unix)]
+pub mod execute_code;
+#[cfg(not(unix))]
+#[path = "execute_code_stub.rs"]
 pub mod execute_code;
 mod file_tools;
 mod fuzzy;
 pub mod journal;
 pub mod mcp;
 pub mod memory_tool;
+#[cfg(unix)]
+pub mod process;
+#[cfg(not(unix))]
+#[path = "process_stub.rs"]
 pub mod process;
 #[cfg(target_os = "linux")]
 pub mod profile;

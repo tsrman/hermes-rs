@@ -589,10 +589,13 @@ fn resolve_supporting_file(skill_dir: &Path, file_path: &str) -> Result<PathBuf,
 
 fn atomic_write(target: &Path, content: &str) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::PermissionsExt;
-    let mode = fs::metadata(target)
-        .map(|metadata| metadata.permissions().mode() & 0o7777)
-        .unwrap_or(0o644);
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(target)
+            .map(|metadata| metadata.permissions().mode() & 0o7777)
+            .unwrap_or(0o644)
+    };
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -602,7 +605,11 @@ fn atomic_write(target: &Path, content: &str) -> std::io::Result<()> {
         .tempfile_in(directory)?;
     temporary.write_all(content.as_bytes())?;
     temporary.as_file().sync_all()?;
-    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(mode))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(temporary.path(), fs::Permissions::from_mode(mode))?;
+    }
     temporary.persist(target).map_err(|error| error.error)?;
     Ok(())
 }
@@ -1293,8 +1300,13 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
         if kind.is_dir() {
             copy_tree(&entry.path(), &target)?;
         } else if kind.is_symlink() {
-            let link = fs::read_link(entry.path())?;
-            std::os::unix::fs::symlink(link, &target)?;
+            #[cfg(unix)]
+            {
+                let link = fs::read_link(entry.path())?;
+                std::os::unix::fs::symlink(link, &target)?;
+            }
+            #[cfg(not(unix))]
+            fs::copy(entry.path(), &target)?;
         } else {
             fs::copy(entry.path(), &target)?;
         }
