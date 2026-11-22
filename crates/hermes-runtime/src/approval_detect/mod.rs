@@ -7,8 +7,16 @@
 //! module as a safety boundary.
 //!
 //! Ported: `budget` (scan work bound), `shell_scan` (quote/escape state machine, substitution ends,
-//! `substitution_depth`), `ansi_c` (`$'...'` expansion).
+//! `substitution_depth`), `ansi_c` (`$'...'` expansion), `normalize` (detection-time normalization;
+//! POSIX home folding only, see its header).
 
 pub mod ansi_c;
 pub mod budget;
+pub mod normalize;
 pub mod shell_scan;
+
+/// Python's `str.isspace` / regex `\s` for `str`: Unicode White_Space plus the separators
+/// `\x1c`-`\x1f`, which `char::is_whitespace` leaves out.
+pub fn py_isspace(c: char) -> bool {
+    c.is_whitespace() || ('\x1c'..='\x1f').contains(&c)
+}

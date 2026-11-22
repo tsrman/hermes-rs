@@ -257,7 +257,7 @@ fn match_heredoc(chars: &[char], at: usize) -> Option<(bool, String, usize)> {
                     break;
                 }
             }
-            Some(&c) if !(c.is_whitespace() || ";&|<>()'\"\\".contains(c)) => k += 1,
+            Some(&c) if !(super::py_isspace(c) || ";&|<>()'\"\\".contains(c)) => k += 1,
             _ => break,
         }
     }

@@ -8,7 +8,7 @@ pub fn is_shell_comment_start(chars: &[char], index: usize) -> bool {
         return chars[index] == '#';
     }
     let prev = chars[index - 1];
-    if !(prev.is_whitespace() || ";&|()<>".contains(prev)) {
+    if !(super::py_isspace(prev) || ";&|()<>".contains(prev)) {
         return false;
     }
     let mut backslashes = 0;
