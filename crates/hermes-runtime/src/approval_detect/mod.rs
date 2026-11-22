@@ -8,12 +8,16 @@
 //!
 //! Ported: `budget` (scan work bound), `shell_scan` (quote/escape state machine, substitution ends,
 //! `substitution_depth`), `ansi_c` (`$'...'` expansion), `normalize` (detection-time normalization;
-//! POSIX home folding only, see its header).
+//! POSIX home folding only, see its header), `shell_words` (word reader, literal-substitution
+//! deobfuscator), `wrappers` (wrapper tables, partial) and `command_starts` (command positions).
 
 pub mod ansi_c;
 pub mod budget;
+pub mod command_starts;
 pub mod normalize;
 pub mod shell_scan;
+pub mod shell_words;
+pub mod wrappers;
 
 /// Python's `str.isspace` / regex `\s` for `str`: Unicode White_Space plus the separators
 /// `\x1c`-`\x1f`, which `char::is_whitespace` leaves out.

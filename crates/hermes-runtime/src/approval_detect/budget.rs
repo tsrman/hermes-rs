@@ -42,6 +42,7 @@ thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
     static REMAINING: Cell<i64> = const { Cell::new(0) };
     static MEMO: RefCell<HashMap<(u8, u64, usize), Option<usize>>> = RefCell::new(HashMap::new());
+    static STR_MEMO: RefCell<HashMap<(u8, String), String>> = RefCell::new(HashMap::new());
 }
 
 struct Guard;
@@ -50,6 +51,7 @@ impl Drop for Guard {
     fn drop(&mut self) {
         ACTIVE.with(|a| a.set(false));
         MEMO.with(|m| m.borrow_mut().clear());
+        STR_MEMO.with(|m| m.borrow_mut().clear());
     }
 }
 
@@ -102,6 +104,29 @@ pub fn memo(
         None => {
             let value = compute()?;
             MEMO.with(|m| m.borrow_mut().insert(key, value));
+            value
+        }
+    };
+    charge(1)?;
+    Ok(value)
+}
+
+/// `compute()` for a pure string-to-string function, memoised like [`memo`].
+pub fn memo_string(
+    kind: u8,
+    key: &str,
+    compute: impl FnOnce() -> Result<String, BudgetExceeded>,
+) -> Result<String, BudgetExceeded> {
+    if !active() {
+        return compute();
+    }
+    let key = (kind, key.to_owned());
+    let cached = STR_MEMO.with(|m| m.borrow().get(&key).cloned());
+    let value = match cached {
+        Some(value) => value,
+        None => {
+            let value = compute()?;
+            STR_MEMO.with(|m| m.borrow_mut().insert(key, value.clone()));
             value
         }
     };
