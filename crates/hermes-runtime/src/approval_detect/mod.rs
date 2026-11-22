@@ -11,15 +11,20 @@
 //! POSIX home folding only, see its header), `shell_words` (word reader, literal-substitution
 //! deobfuscator), `wrappers` (wrapper tables), `command_starts` (command positions), `wrapper_prefix`
 //! (wrapper peeling, literal heredoc bodies, `rm` dequoting), `env_split` (`env -S`), `text_masks`
-//! (quoted-newline masking, parser limits) and `patterns` (`_CMDPOS`).
+//! (quoted-newline masking, parser limits), `patterns` (`_CMDPOS`), `shell_heredoc` (inert heredoc
+//! masking), `shell_tokens` (top-level segments, span lexer, grep operands) and `exec_findings`
+//! (`-e`/`-c` interpreters, `bash -c`, read-tool program flags, `eval`).
 
 pub mod ansi_c;
 pub mod budget;
 pub mod command_starts;
 pub mod env_split;
+pub mod exec_findings;
 pub mod normalize;
 pub mod patterns;
+pub mod shell_heredoc;
 pub mod shell_scan;
+pub mod shell_tokens;
 pub mod shell_words;
 pub mod text_masks;
 pub mod wrapper_prefix;

@@ -42,19 +42,36 @@ pub fn read_shell_word(text: &Text, pos: usize) -> Result<(usize, usize, String)
 
 /// `shlex.split(s, posix=True)` (no comments); `None` where Python raises `ValueError`.
 pub fn shlex_split(input: &str) -> Option<Vec<String>> {
+    shlex_tokens(input, false)
+}
+
+/// `shlex.shlex(s, posix=True, punctuation_chars="<>")` with `whitespace_split`: `<` and `>` runs
+/// are tokens of their own.
+pub fn shlex_split_punct(input: &str) -> Option<Vec<String>> {
+    shlex_tokens(input, true)
+}
+
+fn shlex_tokens(input: &str, punct: bool) -> Option<Vec<String>> {
+    #[derive(Clone, Copy)]
     enum State {
         Space,
         Word,
+        Punct,
         Quote(char),
         Escape,
     }
     let is_ws = |c: char| matches!(c, ' ' | '\t' | '\r' | '\n');
+    let is_punct = |c: char| punct && (c == '<' || c == '>');
+    let chars: Vec<char> = input.chars().collect();
     let mut tokens = Vec::new();
     let mut token = String::new();
     let mut quoted = false;
     let mut state = State::Space;
     let mut escaped_state = State::Space;
-    for c in input.chars() {
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        i += 1;
         match state {
             State::Space => {
                 if is_ws(c) {
@@ -65,6 +82,9 @@ pub fn shlex_split(input: &str) -> Option<Vec<String>> {
                 } else if c == '\\' {
                     escaped_state = State::Word;
                     state = State::Escape;
+                } else if is_punct(c) {
+                    token.push(c);
+                    state = State::Punct;
                 } else if c == '\'' || c == '"' {
                     state = State::Quote(c);
                 } else {
@@ -84,8 +104,28 @@ pub fn shlex_split(input: &str) -> Option<Vec<String>> {
                 } else if c == '\\' {
                     escaped_state = State::Word;
                     state = State::Escape;
+                } else if is_punct(c) {
+                    // Pushed back: the token ends here and `c` starts the next one.
+                    i -= 1;
+                    state = State::Space;
+                    if !token.is_empty() || quoted {
+                        tokens.push(std::mem::take(&mut token));
+                        quoted = false;
+                    }
                 } else {
                     token.push(c);
+                }
+            }
+            State::Punct => {
+                if is_punct(c) {
+                    token.push(c);
+                } else {
+                    if !is_ws(c) {
+                        i -= 1;
+                    }
+                    state = State::Space;
+                    tokens.push(std::mem::take(&mut token));
+                    quoted = false;
                 }
             }
             State::Quote(q) => {
@@ -112,7 +152,7 @@ pub fn shlex_split(input: &str) -> Option<Vec<String>> {
     }
     match state {
         State::Quote(_) | State::Escape => None,
-        State::Space | State::Word => {
+        State::Space | State::Word | State::Punct => {
             if !token.is_empty() || quoted {
                 tokens.push(token);
             }
