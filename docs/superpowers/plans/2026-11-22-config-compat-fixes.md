@@ -52,7 +52,7 @@ routes ignore it); `auxiliary.compression.extra_body` is not read; fallback rout
 
 ### P2: documented settings that change behaviour the port already has
 
-8. **Compression keys.** The port reads `enabled`, `threshold`, `threshold_tokens`, `protect_first_n`,
+8. **(done: read or refused, see "Notes on the config keys of items 8, 11 and 13") Compression keys.** The port reads `enabled`, `threshold`, `threshold_tokens`, `protect_first_n`,
    `protect_last_n`, `checkpoint_required`, `in_place`, `model.context_length`. Not read [keys]:
    `target_ratio`, `tail_mode`, `min_tail_user_messages`, `max_attempts`, `abort_on_summary_failure`,
    `model_thresholds`, `proactive_prune_*`, `micro_compact*`, `idle_compact_after_seconds`. Each needs a
@@ -62,7 +62,7 @@ routes ignore it); `auxiliary.compression.extra_body` is not read; fallback rout
    [code]. The port applies it unconditionally and ignores the per-provider value.
 10. **`model.max_concurrency`** is ignored. Harmless today (one model request at a time except
     `delegate_task` children); revisit when children are throttled per endpoint.
-11. **`agent.*` prompt and loop settings** not read [keys]: `tool_use_enforcement`, `execution_guidance`,
+11. **(done: read or refused, see the same notes) `agent.*` prompt and loop settings** not read [keys]: `tool_use_enforcement`, `execution_guidance`,
     `task_completion_guidance`, `verify_guidance`, `verify_on_stop`, `max_verify_nudges`,
     `environment_hint`, `reasoning_overrides`, `reasoning_echo`, `service_tier`, `text_verbosity`,
     `run_budget_seconds`, `stall_guards`, `image_input_mode`. They change the system prompt or the request,
@@ -70,10 +70,10 @@ routes ignore it); `auxiliary.compression.extra_body` is not read; fallback rout
     match what the port sends now).
 12. **(done) `tool_output.max_bytes/max_lines/max_line_length`**, **`file_read_max_chars`**, **`context_file_max_chars`
     / `context_file_read_timeout`** [keys, the last is read]: the port's limits are constants.
-13. **(switch done; PII and phone options not) `security.redact_secrets`, `privacy.redact_pii`, `security.redact_phone_numbers`.** The port always
+13. **(done: switch, phone option; PII refused as gateway-only) `security.redact_secrets`, `privacy.redact_pii`, `security.redact_phone_numbers`.** The port always
     redacts secrets and has no switch [keys]. Decide whether to add the switch; defaulting to the
     reference's default is mandatory either way.
-14. **(init files done) `terminal.*`** read: `backend`, `env_passthrough`, `timeout`, `shell_init_files`,
+14. **(init files done; `persistent_shell` refused, see the notes) `terminal.*`** read: `backend`, `env_passthrough`, `timeout`, `shell_init_files`,
     `auto_source_bashrc`, timeouts for code. Not read [keys]: `cwd`, `home_mode`, `persistent_shell`,
     docker/ssh/modal settings (remote backends do not exist in the port). See the notes below.
 15. **(detector and `command_allowlist` done) `approvals.*`** read: `mode`, `timeout`, `allow`, `deny`, and
@@ -300,7 +300,8 @@ turn; matching the reference adds about 2000 tokens to every request (more with 
   unless it says otherwise, parsed as `1/true/yes/on`) switch redaction of terminal output, file reads and
   search results off. The stored-conversation text of `session_search`, the debug journal and CDP results stay
   redacted, as the reference's forced path does. A warning is printed at startup when it is off.
-  `privacy.redact_pii` and `security.redact_phone_numbers` are still not read.
+  `privacy.redact_pii` is refused and `security.redact_phone_numbers` is read (see "Notes on the config keys of
+  items 8, 11 and 13").
 
 ## Notes on `delegation.*` route (done)
 
@@ -418,4 +419,40 @@ the original `PATH` that the profile dropped are put back at the end. Difference
 - Found while comparing: the prompt's own gates (the `hermes-agent` help paragraph, memory and skill
   guidance) saw a tool list without `skill_view`/`skills_list`, because those tools are offered only once the
   prompt carries the index. The index is now computed first, so the gates see the same names as the model.
+
+## Notes on the config keys of items 8, 11 and 13 (done, 2026-11-23)
+
+Recorded with `compat/create_config_keys_fixture.py` (`tests/fixtures/config_keys.json`: 40 compression
+triggers through a real `ContextCompressor`, 31 `max_attempts`/`protect_*` values, 28 `config.yaml` files read by
+`chat_keeps_phone_numbers`, 16 reply scrubs, 6 `_should_redact_pii` rows) and `compat/create_request_fixture.py`
+(`tests/fixtures/agent_requests.json`: 62 chat-completions and 9 Responses request bodies from
+`_build_api_kwargs`). Rust tests are in `crates/hermes-runtime/tests/config_keys.rs`, end-to-end ones in
+`compat/test_cli.py`. Every test was checked with a mutation.
+
+| Key | Result | Why |
+|---|---|---|
+| `compression.model_thresholds` | implemented | longest matching substring wins, `provider:` scope outranks a bare key of the same length, the greater key text breaks ties; replaces the ratio before the 0.75 floor, `threshold_tokens` still caps. Matched against the effective model and provider after `--model` (`CompactionSettings::set_route`). Values that are not numbers are dropped, as in the reference |
+| `compression.max_attempts` | implemented | caps how often one turn compresses its own steps (default 3, below 1 means 3, at most 10). In the reference the same counter also covers preflight and overflow retries, which the port does not have |
+| `compression.protect_first_n` / `protect_last_n` | coercion fixed | negatives clamp to 0, floats truncate, numeric strings read (the port fell back to 3 for a negative first count) |
+| `compression.abort_on_summary_failure` | not read, default differs | the port never drops the middle of a history on a failed summary: it keeps everything, which is the reference's `true`. The reference's default `false` replaces the middle with a placeholder |
+| `compression.target_ratio`, `tail_mode`, `min_tail_user_messages` | not read | they decide which tail is kept verbatim (token-bounded, lean or legacy); the port cuts by message count. They belong to the window-boundary work (backlog 3), which owns `select()` |
+| `proactive_prune_*`, `micro_compact*`, `idle_compact_after_seconds`, `prepare_ahead` | refused | opt-in features, off by default in the reference, with no counterpart in the port; defaults match. Gateway (`hygiene_*`), Codex (`codex_*`) and timeout keys do not apply to a one-shot CLI |
+| `agent.reasoning_effort`, `agent.reasoning_overrides` | implemented for `custom` chat completions | found while recording the default request: the reference sends `reasoning_effort: medium` on the custom route, the port sent nothing. Now: config value or per-model override (spelling-tolerant: dots and dashes, provider prefixes, reverse lookup of prefixed keys), `none`/`false`/`disabled` send `none`, `ultra` becomes `max`, unknown words fall back to `medium`. `extra_body` of the endpoint still wins. **Not ported:** the Groq (`default`) and Ollama (`think: false`) host rules, the catalog check that skips models marked non-reasoning, named providers (they keep their profile's default body), the Responses `reasoning` object, fallback routes and subagents |
+| default `reasoning_effort` on must-echo routes | deliberate difference | for models containing `deepseek` or `mimo`, and Kimi, DeepSeek and MiMo hosts, the port sends nothing when no effort is configured. The reference sends `medium` and pads tool-call turns with `reasoning_content: " "`; the port does not replay reasoning, so asking those routes to think could end a tool turn in a 400. A configured level is sent. Re-check with `compat/live_suite.py` on `deepseek-flash-1017` before relying on it |
+| `agent.text_verbosity` | implemented for Responses | `text: {verbosity}` for low/medium/high (case-insensitive), nothing otherwise, nothing on xAI. Checked against the recorded Responses bodies at settings level; no Responses fixture server exists for an end-to-end check. The rest of the reference's Responses body (`prompt_cache_key`, `reasoning`, `include`) is still absent |
+| `agent.service_tier` | refused | recorded: no change to a custom chat-completions body; the reference applies it on the Codex backend and Responses (priority tiers) only |
+| `agent.reasoning_echo` | refused | needs stored reasoning replay (`reasoning_content` carriers), which the port does not have; see the must-echo row |
+| `agent.stall_guards` | refused, **default differs** | default `true` in the reference: an identical-call notice on a tool result after three identical calls and results, and a re-prompt when the model says it will continue but takes no action (`agent/tool_guardrails.py`, about 660 lines). The port has neither |
+| `agent.verify_on_stop`, `verify_guidance`, `max_verify_nudges` | refused | `verify_on_stop` is `false` by default, so defaults match; `true` is not honoured (no evidence ledger, no refusal of a final answer) |
+| `agent.run_budget_seconds` | refused | `null` by default. The reference adds a wrap-up notice to the newest tool result at 80% of the budget and caps provider timeouts; neither exists in the port |
+| `agent.image_input_mode` | not applicable | the one-shot CLI attaches no images; recorded: no change to the request body |
+| `tool_use_enforcement`, `execution_guidance`, `task_completion_guidance`, `parallel_tool_call_guidance`, `environment_hint` | already done | see "the system prompt is now assembled like the reference" |
+| `security.redact_phone_numbers` | implemented | only a YAML false keeps `+` numbers; anything else (including `'false'`, `0`, `null`) keeps them masked. The reference reads YAML 1.1, so bare `no`, `off`, `n` count as false; the port reads them as text and treats the bare words the same. **Difference:** a quoted `'no'` or `'off'` is false here and masked in the reference |
+| stored assistant replies | **new behaviour, found while doing the above** | the reference scrubs every stored assistant reply (tool-call turns too) with `redact_sensitive_text`, which follows `security.redact_secrets`, so the model sees masked text on its next request and a resumed session replays it masked. The port stored replies raw. Now scrubbed at both places in `turn.rs`; the text printed to the person and a subagent's summary stay raw, as in the reference. The reference also strips think blocks and whitespace first; not ported |
+| `privacy.redact_pii` | ignored | gateway only: it hashes user and chat ids in the session-context prompt of PII-safe messaging platforms. Recorded `_should_redact_pii`: false for the `local` platform whatever the setting |
+| `terminal.persistent_shell` | ignored, **default differs** | the reference reads it for the SSH backend only (`TERMINAL_PERSISTENT_SHELL` feeds `ssh_persistent`); the local backend has its own switch, `TERMINAL_LOCAL_PERSISTENT`, default on, which carries exported variables and shell state from one command to the next. The port has no remote backends and keeps only the working directory between commands, which equals the reference with `TERMINAL_LOCAL_PERSISTENT=false`. Persisting shell state needs a snapshot taken after every command; not simple, so not done |
+
+Default divergences left after this work (a default config does not match the reference): `agent.stall_guards`
+(notices and re-prompt), `compression.abort_on_summary_failure` (the port always aborts), local shell state
+persistence, and the Responses request body.
 
