@@ -1082,6 +1082,7 @@ mod tests {
         ToolEnv {
             write_files: true,
             terminal: true,
+            delegation: Some(10),
             has_profile: true,
             skills_indexed: true,
             memory: Some(MemorySettings::default()),

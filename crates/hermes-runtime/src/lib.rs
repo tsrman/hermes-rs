@@ -7,6 +7,7 @@ pub mod config;
 pub mod cron;
 pub mod delegation;
 mod difflib;
+pub mod execute_code;
 mod file_tools;
 mod fuzzy;
 pub mod journal;

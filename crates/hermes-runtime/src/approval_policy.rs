@@ -83,6 +83,8 @@ pub enum Verdict {
 struct Grants {
     edits: bool,
     commands: HashSet<String>,
+    /// Python source the person allowed to run again, exactly as it was.
+    code: HashSet<String>,
 }
 
 static GLOBAL: std::sync::OnceLock<ApprovalPolicy> = std::sync::OnceLock::new();
@@ -173,6 +175,15 @@ impl ApprovalPolicy {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         match request.action {
+            // Code can do anything its interpreter can, so no pattern list covers it: it runs
+            // when everything is approved, or when this exact code was allowed before.
+            ApprovalAction::RunCode => {
+                if self.settings.approve_all || grants.code.contains(&request.content) {
+                    Verdict::Allow
+                } else {
+                    Verdict::Ask
+                }
+            }
             ApprovalAction::RunCommand => {
                 let command = request.content.trim();
                 if self
@@ -221,6 +232,9 @@ impl ApprovalPolicy {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         match request.action {
+            ApprovalAction::RunCode => {
+                grants.code.insert(request.content.clone());
+            }
             ApprovalAction::RunCommand => {
                 grants.commands.insert(request.content.trim().to_owned());
             }
@@ -323,6 +337,28 @@ mod tests {
             )),
             Verdict::Ask
         );
+    }
+
+    #[test]
+    fn code_needs_approval_whatever_the_allow_list_says() {
+        let settings = ApprovalSettings {
+            allow: vec!["*".into()],
+            ..ApprovalSettings::default()
+        };
+        let policy = ApprovalPolicy::new(settings);
+        let code = request(ApprovalAction::RunCode, "print(1)");
+        assert_eq!(policy.decide(&code), Verdict::Ask);
+        policy.remember(&code);
+        assert_eq!(policy.decide(&code), Verdict::Allow);
+        assert_eq!(
+            policy.decide(&request(ApprovalAction::RunCode, "print(2)")),
+            Verdict::Ask
+        );
+        let yolo = ApprovalPolicy::new(ApprovalSettings {
+            approve_all: true,
+            ..ApprovalSettings::default()
+        });
+        assert_eq!(yolo.decide(&code), Verdict::Allow);
     }
 
     #[test]

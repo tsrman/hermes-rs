@@ -63,6 +63,12 @@ def main():
             schema = built.get(name, schema)
         (schemas / f"{name}.json").write_text(
             json.dumps(schema, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    # execute_code lists only the tools a script can reach, so keep the full text and the line of each.
+    from tools import code_execution_tool as code_tool
+    (schemas / "execute_code.json").write_text(json.dumps({
+        "schema": code_tool.build_execute_code_schema(set(code_tool.SANDBOX_ALLOWED_TOOLS), "project"),
+        "lines": [[name, doc] for name, doc in code_tool._TOOL_DOC_LINES],
+    }, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     import toolsets
     from hermes_cli.tools_config import _get_platform_tools
 

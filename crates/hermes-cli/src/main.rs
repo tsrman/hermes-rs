@@ -63,6 +63,7 @@ async fn main() -> ExitCode {
     let outcome = run().await;
     // Background processes belong to this run; none is left behind.
     hermes_runtime::process::kill_all();
+    hermes_runtime::execute_code::kill_all_kernels();
     match outcome {
         Ok(code) => ExitCode::from(code),
         Err(error) => {

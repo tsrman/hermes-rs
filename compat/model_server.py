@@ -162,6 +162,14 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     function = {"name": "terminal", "arguments": json.dumps({"command": "pwd"})}
                     call_id = "parent-pwd"
+        elif scenario == "code":
+            # The user message is JSON {"cells": [python source, ...]}; one execute_code call each.
+            user_index = max(i for i, message in enumerate(messages) if message.get("role") == "user")
+            cells = json.loads(messages[user_index]["content"])["cells"]
+            step = sum(message.get("role") == "tool" for message in messages[user_index + 1:])
+            wants_tool = step < len(cells)
+            function = {"name": "execute_code", "arguments": json.dumps({"code": cells[step]} if wants_tool else {})}
+            call_id = f"code-{step}"
         elif scenario == "cron_failure":
             wants_tool = False
             call_id = "none"
@@ -264,7 +272,7 @@ def main():
         "text", "tool", "partial_tool", "stall", "tool_retry", "tool_rate_limit",
         "fallback_after_tool", "fallback_auth", "partial_text", "disconnect_once",
         "iteration_limit", "iteration_summary_tool", "partial_after_tool", "stall_on_resume", "burst", "skill",
-        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "mcp", "web", "memory", "cron_failure", "todo", "delegate",
+        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "mcp", "web", "memory", "cron_failure", "todo", "delegate", "code",
     ), default="text")
     args = parser.parse_args()
     if bool(args.tls_cert) != bool(args.tls_key):

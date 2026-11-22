@@ -615,3 +615,81 @@ class DelegationTest(ToolTestCase):
         run, requests, events = self.delegate("--yolo", config="delegation:\n  oneshot_max_children: 1\n")
         result = json.loads(next(m for m in requests[1]["messages"] if m.get("role") == "tool")["content"])
         self.assertIn("Delegation budget for this one-shot run is exhausted (0/1", result["error"])
+
+
+@unittest.skipUnless(sys.platform == "linux", "requires Linux file approvals")
+class ExecuteCodeTest(ToolTestCase):
+    scenario = "code"
+
+    def cells(self, *cells, flags=("--yolo",), config="", extra_env=None):
+        if config:
+            (self.profile / "config.yaml").write_text(self.config + config, encoding="utf-8")
+        env = {**self.env, **(extra_env or {})}
+        command = [str(BINARY), "chat", "--oneshot", *flags, "-q", json.dumps({"cells": list(cells)})]
+        run = subprocess.run(command, cwd=self.root, env=env, stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        with urlopen(self.url + "/requests", timeout=4) as response:
+            requests = json.load(response)
+        results = [json.loads(m["content"]) for m in requests[-1]["messages"] if m.get("role") == "tool"]
+        return results, requests
+
+    def test_state_persists_and_tools_run_through_the_normal_path(self):
+        results, requests = self.cells(
+            "x = 41",
+            "print(x + 1)",
+            "from hermes_tools import terminal, read_file, write_file\n"
+            "write_file('made.txt', 'hello')\n"
+            "print(terminal('echo hi')['output'], end='')\n"
+            "print(read_file('made.txt')['content'])",
+        )
+        self.assertEqual([r["status"] for r in results], ["success"] * 3)
+        self.assertEqual(results[1]["output"], "42\n")
+        self.assertEqual(results[1]["kernel"], {"mode": "session", "reused": True, "execution_count": 2, "state_reset": False})
+        self.assertEqual(results[2]["tool_calls_made"], 3)
+        self.assertEqual(results[2]["output"], "hi\n1|hello\n")
+        self.assertEqual((self.root / "made.txt").read_text(), "hello")
+        offered = [t["function"]["name"] for t in requests[0]["tools"]]
+        self.assertIn("execute_code", offered)
+
+    def test_errors_exit_and_big_output_are_reported_like_the_reference(self):
+        results, _ = self.cells("raise ValueError('boom')", "print('x' * 120000)", "import sys; print('bye'); sys.exit(0)", "print('fresh')")
+        self.assertEqual(results[0]["status"], "error")
+        self.assertEqual(results[0]["exit_code"], 1)
+        self.assertIn("ValueError: boom", results[0]["error"])
+        self.assertTrue(results[1]["stdout_truncated"])
+        self.assertEqual(results[1]["stdout_bytes_total"], 120001)
+        self.assertIn("OUTPUT TRUNCATED", results[1]["output"])
+        self.assertTrue(results[2]["kernel"]["ended"])
+        self.assertEqual(results[3]["kernel"]["reused"], False)
+
+    def test_the_kernel_never_sees_the_model_credentials(self):
+        results, _ = self.cells(
+            "import os\nprint(os.environ.get('HERMES_API_KEY'), os.environ.get('OPENAI_API_KEY'), 'PATH' in os.environ)",
+            extra_env={"OPENAI_API_KEY": "sk-should-not-leak"})
+        self.assertEqual(results[0]["output"], "None None True\n")
+
+    def test_the_deny_list_covers_inner_terminal_calls_and_the_call_budget_holds(self):
+        results, _ = self.cells(
+            "from hermes_tools import terminal\nprint(terminal('rm -rf /tmp/never-here'))",
+            "from hermes_tools import read_file\n"
+            "print([('error' in read_file('made.txt')) for _ in range(4)])",
+            config="  deny: ['rm -rf*']\ncode_execution:\n  max_tool_calls: 2\n")
+        self.assertIn("approval_denied", results[0]["output"])
+        self.assertEqual(results[1]["output"], "[True, True, True, True]\n")
+        self.assertEqual(results[1]["tool_calls_made"], 2)
+
+    def test_a_timeout_kills_the_kernel_and_its_state(self):
+        results, _ = self.cells("x = 1", "import time; time.sleep(30)", "print(x)", config="code_execution:\n  timeout: 2\n")
+        self.assertEqual(results[1]["status"], "timeout")
+        self.assertEqual(results[1]["exit_code"], -1)
+        self.assertIn("Cell timed out after 2s", results[1]["error"])
+        self.assertEqual(results[2]["status"], "error")
+        self.assertIn("NameError", results[2]["error"])
+
+    def test_code_needs_approval_even_when_commands_are_allowed(self):
+        results, requests = self.cells("print(1)", flags=(), config="  allow: ['*']\n")
+        self.assertEqual(results[0]["status"], "approval_unavailable")
+        (self.profile / "config.yaml").write_text(self.config, encoding="utf-8")
+        results, requests = self.cells("print(1)", flags=())
+        self.assertNotIn("execute_code", [t["function"]["name"] for t in requests[-1]["tools"]])

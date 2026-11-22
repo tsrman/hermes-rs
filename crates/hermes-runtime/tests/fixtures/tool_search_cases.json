@@ -53,6 +53,95 @@
     {
      "type": "function",
      "function": {
+      "name": "delegate_task",
+      "description": "Spawn isolated subagents. Each gets its own conversation, terminal session, and toolset, and only its final summary returns to you.\n\nSessions without a later-result consumer (including one-shot CLI and cron) join parallel children and return results in this tool call. Otherwise runs in the background: dispatch returns live transcript paths and results re-enter as a new message when subagents finish (one message per call). Background results are delivered only BETWEEN your turns: finish whatever does not depend on them, then give a one-line status and END YOUR TURN. Never wait or poll on transcripts, artifact files, or CI for a child.\n\nUSE FOR: reasoning-heavy subtasks, work that would flood your context, or independent parallel workstreams.\nDO NOT USE FOR (use these instead):\n- Mechanical multi-step work with no reasoning needed -> execute_code\n- A single tool call -> call the tool directly\n- Tasks needing user interaction -> subagents cannot ask questions\n- Durable work that must survive this session -> cronjob or terminal(background=True, notify=True); /stop, /new, or process exit halts running subagents (whole tree); each returns an 'interrupted' completion with partial output.\n\nRULES:\n- Children know nothing of this conversation: pass everything needed via 'context', including any required output language, tone, or style (e.g. \"respond in Chinese\").\n- Child summaries are SELF-REPORTS, not verified facts: a child claiming \"uploaded successfully\" or \"file written\" may be wrong. For external side effects (uploads, remote writes, publishing), require a verifiable handle (URL, ID, absolute path) and verify it yourself before telling the user the operation succeeded.\n- Children cannot close tracked work: a child asked to close it returns findings instead; the parent applies the transition.\n- Children cannot call delegate_task, clarify, or memory.\n- Children inherit the parent model unless pinned via delegation.provider / delegation.model in config.yaml.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "tasks": {
+         "type": "array",
+         "minItems": 1,
+         "items": {
+          "type": "object",
+          "properties": {
+           "goal": {
+            "type": "string",
+            "description": "What this subagent should accomplish. Be specific and self-contained."
+           },
+           "context": {
+            "type": "string",
+            "description": "Background THIS child needs: file paths, error messages, constraints. Each child sees only its own context — repeat shared background in every task that needs it."
+           },
+           "output_schema": {
+            "type": "object",
+            "description": "JSON Schema this child's final answer must validate against (told to the child up front; parent validates with one bounded correction retry; result gains schema_valid, plus schema_errors on failure — the child's raw text is still returned as summary, never discarded). Keep it forgiving — require only fields you will read.",
+            "properties": {},
+            "required": []
+           },
+           "images": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            },
+            "description": "Images this child must SEE (max 8): local file paths or http(s) URLs — e.g. a screenshot the user sent, a design mock, a chart. Vision-capable children receive the pixels on their first turn; non-vision children get path hints for vision_analyze. Text files do NOT belong here — put paths in 'context' instead."
+           }
+          },
+          "required": [
+           "goal"
+          ]
+         },
+         "description": "One entry per subagent; several run in parallel, up to 10 for this user (set via delegation.max_concurrent_children). Required when spawning."
+        },
+        "action": {
+         "type": "string",
+         "enum": [
+          "spawn",
+          "list",
+          "steer",
+          "stop",
+          "continue"
+         ],
+         "description": "Default 'spawn'. Live control of running children: 'list' = ids/goals/status/transcripts; 'steer' = queue course-correction text into one child without stopping it; 'stop' = end one child early (partial result still returns); 'continue' = give a FINISHED child a follow-up: it resumes its own conversation and returns like a spawn. Control actions return immediately; tasks are ignored unless spawning."
+        },
+        "subagent_id": {
+         "type": "string",
+         "description": "Required for action='steer'/'stop'/'continue' (ids from the spawn response or action='list')."
+        },
+        "message": {
+         "type": "string",
+         "description": "Required for action='steer': the course correction, appended to the child's next tool result mid-run. Be directive and specific. For 'continue': the child's next instruction."
+        }
+       },
+       "required": []
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "execute_code",
+      "description": "Run Python that calls Hermes tools programmatically. Use when you need 3+ tool calls with logic between them: filtering/reducing large outputs before they enter context, branching, or loops (N pages/files, retry on failure). Use normal tool calls for single calls, results you must reason over in full, or anything needing user interaction.\n\nCalls run in a persistent session kernel: variables, imports, and loaded data survive across execute_code calls, so build on earlier work instead of re-loading it. A timed-out or interrupted call loses that state.\n\nAvailable via `from hermes_tools import ...` (each returns a dict):\n\n  web_search(query: str, limit: int = 5)\n    Returns {\"data\": {\"web\": [{\"url\", \"title\", \"description\"}, ...]}}\n  web_extract(urls: list[str], char_limit: int = None)\n    Returns {\"results\": [{\"url\", \"title\", \"content\", \"error\"}, ...]} where content is markdown.\n    No LLM summarization. Pages over char_limit (default 15000) are head+tail truncated; full text stored on disk (path in the content footer).\n  read_file(path: str, offset: int = 1, limit: int = 2000)\n    Lines are 1-indexed. Returns {\"content\": \"...\", \"total_lines\": N}\n  write_file(path: str, content: str)\n    Always overwrites the entire file; an existing file must be read_file'd first or the write is refused.\n  search_files(pattern: str, target=\"content\", path=\".\", file_glob=None, limit=50, order=\"discovery\")\n    target: \"content\" (search inside files) or \"files\" (find files by name). Returns {\"matches\": [...]}\n  patch(path: str, old_string: str, new_string: str, replace_all: bool = False)\n  terminal(command: str, timeout=None, workdir=None)\n    Foreground only (no background/pty). Returns {\"output\": \"...\", \"exit_code\": N}\n\nLimits: 5-minute timeout, max 50 tool calls per call. Stdout over 50KB shows head/tail inline; the FULL text is auto-saved to a file whose path rides in the result.\n\nScripts run in the session's working directory. Interpreter: the project's activated venv/conda python when one is active (VIRTUAL_ENV/CONDA_PREFIX — matches terminal()); otherwise Hermes's own python (the common case — stdlib plus Hermes's deps; check `import x` before relying on project packages).\n\nHelpers require imports: `from hermes_tools import json_parse, shell_quote, retry`. json_parse(text) — tolerant json.loads for terminal() output; shell_quote(s) — shlex.quote for dynamic shell args; retry(fn, max_attempts=3, delay=2) — exponential backoff.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "code": {
+         "type": "string",
+         "description": "Python code to execute; print your final result to stdout."
+        },
+        "reset": {
+         "type": "boolean",
+         "description": "Discard the kernel's persistent state and start fresh before running this code."
+        }
+       },
+       "required": [
+        "code"
+       ]
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
       "name": "memory",
       "description": "Save durable facts to persistent memory that survive across sessions. Memory is injected into every future turn, so keep entries compact and high-signal.\n\nHOW: make ALL your changes to one target in ONE call via an 'operations' array (each item: {action, content?, old_text?}). The batch applies atomically and the char limit is checked only on the FINAL result — so a single call can remove/patch stale entries to free room AND add new ones, even when an add alone would overflow. The response reports current/limit chars and confirms completion; one batch call finishes the update, so don't repeat it.\n\nWHEN: only for facts that apply to EVERY session regardless of task: who the user is, stable environment facts, standing conventions with no task home. Anything learned while doing a task (procedures, pitfalls, and the user's preferences and corrections for that kind of work) belongs in the task's skill via skill_manage, where it loads only when relevant; memory is injected into every turn and must stay small.\n\nIF FULL: an add is rejected with the current entries shown. Reissue as ONE batch that removes or shortens enough stale entries and adds the new one together.\n\nTARGETS: 'user' = who the user is (name, role, preferences, style). 'memory' = your notes (environment, conventions, tool quirks, lessons).\n\nSKIP: trivial/obvious info, easily re-discovered facts, raw data dumps, task progress, completed-work logs, temporary TODO state (use session_search for those). Reusable procedures belong in a skill, not memory.",
       "parameters": {
@@ -714,6 +803,95 @@
     {
      "type": "function",
      "function": {
+      "name": "delegate_task",
+      "description": "Spawn isolated subagents. Each gets its own conversation, terminal session, and toolset, and only its final summary returns to you.\n\nSessions without a later-result consumer (including one-shot CLI and cron) join parallel children and return results in this tool call. Otherwise runs in the background: dispatch returns live transcript paths and results re-enter as a new message when subagents finish (one message per call). Background results are delivered only BETWEEN your turns: finish whatever does not depend on them, then give a one-line status and END YOUR TURN. Never wait or poll on transcripts, artifact files, or CI for a child.\n\nUSE FOR: reasoning-heavy subtasks, work that would flood your context, or independent parallel workstreams.\nDO NOT USE FOR (use these instead):\n- Mechanical multi-step work with no reasoning needed -> execute_code\n- A single tool call -> call the tool directly\n- Tasks needing user interaction -> subagents cannot ask questions\n- Durable work that must survive this session -> cronjob or terminal(background=True, notify=True); /stop, /new, or process exit halts running subagents (whole tree); each returns an 'interrupted' completion with partial output.\n\nRULES:\n- Children know nothing of this conversation: pass everything needed via 'context', including any required output language, tone, or style (e.g. \"respond in Chinese\").\n- Child summaries are SELF-REPORTS, not verified facts: a child claiming \"uploaded successfully\" or \"file written\" may be wrong. For external side effects (uploads, remote writes, publishing), require a verifiable handle (URL, ID, absolute path) and verify it yourself before telling the user the operation succeeded.\n- Children cannot close tracked work: a child asked to close it returns findings instead; the parent applies the transition.\n- Children cannot call delegate_task, clarify, or memory.\n- Children inherit the parent model unless pinned via delegation.provider / delegation.model in config.yaml.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "tasks": {
+         "type": "array",
+         "minItems": 1,
+         "items": {
+          "type": "object",
+          "properties": {
+           "goal": {
+            "type": "string",
+            "description": "What this subagent should accomplish. Be specific and self-contained."
+           },
+           "context": {
+            "type": "string",
+            "description": "Background THIS child needs: file paths, error messages, constraints. Each child sees only its own context — repeat shared background in every task that needs it."
+           },
+           "output_schema": {
+            "type": "object",
+            "description": "JSON Schema this child's final answer must validate against (told to the child up front; parent validates with one bounded correction retry; result gains schema_valid, plus schema_errors on failure — the child's raw text is still returned as summary, never discarded). Keep it forgiving — require only fields you will read.",
+            "properties": {},
+            "required": []
+           },
+           "images": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            },
+            "description": "Images this child must SEE (max 8): local file paths or http(s) URLs — e.g. a screenshot the user sent, a design mock, a chart. Vision-capable children receive the pixels on their first turn; non-vision children get path hints for vision_analyze. Text files do NOT belong here — put paths in 'context' instead."
+           }
+          },
+          "required": [
+           "goal"
+          ]
+         },
+         "description": "One entry per subagent; several run in parallel, up to 10 for this user (set via delegation.max_concurrent_children). Required when spawning."
+        },
+        "action": {
+         "type": "string",
+         "enum": [
+          "spawn",
+          "list",
+          "steer",
+          "stop",
+          "continue"
+         ],
+         "description": "Default 'spawn'. Live control of running children: 'list' = ids/goals/status/transcripts; 'steer' = queue course-correction text into one child without stopping it; 'stop' = end one child early (partial result still returns); 'continue' = give a FINISHED child a follow-up: it resumes its own conversation and returns like a spawn. Control actions return immediately; tasks are ignored unless spawning."
+        },
+        "subagent_id": {
+         "type": "string",
+         "description": "Required for action='steer'/'stop'/'continue' (ids from the spawn response or action='list')."
+        },
+        "message": {
+         "type": "string",
+         "description": "Required for action='steer': the course correction, appended to the child's next tool result mid-run. Be directive and specific. For 'continue': the child's next instruction."
+        }
+       },
+       "required": []
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "execute_code",
+      "description": "Run Python that calls Hermes tools programmatically. Use when you need 3+ tool calls with logic between them: filtering/reducing large outputs before they enter context, branching, or loops (N pages/files, retry on failure). Use normal tool calls for single calls, results you must reason over in full, or anything needing user interaction.\n\nCalls run in a persistent session kernel: variables, imports, and loaded data survive across execute_code calls, so build on earlier work instead of re-loading it. A timed-out or interrupted call loses that state.\n\nAvailable via `from hermes_tools import ...` (each returns a dict):\n\n  web_search(query: str, limit: int = 5)\n    Returns {\"data\": {\"web\": [{\"url\", \"title\", \"description\"}, ...]}}\n  web_extract(urls: list[str], char_limit: int = None)\n    Returns {\"results\": [{\"url\", \"title\", \"content\", \"error\"}, ...]} where content is markdown.\n    No LLM summarization. Pages over char_limit (default 15000) are head+tail truncated; full text stored on disk (path in the content footer).\n  read_file(path: str, offset: int = 1, limit: int = 2000)\n    Lines are 1-indexed. Returns {\"content\": \"...\", \"total_lines\": N}\n  write_file(path: str, content: str)\n    Always overwrites the entire file; an existing file must be read_file'd first or the write is refused.\n  search_files(pattern: str, target=\"content\", path=\".\", file_glob=None, limit=50, order=\"discovery\")\n    target: \"content\" (search inside files) or \"files\" (find files by name). Returns {\"matches\": [...]}\n  patch(path: str, old_string: str, new_string: str, replace_all: bool = False)\n  terminal(command: str, timeout=None, workdir=None)\n    Foreground only (no background/pty). Returns {\"output\": \"...\", \"exit_code\": N}\n\nLimits: 5-minute timeout, max 50 tool calls per call. Stdout over 50KB shows head/tail inline; the FULL text is auto-saved to a file whose path rides in the result.\n\nScripts run in the session's working directory. Interpreter: the project's activated venv/conda python when one is active (VIRTUAL_ENV/CONDA_PREFIX — matches terminal()); otherwise Hermes's own python (the common case — stdlib plus Hermes's deps; check `import x` before relying on project packages).\n\nHelpers require imports: `from hermes_tools import json_parse, shell_quote, retry`. json_parse(text) — tolerant json.loads for terminal() output; shell_quote(s) — shlex.quote for dynamic shell args; retry(fn, max_attempts=3, delay=2) — exponential backoff.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "code": {
+         "type": "string",
+         "description": "Python code to execute; print your final result to stdout."
+        },
+        "reset": {
+         "type": "boolean",
+         "description": "Discard the kernel's persistent state and start fresh before running this code."
+        }
+       },
+       "required": [
+        "code"
+       ]
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
       "name": "patch",
       "description": "Targeted find-and-replace edits in files. Use this instead of sed/awk in terminal. Uses fuzzy matching (9 strategies) so minor whitespace/indentation differences won't break it. Returns a unified diff. Auto-runs syntax checks after editing. Finds a unique string and replaces it.",
       "parameters": {
@@ -1299,6 +1477,95 @@
        },
        "required": [
         "questions"
+       ]
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "delegate_task",
+      "description": "Spawn isolated subagents. Each gets its own conversation, terminal session, and toolset, and only its final summary returns to you.\n\nSessions without a later-result consumer (including one-shot CLI and cron) join parallel children and return results in this tool call. Otherwise runs in the background: dispatch returns live transcript paths and results re-enter as a new message when subagents finish (one message per call). Background results are delivered only BETWEEN your turns: finish whatever does not depend on them, then give a one-line status and END YOUR TURN. Never wait or poll on transcripts, artifact files, or CI for a child.\n\nUSE FOR: reasoning-heavy subtasks, work that would flood your context, or independent parallel workstreams.\nDO NOT USE FOR (use these instead):\n- Mechanical multi-step work with no reasoning needed -> execute_code\n- A single tool call -> call the tool directly\n- Tasks needing user interaction -> subagents cannot ask questions\n- Durable work that must survive this session -> cronjob or terminal(background=True, notify=True); /stop, /new, or process exit halts running subagents (whole tree); each returns an 'interrupted' completion with partial output.\n\nRULES:\n- Children know nothing of this conversation: pass everything needed via 'context', including any required output language, tone, or style (e.g. \"respond in Chinese\").\n- Child summaries are SELF-REPORTS, not verified facts: a child claiming \"uploaded successfully\" or \"file written\" may be wrong. For external side effects (uploads, remote writes, publishing), require a verifiable handle (URL, ID, absolute path) and verify it yourself before telling the user the operation succeeded.\n- Children cannot close tracked work: a child asked to close it returns findings instead; the parent applies the transition.\n- Children cannot call delegate_task, clarify, or memory.\n- Children inherit the parent model unless pinned via delegation.provider / delegation.model in config.yaml.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "tasks": {
+         "type": "array",
+         "minItems": 1,
+         "items": {
+          "type": "object",
+          "properties": {
+           "goal": {
+            "type": "string",
+            "description": "What this subagent should accomplish. Be specific and self-contained."
+           },
+           "context": {
+            "type": "string",
+            "description": "Background THIS child needs: file paths, error messages, constraints. Each child sees only its own context — repeat shared background in every task that needs it."
+           },
+           "output_schema": {
+            "type": "object",
+            "description": "JSON Schema this child's final answer must validate against (told to the child up front; parent validates with one bounded correction retry; result gains schema_valid, plus schema_errors on failure — the child's raw text is still returned as summary, never discarded). Keep it forgiving — require only fields you will read.",
+            "properties": {},
+            "required": []
+           },
+           "images": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            },
+            "description": "Images this child must SEE (max 8): local file paths or http(s) URLs — e.g. a screenshot the user sent, a design mock, a chart. Vision-capable children receive the pixels on their first turn; non-vision children get path hints for vision_analyze. Text files do NOT belong here — put paths in 'context' instead."
+           }
+          },
+          "required": [
+           "goal"
+          ]
+         },
+         "description": "One entry per subagent; several run in parallel, up to 10 for this user (set via delegation.max_concurrent_children). Required when spawning."
+        },
+        "action": {
+         "type": "string",
+         "enum": [
+          "spawn",
+          "list",
+          "steer",
+          "stop",
+          "continue"
+         ],
+         "description": "Default 'spawn'. Live control of running children: 'list' = ids/goals/status/transcripts; 'steer' = queue course-correction text into one child without stopping it; 'stop' = end one child early (partial result still returns); 'continue' = give a FINISHED child a follow-up: it resumes its own conversation and returns like a spawn. Control actions return immediately; tasks are ignored unless spawning."
+        },
+        "subagent_id": {
+         "type": "string",
+         "description": "Required for action='steer'/'stop'/'continue' (ids from the spawn response or action='list')."
+        },
+        "message": {
+         "type": "string",
+         "description": "Required for action='steer': the course correction, appended to the child's next tool result mid-run. Be directive and specific. For 'continue': the child's next instruction."
+        }
+       },
+       "required": []
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "execute_code",
+      "description": "Run Python that calls Hermes tools programmatically. Use when you need 3+ tool calls with logic between them: filtering/reducing large outputs before they enter context, branching, or loops (N pages/files, retry on failure). Use normal tool calls for single calls, results you must reason over in full, or anything needing user interaction.\n\nCalls run in a persistent session kernel: variables, imports, and loaded data survive across execute_code calls, so build on earlier work instead of re-loading it. A timed-out or interrupted call loses that state.\n\nAvailable via `from hermes_tools import ...` (each returns a dict):\n\n  web_search(query: str, limit: int = 5)\n    Returns {\"data\": {\"web\": [{\"url\", \"title\", \"description\"}, ...]}}\n  web_extract(urls: list[str], char_limit: int = None)\n    Returns {\"results\": [{\"url\", \"title\", \"content\", \"error\"}, ...]} where content is markdown.\n    No LLM summarization. Pages over char_limit (default 15000) are head+tail truncated; full text stored on disk (path in the content footer).\n  read_file(path: str, offset: int = 1, limit: int = 2000)\n    Lines are 1-indexed. Returns {\"content\": \"...\", \"total_lines\": N}\n  write_file(path: str, content: str)\n    Always overwrites the entire file; an existing file must be read_file'd first or the write is refused.\n  search_files(pattern: str, target=\"content\", path=\".\", file_glob=None, limit=50, order=\"discovery\")\n    target: \"content\" (search inside files) or \"files\" (find files by name). Returns {\"matches\": [...]}\n  patch(path: str, old_string: str, new_string: str, replace_all: bool = False)\n  terminal(command: str, timeout=None, workdir=None)\n    Foreground only (no background/pty). Returns {\"output\": \"...\", \"exit_code\": N}\n\nLimits: 5-minute timeout, max 50 tool calls per call. Stdout over 50KB shows head/tail inline; the FULL text is auto-saved to a file whose path rides in the result.\n\nScripts run in the session's working directory. Interpreter: the project's activated venv/conda python when one is active (VIRTUAL_ENV/CONDA_PREFIX — matches terminal()); otherwise Hermes's own python (the common case — stdlib plus Hermes's deps; check `import x` before relying on project packages).\n\nHelpers require imports: `from hermes_tools import json_parse, shell_quote, retry`. json_parse(text) — tolerant json.loads for terminal() output; shell_quote(s) — shlex.quote for dynamic shell args; retry(fn, max_attempts=3, delay=2) — exponential backoff.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "code": {
+         "type": "string",
+         "description": "Python code to execute; print your final result to stdout."
+        },
+        "reset": {
+         "type": "boolean",
+         "description": "Discard the kernel's persistent state and start fresh before running this code."
+        }
+       },
+       "required": [
+        "code"
        ]
       }
      }
@@ -2044,6 +2311,95 @@
        },
        "required": [
         "questions"
+       ]
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "delegate_task",
+      "description": "Spawn isolated subagents. Each gets its own conversation, terminal session, and toolset, and only its final summary returns to you.\n\nSessions without a later-result consumer (including one-shot CLI and cron) join parallel children and return results in this tool call. Otherwise runs in the background: dispatch returns live transcript paths and results re-enter as a new message when subagents finish (one message per call). Background results are delivered only BETWEEN your turns: finish whatever does not depend on them, then give a one-line status and END YOUR TURN. Never wait or poll on transcripts, artifact files, or CI for a child.\n\nUSE FOR: reasoning-heavy subtasks, work that would flood your context, or independent parallel workstreams.\nDO NOT USE FOR (use these instead):\n- Mechanical multi-step work with no reasoning needed -> execute_code\n- A single tool call -> call the tool directly\n- Tasks needing user interaction -> subagents cannot ask questions\n- Durable work that must survive this session -> cronjob or terminal(background=True, notify=True); /stop, /new, or process exit halts running subagents (whole tree); each returns an 'interrupted' completion with partial output.\n\nRULES:\n- Children know nothing of this conversation: pass everything needed via 'context', including any required output language, tone, or style (e.g. \"respond in Chinese\").\n- Child summaries are SELF-REPORTS, not verified facts: a child claiming \"uploaded successfully\" or \"file written\" may be wrong. For external side effects (uploads, remote writes, publishing), require a verifiable handle (URL, ID, absolute path) and verify it yourself before telling the user the operation succeeded.\n- Children cannot close tracked work: a child asked to close it returns findings instead; the parent applies the transition.\n- Children cannot call delegate_task, clarify, or memory.\n- Children inherit the parent model unless pinned via delegation.provider / delegation.model in config.yaml.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "tasks": {
+         "type": "array",
+         "minItems": 1,
+         "items": {
+          "type": "object",
+          "properties": {
+           "goal": {
+            "type": "string",
+            "description": "What this subagent should accomplish. Be specific and self-contained."
+           },
+           "context": {
+            "type": "string",
+            "description": "Background THIS child needs: file paths, error messages, constraints. Each child sees only its own context — repeat shared background in every task that needs it."
+           },
+           "output_schema": {
+            "type": "object",
+            "description": "JSON Schema this child's final answer must validate against (told to the child up front; parent validates with one bounded correction retry; result gains schema_valid, plus schema_errors on failure — the child's raw text is still returned as summary, never discarded). Keep it forgiving — require only fields you will read.",
+            "properties": {},
+            "required": []
+           },
+           "images": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            },
+            "description": "Images this child must SEE (max 8): local file paths or http(s) URLs — e.g. a screenshot the user sent, a design mock, a chart. Vision-capable children receive the pixels on their first turn; non-vision children get path hints for vision_analyze. Text files do NOT belong here — put paths in 'context' instead."
+           }
+          },
+          "required": [
+           "goal"
+          ]
+         },
+         "description": "One entry per subagent; several run in parallel, up to 10 for this user (set via delegation.max_concurrent_children). Required when spawning."
+        },
+        "action": {
+         "type": "string",
+         "enum": [
+          "spawn",
+          "list",
+          "steer",
+          "stop",
+          "continue"
+         ],
+         "description": "Default 'spawn'. Live control of running children: 'list' = ids/goals/status/transcripts; 'steer' = queue course-correction text into one child without stopping it; 'stop' = end one child early (partial result still returns); 'continue' = give a FINISHED child a follow-up: it resumes its own conversation and returns like a spawn. Control actions return immediately; tasks are ignored unless spawning."
+        },
+        "subagent_id": {
+         "type": "string",
+         "description": "Required for action='steer'/'stop'/'continue' (ids from the spawn response or action='list')."
+        },
+        "message": {
+         "type": "string",
+         "description": "Required for action='steer': the course correction, appended to the child's next tool result mid-run. Be directive and specific. For 'continue': the child's next instruction."
+        }
+       },
+       "required": []
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "execute_code",
+      "description": "Run Python that calls Hermes tools programmatically. Use when you need 3+ tool calls with logic between them: filtering/reducing large outputs before they enter context, branching, or loops (N pages/files, retry on failure). Use normal tool calls for single calls, results you must reason over in full, or anything needing user interaction.\n\nCalls run in a persistent session kernel: variables, imports, and loaded data survive across execute_code calls, so build on earlier work instead of re-loading it. A timed-out or interrupted call loses that state.\n\nAvailable via `from hermes_tools import ...` (each returns a dict):\n\n  web_search(query: str, limit: int = 5)\n    Returns {\"data\": {\"web\": [{\"url\", \"title\", \"description\"}, ...]}}\n  web_extract(urls: list[str], char_limit: int = None)\n    Returns {\"results\": [{\"url\", \"title\", \"content\", \"error\"}, ...]} where content is markdown.\n    No LLM summarization. Pages over char_limit (default 15000) are head+tail truncated; full text stored on disk (path in the content footer).\n  read_file(path: str, offset: int = 1, limit: int = 2000)\n    Lines are 1-indexed. Returns {\"content\": \"...\", \"total_lines\": N}\n  write_file(path: str, content: str)\n    Always overwrites the entire file; an existing file must be read_file'd first or the write is refused.\n  search_files(pattern: str, target=\"content\", path=\".\", file_glob=None, limit=50, order=\"discovery\")\n    target: \"content\" (search inside files) or \"files\" (find files by name). Returns {\"matches\": [...]}\n  patch(path: str, old_string: str, new_string: str, replace_all: bool = False)\n  terminal(command: str, timeout=None, workdir=None)\n    Foreground only (no background/pty). Returns {\"output\": \"...\", \"exit_code\": N}\n\nLimits: 5-minute timeout, max 50 tool calls per call. Stdout over 50KB shows head/tail inline; the FULL text is auto-saved to a file whose path rides in the result.\n\nScripts run in the session's working directory. Interpreter: the project's activated venv/conda python when one is active (VIRTUAL_ENV/CONDA_PREFIX — matches terminal()); otherwise Hermes's own python (the common case — stdlib plus Hermes's deps; check `import x` before relying on project packages).\n\nHelpers require imports: `from hermes_tools import json_parse, shell_quote, retry`. json_parse(text) — tolerant json.loads for terminal() output; shell_quote(s) — shlex.quote for dynamic shell args; retry(fn, max_attempts=3, delay=2) — exponential backoff.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "code": {
+         "type": "string",
+         "description": "Python code to execute; print your final result to stdout."
+        },
+        "reset": {
+         "type": "boolean",
+         "description": "Discard the kernel's persistent state and start fresh before running this code."
+        }
+       },
+       "required": [
+        "code"
        ]
       }
      }
@@ -2843,6 +3199,95 @@
     {
      "type": "function",
      "function": {
+      "name": "delegate_task",
+      "description": "Spawn isolated subagents. Each gets its own conversation, terminal session, and toolset, and only its final summary returns to you.\n\nSessions without a later-result consumer (including one-shot CLI and cron) join parallel children and return results in this tool call. Otherwise runs in the background: dispatch returns live transcript paths and results re-enter as a new message when subagents finish (one message per call). Background results are delivered only BETWEEN your turns: finish whatever does not depend on them, then give a one-line status and END YOUR TURN. Never wait or poll on transcripts, artifact files, or CI for a child.\n\nUSE FOR: reasoning-heavy subtasks, work that would flood your context, or independent parallel workstreams.\nDO NOT USE FOR (use these instead):\n- Mechanical multi-step work with no reasoning needed -> execute_code\n- A single tool call -> call the tool directly\n- Tasks needing user interaction -> subagents cannot ask questions\n- Durable work that must survive this session -> cronjob or terminal(background=True, notify=True); /stop, /new, or process exit halts running subagents (whole tree); each returns an 'interrupted' completion with partial output.\n\nRULES:\n- Children know nothing of this conversation: pass everything needed via 'context', including any required output language, tone, or style (e.g. \"respond in Chinese\").\n- Child summaries are SELF-REPORTS, not verified facts: a child claiming \"uploaded successfully\" or \"file written\" may be wrong. For external side effects (uploads, remote writes, publishing), require a verifiable handle (URL, ID, absolute path) and verify it yourself before telling the user the operation succeeded.\n- Children cannot close tracked work: a child asked to close it returns findings instead; the parent applies the transition.\n- Children cannot call delegate_task, clarify, or memory.\n- Children inherit the parent model unless pinned via delegation.provider / delegation.model in config.yaml.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "tasks": {
+         "type": "array",
+         "minItems": 1,
+         "items": {
+          "type": "object",
+          "properties": {
+           "goal": {
+            "type": "string",
+            "description": "What this subagent should accomplish. Be specific and self-contained."
+           },
+           "context": {
+            "type": "string",
+            "description": "Background THIS child needs: file paths, error messages, constraints. Each child sees only its own context — repeat shared background in every task that needs it."
+           },
+           "output_schema": {
+            "type": "object",
+            "description": "JSON Schema this child's final answer must validate against (told to the child up front; parent validates with one bounded correction retry; result gains schema_valid, plus schema_errors on failure — the child's raw text is still returned as summary, never discarded). Keep it forgiving — require only fields you will read.",
+            "properties": {},
+            "required": []
+           },
+           "images": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            },
+            "description": "Images this child must SEE (max 8): local file paths or http(s) URLs — e.g. a screenshot the user sent, a design mock, a chart. Vision-capable children receive the pixels on their first turn; non-vision children get path hints for vision_analyze. Text files do NOT belong here — put paths in 'context' instead."
+           }
+          },
+          "required": [
+           "goal"
+          ]
+         },
+         "description": "One entry per subagent; several run in parallel, up to 10 for this user (set via delegation.max_concurrent_children). Required when spawning."
+        },
+        "action": {
+         "type": "string",
+         "enum": [
+          "spawn",
+          "list",
+          "steer",
+          "stop",
+          "continue"
+         ],
+         "description": "Default 'spawn'. Live control of running children: 'list' = ids/goals/status/transcripts; 'steer' = queue course-correction text into one child without stopping it; 'stop' = end one child early (partial result still returns); 'continue' = give a FINISHED child a follow-up: it resumes its own conversation and returns like a spawn. Control actions return immediately; tasks are ignored unless spawning."
+        },
+        "subagent_id": {
+         "type": "string",
+         "description": "Required for action='steer'/'stop'/'continue' (ids from the spawn response or action='list')."
+        },
+        "message": {
+         "type": "string",
+         "description": "Required for action='steer': the course correction, appended to the child's next tool result mid-run. Be directive and specific. For 'continue': the child's next instruction."
+        }
+       },
+       "required": []
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "execute_code",
+      "description": "Run Python that calls Hermes tools programmatically. Use when you need 3+ tool calls with logic between them: filtering/reducing large outputs before they enter context, branching, or loops (N pages/files, retry on failure). Use normal tool calls for single calls, results you must reason over in full, or anything needing user interaction.\n\nCalls run in a persistent session kernel: variables, imports, and loaded data survive across execute_code calls, so build on earlier work instead of re-loading it. A timed-out or interrupted call loses that state.\n\nAvailable via `from hermes_tools import ...` (each returns a dict):\n\n  web_search(query: str, limit: int = 5)\n    Returns {\"data\": {\"web\": [{\"url\", \"title\", \"description\"}, ...]}}\n  web_extract(urls: list[str], char_limit: int = None)\n    Returns {\"results\": [{\"url\", \"title\", \"content\", \"error\"}, ...]} where content is markdown.\n    No LLM summarization. Pages over char_limit (default 15000) are head+tail truncated; full text stored on disk (path in the content footer).\n  read_file(path: str, offset: int = 1, limit: int = 2000)\n    Lines are 1-indexed. Returns {\"content\": \"...\", \"total_lines\": N}\n  write_file(path: str, content: str)\n    Always overwrites the entire file; an existing file must be read_file'd first or the write is refused.\n  search_files(pattern: str, target=\"content\", path=\".\", file_glob=None, limit=50, order=\"discovery\")\n    target: \"content\" (search inside files) or \"files\" (find files by name). Returns {\"matches\": [...]}\n  patch(path: str, old_string: str, new_string: str, replace_all: bool = False)\n  terminal(command: str, timeout=None, workdir=None)\n    Foreground only (no background/pty). Returns {\"output\": \"...\", \"exit_code\": N}\n\nLimits: 5-minute timeout, max 50 tool calls per call. Stdout over 50KB shows head/tail inline; the FULL text is auto-saved to a file whose path rides in the result.\n\nScripts run in the session's working directory. Interpreter: the project's activated venv/conda python when one is active (VIRTUAL_ENV/CONDA_PREFIX — matches terminal()); otherwise Hermes's own python (the common case — stdlib plus Hermes's deps; check `import x` before relying on project packages).\n\nHelpers require imports: `from hermes_tools import json_parse, shell_quote, retry`. json_parse(text) — tolerant json.loads for terminal() output; shell_quote(s) — shlex.quote for dynamic shell args; retry(fn, max_attempts=3, delay=2) — exponential backoff.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "code": {
+         "type": "string",
+         "description": "Python code to execute; print your final result to stdout."
+        },
+        "reset": {
+         "type": "boolean",
+         "description": "Discard the kernel's persistent state and start fresh before running this code."
+        }
+       },
+       "required": [
+        "code"
+       ]
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
       "name": "memory",
       "description": "Save durable facts to persistent memory that survive across sessions. Memory is injected into every future turn, so keep entries compact and high-signal.\n\nHOW: make ALL your changes to one target in ONE call via an 'operations' array (each item: {action, content?, old_text?}). The batch applies atomically and the char limit is checked only on the FINAL result — so a single call can remove/patch stale entries to free room AND add new ones, even when an add alone would overflow. The response reports current/limit chars and confirms completion; one batch call finishes the update, so don't repeat it.\n\nWHEN: only for facts that apply to EVERY session regardless of task: who the user is, stable environment facts, standing conventions with no task home. Anything learned while doing a task (procedures, pitfalls, and the user's preferences and corrections for that kind of work) belongs in the task's skill via skill_manage, where it loads only when relevant; memory is injected into every turn and must stay small.\n\nIF FULL: an add is rejected with the current entries shown. Reissue as ONE batch that removes or shortens enough stale entries and adds the new one together.\n\nTARGETS: 'user' = who the user is (name, role, preferences, style). 'memory' = your notes (environment, conventions, tool quirks, lessons).\n\nSKIP: trivial/obvious info, easily re-discovered facts, raw data dumps, task progress, completed-work logs, temporary TODO state (use session_search for those). Reusable procedures belong in a skill, not memory.",
       "parameters": {
@@ -3626,6 +4071,95 @@
        },
        "required": [
         "questions"
+       ]
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "delegate_task",
+      "description": "Spawn isolated subagents. Each gets its own conversation, terminal session, and toolset, and only its final summary returns to you.\n\nSessions without a later-result consumer (including one-shot CLI and cron) join parallel children and return results in this tool call. Otherwise runs in the background: dispatch returns live transcript paths and results re-enter as a new message when subagents finish (one message per call). Background results are delivered only BETWEEN your turns: finish whatever does not depend on them, then give a one-line status and END YOUR TURN. Never wait or poll on transcripts, artifact files, or CI for a child.\n\nUSE FOR: reasoning-heavy subtasks, work that would flood your context, or independent parallel workstreams.\nDO NOT USE FOR (use these instead):\n- Mechanical multi-step work with no reasoning needed -> execute_code\n- A single tool call -> call the tool directly\n- Tasks needing user interaction -> subagents cannot ask questions\n- Durable work that must survive this session -> cronjob or terminal(background=True, notify=True); /stop, /new, or process exit halts running subagents (whole tree); each returns an 'interrupted' completion with partial output.\n\nRULES:\n- Children know nothing of this conversation: pass everything needed via 'context', including any required output language, tone, or style (e.g. \"respond in Chinese\").\n- Child summaries are SELF-REPORTS, not verified facts: a child claiming \"uploaded successfully\" or \"file written\" may be wrong. For external side effects (uploads, remote writes, publishing), require a verifiable handle (URL, ID, absolute path) and verify it yourself before telling the user the operation succeeded.\n- Children cannot close tracked work: a child asked to close it returns findings instead; the parent applies the transition.\n- Children cannot call delegate_task, clarify, or memory.\n- Children inherit the parent model unless pinned via delegation.provider / delegation.model in config.yaml.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "tasks": {
+         "type": "array",
+         "minItems": 1,
+         "items": {
+          "type": "object",
+          "properties": {
+           "goal": {
+            "type": "string",
+            "description": "What this subagent should accomplish. Be specific and self-contained."
+           },
+           "context": {
+            "type": "string",
+            "description": "Background THIS child needs: file paths, error messages, constraints. Each child sees only its own context — repeat shared background in every task that needs it."
+           },
+           "output_schema": {
+            "type": "object",
+            "description": "JSON Schema this child's final answer must validate against (told to the child up front; parent validates with one bounded correction retry; result gains schema_valid, plus schema_errors on failure — the child's raw text is still returned as summary, never discarded). Keep it forgiving — require only fields you will read.",
+            "properties": {},
+            "required": []
+           },
+           "images": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            },
+            "description": "Images this child must SEE (max 8): local file paths or http(s) URLs — e.g. a screenshot the user sent, a design mock, a chart. Vision-capable children receive the pixels on their first turn; non-vision children get path hints for vision_analyze. Text files do NOT belong here — put paths in 'context' instead."
+           }
+          },
+          "required": [
+           "goal"
+          ]
+         },
+         "description": "One entry per subagent; several run in parallel, up to 10 for this user (set via delegation.max_concurrent_children). Required when spawning."
+        },
+        "action": {
+         "type": "string",
+         "enum": [
+          "spawn",
+          "list",
+          "steer",
+          "stop",
+          "continue"
+         ],
+         "description": "Default 'spawn'. Live control of running children: 'list' = ids/goals/status/transcripts; 'steer' = queue course-correction text into one child without stopping it; 'stop' = end one child early (partial result still returns); 'continue' = give a FINISHED child a follow-up: it resumes its own conversation and returns like a spawn. Control actions return immediately; tasks are ignored unless spawning."
+        },
+        "subagent_id": {
+         "type": "string",
+         "description": "Required for action='steer'/'stop'/'continue' (ids from the spawn response or action='list')."
+        },
+        "message": {
+         "type": "string",
+         "description": "Required for action='steer': the course correction, appended to the child's next tool result mid-run. Be directive and specific. For 'continue': the child's next instruction."
+        }
+       },
+       "required": []
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "execute_code",
+      "description": "Run Python that calls Hermes tools programmatically. Use when you need 3+ tool calls with logic between them: filtering/reducing large outputs before they enter context, branching, or loops (N pages/files, retry on failure). Use normal tool calls for single calls, results you must reason over in full, or anything needing user interaction.\n\nCalls run in a persistent session kernel: variables, imports, and loaded data survive across execute_code calls, so build on earlier work instead of re-loading it. A timed-out or interrupted call loses that state.\n\nAvailable via `from hermes_tools import ...` (each returns a dict):\n\n  web_search(query: str, limit: int = 5)\n    Returns {\"data\": {\"web\": [{\"url\", \"title\", \"description\"}, ...]}}\n  web_extract(urls: list[str], char_limit: int = None)\n    Returns {\"results\": [{\"url\", \"title\", \"content\", \"error\"}, ...]} where content is markdown.\n    No LLM summarization. Pages over char_limit (default 15000) are head+tail truncated; full text stored on disk (path in the content footer).\n  read_file(path: str, offset: int = 1, limit: int = 2000)\n    Lines are 1-indexed. Returns {\"content\": \"...\", \"total_lines\": N}\n  write_file(path: str, content: str)\n    Always overwrites the entire file; an existing file must be read_file'd first or the write is refused.\n  search_files(pattern: str, target=\"content\", path=\".\", file_glob=None, limit=50, order=\"discovery\")\n    target: \"content\" (search inside files) or \"files\" (find files by name). Returns {\"matches\": [...]}\n  patch(path: str, old_string: str, new_string: str, replace_all: bool = False)\n  terminal(command: str, timeout=None, workdir=None)\n    Foreground only (no background/pty). Returns {\"output\": \"...\", \"exit_code\": N}\n\nLimits: 5-minute timeout, max 50 tool calls per call. Stdout over 50KB shows head/tail inline; the FULL text is auto-saved to a file whose path rides in the result.\n\nScripts run in the session's working directory. Interpreter: the project's activated venv/conda python when one is active (VIRTUAL_ENV/CONDA_PREFIX — matches terminal()); otherwise Hermes's own python (the common case — stdlib plus Hermes's deps; check `import x` before relying on project packages).\n\nHelpers require imports: `from hermes_tools import json_parse, shell_quote, retry`. json_parse(text) — tolerant json.loads for terminal() output; shell_quote(s) — shlex.quote for dynamic shell args; retry(fn, max_attempts=3, delay=2) — exponential backoff.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "code": {
+         "type": "string",
+         "description": "Python code to execute; print your final result to stdout."
+        },
+        "reset": {
+         "type": "boolean",
+         "description": "Discard the kernel's persistent state and start fresh before running this code."
+        }
+       },
+       "required": [
+        "code"
        ]
       }
      }
@@ -4425,6 +4959,95 @@
     {
      "type": "function",
      "function": {
+      "name": "delegate_task",
+      "description": "Spawn isolated subagents. Each gets its own conversation, terminal session, and toolset, and only its final summary returns to you.\n\nSessions without a later-result consumer (including one-shot CLI and cron) join parallel children and return results in this tool call. Otherwise runs in the background: dispatch returns live transcript paths and results re-enter as a new message when subagents finish (one message per call). Background results are delivered only BETWEEN your turns: finish whatever does not depend on them, then give a one-line status and END YOUR TURN. Never wait or poll on transcripts, artifact files, or CI for a child.\n\nUSE FOR: reasoning-heavy subtasks, work that would flood your context, or independent parallel workstreams.\nDO NOT USE FOR (use these instead):\n- Mechanical multi-step work with no reasoning needed -> execute_code\n- A single tool call -> call the tool directly\n- Tasks needing user interaction -> subagents cannot ask questions\n- Durable work that must survive this session -> cronjob or terminal(background=True, notify=True); /stop, /new, or process exit halts running subagents (whole tree); each returns an 'interrupted' completion with partial output.\n\nRULES:\n- Children know nothing of this conversation: pass everything needed via 'context', including any required output language, tone, or style (e.g. \"respond in Chinese\").\n- Child summaries are SELF-REPORTS, not verified facts: a child claiming \"uploaded successfully\" or \"file written\" may be wrong. For external side effects (uploads, remote writes, publishing), require a verifiable handle (URL, ID, absolute path) and verify it yourself before telling the user the operation succeeded.\n- Children cannot close tracked work: a child asked to close it returns findings instead; the parent applies the transition.\n- Children cannot call delegate_task, clarify, or memory.\n- Children inherit the parent model unless pinned via delegation.provider / delegation.model in config.yaml.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "tasks": {
+         "type": "array",
+         "minItems": 1,
+         "items": {
+          "type": "object",
+          "properties": {
+           "goal": {
+            "type": "string",
+            "description": "What this subagent should accomplish. Be specific and self-contained."
+           },
+           "context": {
+            "type": "string",
+            "description": "Background THIS child needs: file paths, error messages, constraints. Each child sees only its own context — repeat shared background in every task that needs it."
+           },
+           "output_schema": {
+            "type": "object",
+            "description": "JSON Schema this child's final answer must validate against (told to the child up front; parent validates with one bounded correction retry; result gains schema_valid, plus schema_errors on failure — the child's raw text is still returned as summary, never discarded). Keep it forgiving — require only fields you will read.",
+            "properties": {},
+            "required": []
+           },
+           "images": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            },
+            "description": "Images this child must SEE (max 8): local file paths or http(s) URLs — e.g. a screenshot the user sent, a design mock, a chart. Vision-capable children receive the pixels on their first turn; non-vision children get path hints for vision_analyze. Text files do NOT belong here — put paths in 'context' instead."
+           }
+          },
+          "required": [
+           "goal"
+          ]
+         },
+         "description": "One entry per subagent; several run in parallel, up to 10 for this user (set via delegation.max_concurrent_children). Required when spawning."
+        },
+        "action": {
+         "type": "string",
+         "enum": [
+          "spawn",
+          "list",
+          "steer",
+          "stop",
+          "continue"
+         ],
+         "description": "Default 'spawn'. Live control of running children: 'list' = ids/goals/status/transcripts; 'steer' = queue course-correction text into one child without stopping it; 'stop' = end one child early (partial result still returns); 'continue' = give a FINISHED child a follow-up: it resumes its own conversation and returns like a spawn. Control actions return immediately; tasks are ignored unless spawning."
+        },
+        "subagent_id": {
+         "type": "string",
+         "description": "Required for action='steer'/'stop'/'continue' (ids from the spawn response or action='list')."
+        },
+        "message": {
+         "type": "string",
+         "description": "Required for action='steer': the course correction, appended to the child's next tool result mid-run. Be directive and specific. For 'continue': the child's next instruction."
+        }
+       },
+       "required": []
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "execute_code",
+      "description": "Run Python that calls Hermes tools programmatically. Use when you need 3+ tool calls with logic between them: filtering/reducing large outputs before they enter context, branching, or loops (N pages/files, retry on failure). Use normal tool calls for single calls, results you must reason over in full, or anything needing user interaction.\n\nCalls run in a persistent session kernel: variables, imports, and loaded data survive across execute_code calls, so build on earlier work instead of re-loading it. A timed-out or interrupted call loses that state.\n\nAvailable via `from hermes_tools import ...` (each returns a dict):\n\n  web_search(query: str, limit: int = 5)\n    Returns {\"data\": {\"web\": [{\"url\", \"title\", \"description\"}, ...]}}\n  web_extract(urls: list[str], char_limit: int = None)\n    Returns {\"results\": [{\"url\", \"title\", \"content\", \"error\"}, ...]} where content is markdown.\n    No LLM summarization. Pages over char_limit (default 15000) are head+tail truncated; full text stored on disk (path in the content footer).\n  read_file(path: str, offset: int = 1, limit: int = 2000)\n    Lines are 1-indexed. Returns {\"content\": \"...\", \"total_lines\": N}\n  write_file(path: str, content: str)\n    Always overwrites the entire file; an existing file must be read_file'd first or the write is refused.\n  search_files(pattern: str, target=\"content\", path=\".\", file_glob=None, limit=50, order=\"discovery\")\n    target: \"content\" (search inside files) or \"files\" (find files by name). Returns {\"matches\": [...]}\n  patch(path: str, old_string: str, new_string: str, replace_all: bool = False)\n  terminal(command: str, timeout=None, workdir=None)\n    Foreground only (no background/pty). Returns {\"output\": \"...\", \"exit_code\": N}\n\nLimits: 5-minute timeout, max 50 tool calls per call. Stdout over 50KB shows head/tail inline; the FULL text is auto-saved to a file whose path rides in the result.\n\nScripts run in the session's working directory. Interpreter: the project's activated venv/conda python when one is active (VIRTUAL_ENV/CONDA_PREFIX — matches terminal()); otherwise Hermes's own python (the common case — stdlib plus Hermes's deps; check `import x` before relying on project packages).\n\nHelpers require imports: `from hermes_tools import json_parse, shell_quote, retry`. json_parse(text) — tolerant json.loads for terminal() output; shell_quote(s) — shlex.quote for dynamic shell args; retry(fn, max_attempts=3, delay=2) — exponential backoff.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "code": {
+         "type": "string",
+         "description": "Python code to execute; print your final result to stdout."
+        },
+        "reset": {
+         "type": "boolean",
+         "description": "Discard the kernel's persistent state and start fresh before running this code."
+        }
+       },
+       "required": [
+        "code"
+       ]
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
       "name": "memory",
       "description": "Save durable facts to persistent memory that survive across sessions. Memory is injected into every future turn, so keep entries compact and high-signal.\n\nHOW: make ALL your changes to one target in ONE call via an 'operations' array (each item: {action, content?, old_text?}). The batch applies atomically and the char limit is checked only on the FINAL result — so a single call can remove/patch stale entries to free room AND add new ones, even when an add alone would overflow. The response reports current/limit chars and confirms completion; one batch call finishes the update, so don't repeat it.\n\nWHEN: only for facts that apply to EVERY session regardless of task: who the user is, stable environment facts, standing conventions with no task home. Anything learned while doing a task (procedures, pitfalls, and the user's preferences and corrections for that kind of work) belongs in the task's skill via skill_manage, where it loads only when relevant; memory is injected into every turn and must stay small.\n\nIF FULL: an add is rejected with the current entries shown. Reissue as ONE batch that removes or shortens enough stale entries and adds the new one together.\n\nTARGETS: 'user' = who the user is (name, role, preferences, style). 'memory' = your notes (environment, conventions, tool quirks, lessons).\n\nSKIP: trivial/obvious info, easily re-discovered facts, raw data dumps, task progress, completed-work logs, temporary TODO state (use session_search for those). Reusable procedures belong in a skill, not memory.",
       "parameters": {
@@ -5087,6 +5710,95 @@
     {
      "type": "function",
      "function": {
+      "name": "delegate_task",
+      "description": "Spawn isolated subagents. Each gets its own conversation, terminal session, and toolset, and only its final summary returns to you.\n\nSessions without a later-result consumer (including one-shot CLI and cron) join parallel children and return results in this tool call. Otherwise runs in the background: dispatch returns live transcript paths and results re-enter as a new message when subagents finish (one message per call). Background results are delivered only BETWEEN your turns: finish whatever does not depend on them, then give a one-line status and END YOUR TURN. Never wait or poll on transcripts, artifact files, or CI for a child.\n\nUSE FOR: reasoning-heavy subtasks, work that would flood your context, or independent parallel workstreams.\nDO NOT USE FOR (use these instead):\n- Mechanical multi-step work with no reasoning needed -> execute_code\n- A single tool call -> call the tool directly\n- Tasks needing user interaction -> subagents cannot ask questions\n- Durable work that must survive this session -> cronjob or terminal(background=True, notify=True); /stop, /new, or process exit halts running subagents (whole tree); each returns an 'interrupted' completion with partial output.\n\nRULES:\n- Children know nothing of this conversation: pass everything needed via 'context', including any required output language, tone, or style (e.g. \"respond in Chinese\").\n- Child summaries are SELF-REPORTS, not verified facts: a child claiming \"uploaded successfully\" or \"file written\" may be wrong. For external side effects (uploads, remote writes, publishing), require a verifiable handle (URL, ID, absolute path) and verify it yourself before telling the user the operation succeeded.\n- Children cannot close tracked work: a child asked to close it returns findings instead; the parent applies the transition.\n- Children cannot call delegate_task, clarify, or memory.\n- Children inherit the parent model unless pinned via delegation.provider / delegation.model in config.yaml.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "tasks": {
+         "type": "array",
+         "minItems": 1,
+         "items": {
+          "type": "object",
+          "properties": {
+           "goal": {
+            "type": "string",
+            "description": "What this subagent should accomplish. Be specific and self-contained."
+           },
+           "context": {
+            "type": "string",
+            "description": "Background THIS child needs: file paths, error messages, constraints. Each child sees only its own context — repeat shared background in every task that needs it."
+           },
+           "output_schema": {
+            "type": "object",
+            "description": "JSON Schema this child's final answer must validate against (told to the child up front; parent validates with one bounded correction retry; result gains schema_valid, plus schema_errors on failure — the child's raw text is still returned as summary, never discarded). Keep it forgiving — require only fields you will read.",
+            "properties": {},
+            "required": []
+           },
+           "images": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            },
+            "description": "Images this child must SEE (max 8): local file paths or http(s) URLs — e.g. a screenshot the user sent, a design mock, a chart. Vision-capable children receive the pixels on their first turn; non-vision children get path hints for vision_analyze. Text files do NOT belong here — put paths in 'context' instead."
+           }
+          },
+          "required": [
+           "goal"
+          ]
+         },
+         "description": "One entry per subagent; several run in parallel, up to 10 for this user (set via delegation.max_concurrent_children). Required when spawning."
+        },
+        "action": {
+         "type": "string",
+         "enum": [
+          "spawn",
+          "list",
+          "steer",
+          "stop",
+          "continue"
+         ],
+         "description": "Default 'spawn'. Live control of running children: 'list' = ids/goals/status/transcripts; 'steer' = queue course-correction text into one child without stopping it; 'stop' = end one child early (partial result still returns); 'continue' = give a FINISHED child a follow-up: it resumes its own conversation and returns like a spawn. Control actions return immediately; tasks are ignored unless spawning."
+        },
+        "subagent_id": {
+         "type": "string",
+         "description": "Required for action='steer'/'stop'/'continue' (ids from the spawn response or action='list')."
+        },
+        "message": {
+         "type": "string",
+         "description": "Required for action='steer': the course correction, appended to the child's next tool result mid-run. Be directive and specific. For 'continue': the child's next instruction."
+        }
+       },
+       "required": []
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "execute_code",
+      "description": "Run Python that calls Hermes tools programmatically. Use when you need 3+ tool calls with logic between them: filtering/reducing large outputs before they enter context, branching, or loops (N pages/files, retry on failure). Use normal tool calls for single calls, results you must reason over in full, or anything needing user interaction.\n\nCalls run in a persistent session kernel: variables, imports, and loaded data survive across execute_code calls, so build on earlier work instead of re-loading it. A timed-out or interrupted call loses that state.\n\nAvailable via `from hermes_tools import ...` (each returns a dict):\n\n  web_search(query: str, limit: int = 5)\n    Returns {\"data\": {\"web\": [{\"url\", \"title\", \"description\"}, ...]}}\n  web_extract(urls: list[str], char_limit: int = None)\n    Returns {\"results\": [{\"url\", \"title\", \"content\", \"error\"}, ...]} where content is markdown.\n    No LLM summarization. Pages over char_limit (default 15000) are head+tail truncated; full text stored on disk (path in the content footer).\n  read_file(path: str, offset: int = 1, limit: int = 2000)\n    Lines are 1-indexed. Returns {\"content\": \"...\", \"total_lines\": N}\n  write_file(path: str, content: str)\n    Always overwrites the entire file; an existing file must be read_file'd first or the write is refused.\n  search_files(pattern: str, target=\"content\", path=\".\", file_glob=None, limit=50, order=\"discovery\")\n    target: \"content\" (search inside files) or \"files\" (find files by name). Returns {\"matches\": [...]}\n  patch(path: str, old_string: str, new_string: str, replace_all: bool = False)\n  terminal(command: str, timeout=None, workdir=None)\n    Foreground only (no background/pty). Returns {\"output\": \"...\", \"exit_code\": N}\n\nLimits: 5-minute timeout, max 50 tool calls per call. Stdout over 50KB shows head/tail inline; the FULL text is auto-saved to a file whose path rides in the result.\n\nScripts run in the session's working directory. Interpreter: the project's activated venv/conda python when one is active (VIRTUAL_ENV/CONDA_PREFIX — matches terminal()); otherwise Hermes's own python (the common case — stdlib plus Hermes's deps; check `import x` before relying on project packages).\n\nHelpers require imports: `from hermes_tools import json_parse, shell_quote, retry`. json_parse(text) — tolerant json.loads for terminal() output; shell_quote(s) — shlex.quote for dynamic shell args; retry(fn, max_attempts=3, delay=2) — exponential backoff.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "code": {
+         "type": "string",
+         "description": "Python code to execute; print your final result to stdout."
+        },
+        "reset": {
+         "type": "boolean",
+         "description": "Discard the kernel's persistent state and start fresh before running this code."
+        }
+       },
+       "required": [
+        "code"
+       ]
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
       "name": "patch",
       "description": "Targeted find-and-replace edits in files. Use this instead of sed/awk in terminal. Uses fuzzy matching (9 strategies) so minor whitespace/indentation differences won't break it. Returns a unified diff. Auto-runs syntax checks after editing. Finds a unique string and replaces it.",
       "parameters": {
@@ -5640,6 +6352,95 @@
    "listing_form": "full",
    "deferred_count": 7,
    "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "delegate_task",
+      "description": "Spawn isolated subagents. Each gets its own conversation, terminal session, and toolset, and only its final summary returns to you.\n\nSessions without a later-result consumer (including one-shot CLI and cron) join parallel children and return results in this tool call. Otherwise runs in the background: dispatch returns live transcript paths and results re-enter as a new message when subagents finish (one message per call). Background results are delivered only BETWEEN your turns: finish whatever does not depend on them, then give a one-line status and END YOUR TURN. Never wait or poll on transcripts, artifact files, or CI for a child.\n\nUSE FOR: reasoning-heavy subtasks, work that would flood your context, or independent parallel workstreams.\nDO NOT USE FOR (use these instead):\n- Mechanical multi-step work with no reasoning needed -> execute_code\n- A single tool call -> call the tool directly\n- Tasks needing user interaction -> subagents cannot ask questions\n- Durable work that must survive this session -> cronjob or terminal(background=True, notify=True); /stop, /new, or process exit halts running subagents (whole tree); each returns an 'interrupted' completion with partial output.\n\nRULES:\n- Children know nothing of this conversation: pass everything needed via 'context', including any required output language, tone, or style (e.g. \"respond in Chinese\").\n- Child summaries are SELF-REPORTS, not verified facts: a child claiming \"uploaded successfully\" or \"file written\" may be wrong. For external side effects (uploads, remote writes, publishing), require a verifiable handle (URL, ID, absolute path) and verify it yourself before telling the user the operation succeeded.\n- Children cannot close tracked work: a child asked to close it returns findings instead; the parent applies the transition.\n- Children cannot call delegate_task, clarify, or memory.\n- Children inherit the parent model unless pinned via delegation.provider / delegation.model in config.yaml.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "tasks": {
+         "type": "array",
+         "minItems": 1,
+         "items": {
+          "type": "object",
+          "properties": {
+           "goal": {
+            "type": "string",
+            "description": "What this subagent should accomplish. Be specific and self-contained."
+           },
+           "context": {
+            "type": "string",
+            "description": "Background THIS child needs: file paths, error messages, constraints. Each child sees only its own context — repeat shared background in every task that needs it."
+           },
+           "output_schema": {
+            "type": "object",
+            "description": "JSON Schema this child's final answer must validate against (told to the child up front; parent validates with one bounded correction retry; result gains schema_valid, plus schema_errors on failure — the child's raw text is still returned as summary, never discarded). Keep it forgiving — require only fields you will read.",
+            "properties": {},
+            "required": []
+           },
+           "images": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            },
+            "description": "Images this child must SEE (max 8): local file paths or http(s) URLs — e.g. a screenshot the user sent, a design mock, a chart. Vision-capable children receive the pixels on their first turn; non-vision children get path hints for vision_analyze. Text files do NOT belong here — put paths in 'context' instead."
+           }
+          },
+          "required": [
+           "goal"
+          ]
+         },
+         "description": "One entry per subagent; several run in parallel, up to 10 for this user (set via delegation.max_concurrent_children). Required when spawning."
+        },
+        "action": {
+         "type": "string",
+         "enum": [
+          "spawn",
+          "list",
+          "steer",
+          "stop",
+          "continue"
+         ],
+         "description": "Default 'spawn'. Live control of running children: 'list' = ids/goals/status/transcripts; 'steer' = queue course-correction text into one child without stopping it; 'stop' = end one child early (partial result still returns); 'continue' = give a FINISHED child a follow-up: it resumes its own conversation and returns like a spawn. Control actions return immediately; tasks are ignored unless spawning."
+        },
+        "subagent_id": {
+         "type": "string",
+         "description": "Required for action='steer'/'stop'/'continue' (ids from the spawn response or action='list')."
+        },
+        "message": {
+         "type": "string",
+         "description": "Required for action='steer': the course correction, appended to the child's next tool result mid-run. Be directive and specific. For 'continue': the child's next instruction."
+        }
+       },
+       "required": []
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "execute_code",
+      "description": "Run Python that calls Hermes tools programmatically. Use when you need 3+ tool calls with logic between them: filtering/reducing large outputs before they enter context, branching, or loops (N pages/files, retry on failure). Use normal tool calls for single calls, results you must reason over in full, or anything needing user interaction.\n\nCalls run in a persistent session kernel: variables, imports, and loaded data survive across execute_code calls, so build on earlier work instead of re-loading it. A timed-out or interrupted call loses that state.\n\nAvailable via `from hermes_tools import ...` (each returns a dict):\n\n  web_search(query: str, limit: int = 5)\n    Returns {\"data\": {\"web\": [{\"url\", \"title\", \"description\"}, ...]}}\n  web_extract(urls: list[str], char_limit: int = None)\n    Returns {\"results\": [{\"url\", \"title\", \"content\", \"error\"}, ...]} where content is markdown.\n    No LLM summarization. Pages over char_limit (default 15000) are head+tail truncated; full text stored on disk (path in the content footer).\n  read_file(path: str, offset: int = 1, limit: int = 2000)\n    Lines are 1-indexed. Returns {\"content\": \"...\", \"total_lines\": N}\n  write_file(path: str, content: str)\n    Always overwrites the entire file; an existing file must be read_file'd first or the write is refused.\n  search_files(pattern: str, target=\"content\", path=\".\", file_glob=None, limit=50, order=\"discovery\")\n    target: \"content\" (search inside files) or \"files\" (find files by name). Returns {\"matches\": [...]}\n  patch(path: str, old_string: str, new_string: str, replace_all: bool = False)\n  terminal(command: str, timeout=None, workdir=None)\n    Foreground only (no background/pty). Returns {\"output\": \"...\", \"exit_code\": N}\n\nLimits: 5-minute timeout, max 50 tool calls per call. Stdout over 50KB shows head/tail inline; the FULL text is auto-saved to a file whose path rides in the result.\n\nScripts run in the session's working directory. Interpreter: the project's activated venv/conda python when one is active (VIRTUAL_ENV/CONDA_PREFIX — matches terminal()); otherwise Hermes's own python (the common case — stdlib plus Hermes's deps; check `import x` before relying on project packages).\n\nHelpers require imports: `from hermes_tools import json_parse, shell_quote, retry`. json_parse(text) — tolerant json.loads for terminal() output; shell_quote(s) — shlex.quote for dynamic shell args; retry(fn, max_attempts=3, delay=2) — exponential backoff.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "code": {
+         "type": "string",
+         "description": "Python code to execute; print your final result to stdout."
+        },
+        "reset": {
+         "type": "boolean",
+         "description": "Discard the kernel's persistent state and start fresh before running this code."
+        }
+       },
+       "required": [
+        "code"
+       ]
+      }
+     }
+    },
     {
      "type": "function",
      "function": {
@@ -6224,6 +7025,95 @@
        },
        "required": [
         "questions"
+       ]
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "delegate_task",
+      "description": "Spawn isolated subagents. Each gets its own conversation, terminal session, and toolset, and only its final summary returns to you.\n\nSessions without a later-result consumer (including one-shot CLI and cron) join parallel children and return results in this tool call. Otherwise runs in the background: dispatch returns live transcript paths and results re-enter as a new message when subagents finish (one message per call). Background results are delivered only BETWEEN your turns: finish whatever does not depend on them, then give a one-line status and END YOUR TURN. Never wait or poll on transcripts, artifact files, or CI for a child.\n\nUSE FOR: reasoning-heavy subtasks, work that would flood your context, or independent parallel workstreams.\nDO NOT USE FOR (use these instead):\n- Mechanical multi-step work with no reasoning needed -> execute_code\n- A single tool call -> call the tool directly\n- Tasks needing user interaction -> subagents cannot ask questions\n- Durable work that must survive this session -> cronjob or terminal(background=True, notify=True); /stop, /new, or process exit halts running subagents (whole tree); each returns an 'interrupted' completion with partial output.\n\nRULES:\n- Children know nothing of this conversation: pass everything needed via 'context', including any required output language, tone, or style (e.g. \"respond in Chinese\").\n- Child summaries are SELF-REPORTS, not verified facts: a child claiming \"uploaded successfully\" or \"file written\" may be wrong. For external side effects (uploads, remote writes, publishing), require a verifiable handle (URL, ID, absolute path) and verify it yourself before telling the user the operation succeeded.\n- Children cannot close tracked work: a child asked to close it returns findings instead; the parent applies the transition.\n- Children cannot call delegate_task, clarify, or memory.\n- Children inherit the parent model unless pinned via delegation.provider / delegation.model in config.yaml.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "tasks": {
+         "type": "array",
+         "minItems": 1,
+         "items": {
+          "type": "object",
+          "properties": {
+           "goal": {
+            "type": "string",
+            "description": "What this subagent should accomplish. Be specific and self-contained."
+           },
+           "context": {
+            "type": "string",
+            "description": "Background THIS child needs: file paths, error messages, constraints. Each child sees only its own context — repeat shared background in every task that needs it."
+           },
+           "output_schema": {
+            "type": "object",
+            "description": "JSON Schema this child's final answer must validate against (told to the child up front; parent validates with one bounded correction retry; result gains schema_valid, plus schema_errors on failure — the child's raw text is still returned as summary, never discarded). Keep it forgiving — require only fields you will read.",
+            "properties": {},
+            "required": []
+           },
+           "images": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            },
+            "description": "Images this child must SEE (max 8): local file paths or http(s) URLs — e.g. a screenshot the user sent, a design mock, a chart. Vision-capable children receive the pixels on their first turn; non-vision children get path hints for vision_analyze. Text files do NOT belong here — put paths in 'context' instead."
+           }
+          },
+          "required": [
+           "goal"
+          ]
+         },
+         "description": "One entry per subagent; several run in parallel, up to 10 for this user (set via delegation.max_concurrent_children). Required when spawning."
+        },
+        "action": {
+         "type": "string",
+         "enum": [
+          "spawn",
+          "list",
+          "steer",
+          "stop",
+          "continue"
+         ],
+         "description": "Default 'spawn'. Live control of running children: 'list' = ids/goals/status/transcripts; 'steer' = queue course-correction text into one child without stopping it; 'stop' = end one child early (partial result still returns); 'continue' = give a FINISHED child a follow-up: it resumes its own conversation and returns like a spawn. Control actions return immediately; tasks are ignored unless spawning."
+        },
+        "subagent_id": {
+         "type": "string",
+         "description": "Required for action='steer'/'stop'/'continue' (ids from the spawn response or action='list')."
+        },
+        "message": {
+         "type": "string",
+         "description": "Required for action='steer': the course correction, appended to the child's next tool result mid-run. Be directive and specific. For 'continue': the child's next instruction."
+        }
+       },
+       "required": []
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "execute_code",
+      "description": "Run Python that calls Hermes tools programmatically. Use when you need 3+ tool calls with logic between them: filtering/reducing large outputs before they enter context, branching, or loops (N pages/files, retry on failure). Use normal tool calls for single calls, results you must reason over in full, or anything needing user interaction.\n\nCalls run in a persistent session kernel: variables, imports, and loaded data survive across execute_code calls, so build on earlier work instead of re-loading it. A timed-out or interrupted call loses that state.\n\nAvailable via `from hermes_tools import ...` (each returns a dict):\n\n  web_search(query: str, limit: int = 5)\n    Returns {\"data\": {\"web\": [{\"url\", \"title\", \"description\"}, ...]}}\n  web_extract(urls: list[str], char_limit: int = None)\n    Returns {\"results\": [{\"url\", \"title\", \"content\", \"error\"}, ...]} where content is markdown.\n    No LLM summarization. Pages over char_limit (default 15000) are head+tail truncated; full text stored on disk (path in the content footer).\n  read_file(path: str, offset: int = 1, limit: int = 2000)\n    Lines are 1-indexed. Returns {\"content\": \"...\", \"total_lines\": N}\n  write_file(path: str, content: str)\n    Always overwrites the entire file; an existing file must be read_file'd first or the write is refused.\n  search_files(pattern: str, target=\"content\", path=\".\", file_glob=None, limit=50, order=\"discovery\")\n    target: \"content\" (search inside files) or \"files\" (find files by name). Returns {\"matches\": [...]}\n  patch(path: str, old_string: str, new_string: str, replace_all: bool = False)\n  terminal(command: str, timeout=None, workdir=None)\n    Foreground only (no background/pty). Returns {\"output\": \"...\", \"exit_code\": N}\n\nLimits: 5-minute timeout, max 50 tool calls per call. Stdout over 50KB shows head/tail inline; the FULL text is auto-saved to a file whose path rides in the result.\n\nScripts run in the session's working directory. Interpreter: the project's activated venv/conda python when one is active (VIRTUAL_ENV/CONDA_PREFIX — matches terminal()); otherwise Hermes's own python (the common case — stdlib plus Hermes's deps; check `import x` before relying on project packages).\n\nHelpers require imports: `from hermes_tools import json_parse, shell_quote, retry`. json_parse(text) — tolerant json.loads for terminal() output; shell_quote(s) — shlex.quote for dynamic shell args; retry(fn, max_attempts=3, delay=2) — exponential backoff.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "code": {
+         "type": "string",
+         "description": "Python code to execute; print your final result to stdout."
+        },
+        "reset": {
+         "type": "boolean",
+         "description": "Discard the kernel's persistent state and start fresh before running this code."
+        }
+       },
+       "required": [
+        "code"
        ]
       }
      }
@@ -11662,7 +12552,7 @@
    "result": {
     "tools": {},
     "errors": {
-     "delegate_task": "'delegate_task' is not available in this execution context. Don't retry it — state the assumption and proceed with the work."
+     "delegate_task": "'delegate_task' is a directly-listed tool, not a deferred one. Call it directly instead of via tool_call."
     }
    }
   },
@@ -12353,7 +13243,7 @@
    "result": {
     "tools": {},
     "errors": {
-     "delegate_task": "'delegate_task' is not available in this execution context. Don't retry it — state the assumption and proceed with the work."
+     "delegate_task": "'delegate_task' is a directly-listed tool, not a deferred one. Call it directly instead of via tool_call."
     }
    }
   },
@@ -13059,7 +13949,7 @@
    "result": {
     "tools": {},
     "errors": {
-     "delegate_task": "'delegate_task' is not available in this execution context. Don't retry it — state the assumption and proceed with the work."
+     "delegate_task": "'delegate_task' is a directly-listed tool, not a deferred one. Call it directly instead of via tool_call."
     }
    }
   },
@@ -14318,7 +15208,7 @@
     ]
    },
    "outcome": {
-    "error": "'delegate_task' is not available in this execution context. Don't retry it — state the assumption and proceed with the work."
+    "error": "'delegate_task' is a directly-listed tool, not a deferred one. Call it directly instead of via tool_call."
    }
   },
   {
@@ -15229,7 +16119,7 @@
     ]
    },
    "outcome": {
-    "error": "'delegate_task' is not available in this execution context. Don't retry it — state the assumption and proceed with the work."
+    "error": "'delegate_task' is a directly-listed tool, not a deferred one. Call it directly instead of via tool_call."
    }
   },
   {
@@ -16345,7 +17235,7 @@
     ]
    },
    "outcome": {
-    "error": "'delegate_task' is not available in this execution context. Don't retry it — state the assumption and proceed with the work."
+    "error": "'delegate_task' is a directly-listed tool, not a deferred one. Call it directly instead of via tool_call."
    }
   },
   {

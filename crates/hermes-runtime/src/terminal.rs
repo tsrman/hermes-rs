@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use crate::file_tools::{approval_error, ApprovalDecision, ApprovalRequest, FileWorkspace};
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,12 @@ pub(crate) const TERMINAL: &str = "terminal";
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct TerminalSettings {
     pub env_passthrough: Vec<String>,
+    /// `code_execution.timeout`: seconds one `execute_code` call may run.
+    #[serde(default)]
+    pub code_timeout: Option<u64>,
+    /// `code_execution.max_tool_calls`: tool calls one `execute_code` call may make.
+    #[serde(default)]
+    pub code_max_tool_calls: Option<usize>,
 }
 
 const DEFAULT_ENV: [&str; 22] = [
@@ -71,13 +77,19 @@ impl TerminalSettings {
                     .collect()
             })
             .unwrap_or_default();
+        let section = &config["code_execution"];
         Self {
             env_passthrough: names,
+            code_timeout: section["timeout"].as_u64().filter(|seconds| *seconds > 0),
+            code_max_tool_calls: section["max_tool_calls"]
+                .as_u64()
+                .filter(|calls| *calls > 0)
+                .map(|calls| calls as usize),
         }
     }
 
     /// The variables a command starts with.
-    fn environment(&self) -> Vec<(String, String)> {
+    pub(crate) fn environment(&self) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = Vec::new();
         for name in DEFAULT_ENV
             .iter()
@@ -120,6 +132,14 @@ fn tracked_directory(session: &str) -> Option<PathBuf> {
 /// Forget where a finished conversation (a subagent) left its working directory.
 pub(crate) fn forget_session(session: &str) {
     track_directory(session, None);
+}
+
+/// Where a conversation's commands run now: the directory they last ended in, if it is still
+/// inside the workspace, else the workspace root.
+pub(crate) fn session_directory(session: &str, root: &Path) -> PathBuf {
+    tracked_directory(session)
+        .filter(|path| path.starts_with(root) && path.is_dir())
+        .unwrap_or_else(|| root.to_path_buf())
 }
 
 fn track_directory(session: &str, path: Option<PathBuf>) {

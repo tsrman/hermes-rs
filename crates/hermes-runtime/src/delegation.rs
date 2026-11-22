@@ -608,7 +608,9 @@ pub(crate) fn call<'a>(
             async move {
                 let began = Instant::now();
                 let run = run_child(index, task, family).await;
-                crate::terminal::forget_session(&format!("{}#child{index}", family.session));
+                let session = format!("{}#child{index}", family.session);
+                crate::terminal::forget_session(&session);
+                crate::execute_code::end_session(&session).await;
                 (run, began.elapsed())
             }
         }))

@@ -150,6 +150,7 @@ mod terminal {
             ApprovalAction::CreateFile => ("Create file", "New file content"),
             ApprovalAction::ReplaceFile => ("Replace file", "New file content"),
             ApprovalAction::RunCommand => ("Run command in", "Command"),
+            ApprovalAction::RunCode => ("Run Python code in", "Code"),
             ApprovalAction::ManageSkills => ("Change skills in", "Changes"),
             ApprovalAction::Clarify => return Err(io::Error::from(io::ErrorKind::InvalidInput)),
         };
@@ -167,7 +168,9 @@ mod terminal {
                 request.content.chars().count() - 6000
             )
         };
-        let always = if matches!(request.action, ApprovalAction::RunCommand) {
+        let always = if matches!(request.action, ApprovalAction::RunCode) {
+            "Answer a to always allow exactly this code in this conversation."
+        } else if matches!(request.action, ApprovalAction::RunCommand) {
             "Answer a to always allow this exact command in this conversation."
         } else {
             "Answer a to always allow file changes in this conversation."

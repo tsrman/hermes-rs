@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use crate::browser_cdp::{self, BrowserSettings, BROWSER_CDP};
 use crate::clarify::{self, CLARIFY};
 use crate::delegation::{self, DELEGATE_TASK};
+use crate::execute_code::{self, EXECUTE_CODE};
 use crate::file_tools::{
     patch_schema, search_schema, write_schema, FileWorkspace, PATCH, SEARCH_FILES, WRITE_FILE,
 };
@@ -352,6 +353,14 @@ static TOOLS: &[ToolDef] = &[
         call: delegation::call,
     },
     ToolDef {
+        name: EXECUTE_CODE,
+        offered: |env| {
+            env.terminal
+                .then(|| execute_code::schema(&execute_code::sandbox_tools(env)))
+        },
+        call: execute_code::call,
+    },
+    ToolDef {
         name: MEMORY,
         offered: |env| memory_available(env).map(|_| memory_tool::schema()),
         call: memory_call,
@@ -564,11 +573,12 @@ mod tests {
             .filter(|name| ours.contains(name))
             .collect();
         assert_eq!(ours, reference);
-        assert_eq!(ours.len(), 13);
+        assert_eq!(ours.len(), 14);
         // These tools carry the reference's schema verbatim; the rest are still hand-written.
         let verbatim = [
             "clarify",
             "delegate_task",
+            "execute_code",
             "memory",
             "patch",
             "search_files",
@@ -622,6 +632,7 @@ mod tests {
             names(&env),
             [
                 "clarify",
+                "execute_code",
                 "memory",
                 "patch",
                 "process_manage",

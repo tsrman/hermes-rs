@@ -561,6 +561,7 @@ dependencies = [
  "iana-time-zone",
  "icu_normalizer",
  "ignore",
+ "libc",
  "regex",
  "reqwest",
  "ring",

@@ -37,6 +37,8 @@ pub enum ApprovalAction {
     CreateFile,
     ReplaceFile,
     RunCommand,
+    /// Python source for `execute_code`; `target` is the directory it runs in.
+    RunCode,
     /// Changes to skills: `content` describes every operation.
     ManageSkills,
     /// Questions for the person: `content` holds them as JSON and the reply is `Answered`.
