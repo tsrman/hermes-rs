@@ -80,7 +80,7 @@ routes ignore it); `auxiliary.compression.extra_body` is not read; fallback rout
     `unattended_mode`, `smart_policy`, `denial_breaker_threshold`, `approvers`, `command_allowlist`
     (top-level). `command_allowlist` is the persistent allow list the reference writes when the user
     answers "always"; the port keeps grants only for the session.
-16. **`delegation.*`** read: `max_concurrent_children`, `max_iterations`, `oneshot_max_children`,
+16. **(route done) `delegation.*`** read: `max_concurrent_children`, `max_iterations`, `oneshot_max_children`,
     `subagent_auto_approve`. Not read [keys]: `model`, `provider`, `base_url`, `api_key`, `api_mode`,
     `request_overrides`, `reasoning_effort`, `child_timeout_seconds`, `max_summary_chars`,
     `max_spawn_depth`, `orchestrator_enabled`, `inherit_mcp_toolsets`. Children therefore always use the
@@ -271,3 +271,24 @@ turn; matching the reference adds about 2000 tokens to every request (more with 
   search results off. The stored-conversation text of `session_search`, the debug journal and CDP results stay
   redacted, as the reference's forced path does. A warning is printed at startup when it is off.
   `privacy.redact_pii` and `security.redact_phone_numbers` are still not read.
+
+## Notes on `delegation.*` route (done) and the approvals finding (open, needs a decision)
+
+- `delegation.model`, `provider`, `base_url`, `api_key`, `api_mode` pick the route subagents run on, with the
+  reference's rules: only `model` keeps the parent's endpoint and key; a bare `base_url` (provider empty,
+  `custom` or `auto`) is a direct endpoint that keeps the parent's key unless `api_key` is set; a named
+  provider resolves its own key; another endpoint without `model` is refused with a clear message. A pinned
+  route never borrows the parent's fallback chain (`delegation.fallback_providers` is not read). The result
+  of `delegate_task` names the child model. Live check: parent `deepseek-flash-1017`, subagent
+  `claude-haiku-5-5` on the gateway. Still not read: `request_overrides`, `reasoning_effort`,
+  `child_timeout_seconds`, `max_summary_chars`, `max_spawn_depth`, `orchestrator_enabled`,
+  `inherit_mcp_toolsets`.
+- **Approvals (item 15) is a design question, not a missing key.** The reference asks for approval only for
+  commands its detector flags (`tools/approval_detection.py`: dangerous patterns and a hard-line list, and
+  `command_allowlist` holds the pattern keys a person approved permanently). The port asks for every
+  command and file change unless `approvals.allow`, the small built-in list or a session grant covers it.
+  Porting the detector would let ordinary commands (`pip install`, `python script.py`, builds, tests) run
+  without a question, which is how the reference feels in practice but is a weaker default than the port has
+  now. Decision needed before any work: keep the stricter default and add `command_allowlist` as persistent
+  `approvals.allow` entries, or port the detector and its patterns (large, security-critical, needs a recorded
+  corpus like the redactor's).

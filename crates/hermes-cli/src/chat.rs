@@ -33,8 +33,27 @@ fn summary_route(
     main_url: &str,
     main_key: &str,
 ) -> Result<Option<Route>, String> {
+    side_route(
+        settings,
+        &settings.compression_route,
+        "auxiliary.compression",
+        main_url,
+        main_key,
+        false,
+    )
+}
+
+/// The route of a side task from its config section. With `inherit_key`, a section that names
+/// only an endpoint (a direct `base_url`) keeps using the main route's key, as `delegation` does.
+fn side_route(
+    settings: &hermes_runtime::config::ChatSettings,
+    aux: &hermes_runtime::config::AuxiliaryRoute,
+    label: &str,
+    main_url: &str,
+    main_key: &str,
+    inherit_key: bool,
+) -> Result<Option<Route>, String> {
     use hermes_runtime::config::{default_base_url, resolve_provider};
-    let aux = &settings.compression_route;
     if aux.is_default() {
         return Ok(None);
     }
@@ -44,25 +63,23 @@ fn summary_route(
         (None, None) => settings.provider,
     };
     let Some((provider, default_responses)) = resolve_provider(name) else {
-        return Err(format!(
-            "auxiliary.compression.provider '{name}' is not supported"
-        ));
+        return Err(format!("{label}.provider '{name}' is not supported"));
     };
     let base_url = aux
         .base_url
         .clone()
         .or_else(|| (provider == settings.provider).then(|| main_url.to_owned()))
         .or_else(|| default_base_url(provider).map(str::to_owned))
-        .ok_or("auxiliary.compression needs base_url for this provider")?;
+        .ok_or_else(|| format!("{label} needs base_url for this provider"))?;
     let same_endpoint = provider == settings.provider
         && base_url.trim_end_matches('/') == main_url.trim_end_matches('/');
     let model = match (&aux.model, same_endpoint) {
         (Some(model), _) => Some(model.clone()),
         (None, true) => None,
         (None, false) => {
-            return Err(
-                "auxiliary.compression.model is required when it uses another endpoint".into(),
-            )
+            return Err(format!(
+                "{label}.model is required when it uses another endpoint"
+            ))
         }
     };
     let key_from_env = aux
@@ -73,7 +90,11 @@ fn summary_route(
         .api_key
         .clone()
         .or(key_from_env)
-        .or_else(|| same_endpoint.then(|| main_key.to_owned()))
+        .or_else(|| {
+            (same_endpoint
+                || (inherit_key && aux.provider.as_deref().is_none_or(|name| name == "custom")))
+            .then(|| main_key.to_owned())
+        })
         .or_else(|| settings.vendor_key_for(provider, &base_url))
         .unwrap_or_default();
     let responses = match aux.api_mode.as_deref() {
@@ -150,6 +171,9 @@ pub struct ChatRequest {
     /// Where the compression summary is made; the main route when unset.
     #[serde(default)]
     summary: Option<Route>,
+    /// Where subagents run; the main route when unset.
+    #[serde(default)]
+    delegate: Option<Route>,
     root: OsString,
     query: String,
     resume: Option<String>,
@@ -334,9 +358,18 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         extras.headers.push((name, value));
     }
     let summary = summary_route(&settings, &base_url, &api_key)?;
+    let delegate = side_route(
+        &settings,
+        &settings.delegation_route,
+        "delegation",
+        &base_url,
+        &api_key,
+        true,
+    )?;
     Ok(ChatRequest {
         state_scope: None,
         summary,
+        delegate,
         root: std::env::current_dir()
             .map_err(|error| error.to_string())?
             .into_os_string(),
@@ -450,8 +483,16 @@ where
         Some(path) => Some(hermes_runtime::journal::Journal::open(Path::new(path))?),
         None => None,
     };
+    let delegate_route = match &request.delegate {
+        Some(route) => Some(route.open(
+            route.model.clone().unwrap_or_else(|| primary.model.clone()),
+            request.attempts,
+        )?),
+        None => None,
+    };
     let delegation =
-        hermes_runtime::delegation::Delegation::new(request.delegation.clone(), request.oneshot);
+        hermes_runtime::delegation::Delegation::new(request.delegation.clone(), request.oneshot)
+            .with_route(delegate_route);
     let options = TurnOptions {
         journal: journal.as_ref(),
         delegation: Some(&delegation),

@@ -48,6 +48,8 @@ pub struct ChatSettings {
     pub named_custom: bool,
     /// `auxiliary.compression`: where the compression summary is made.
     pub compression_route: AuxiliaryRoute,
+    /// `delegation.model/provider/base_url/api_key/api_mode`: the route of subagents.
+    pub delegation_route: AuxiliaryRoute,
     /// `model.default_headers`.
     pub default_headers: Vec<(String, String)>,
     /// `providers` / `custom_providers` entries that may carry an `extra_body`.
@@ -97,7 +99,10 @@ impl AuxiliaryRoute {
     }
 
     fn from_config(config: &serde_yaml::Value, task: &str) -> Self {
-        let section = &config["auxiliary"][task];
+        Self::from_section(&config["auxiliary"][task])
+    }
+
+    fn from_section(section: &serde_yaml::Value) -> Self {
         let text = |field: &str, auto_is_unset: bool| {
             section
                 .get(field)
@@ -151,6 +156,7 @@ impl Default for ChatSettings {
             redact_secrets: true,
             named_custom: false,
             compression_route: AuxiliaryRoute::default(),
+            delegation_route: AuxiliaryRoute::default(),
             default_headers: Vec::new(),
             custom_providers: Vec::new(),
             api_max_attempts: 3,
@@ -548,6 +554,13 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.anthropic_api_key = secrets.get("ANTHROPIC_API_KEY").cloned();
     settings.anthropic_base_url = secrets.get("ANTHROPIC_BASE_URL").cloned();
     settings.compression_route = AuxiliaryRoute::from_config(&config, "compression");
+    settings.delegation_route = AuxiliaryRoute {
+        // A subagent route has no timeout or body fields of its own.
+        timeout_secs: None,
+        extra_body: serde_json::Map::new(),
+        key_env: None,
+        ..AuxiliaryRoute::from_section(&config["delegation"])
+    };
     settings.mcp_servers = mcp_servers(&config, &secrets);
     settings.web = WebSettings::from_config(&config, &secrets);
     settings.browser = BrowserSettings::from_config(&config, &secrets);

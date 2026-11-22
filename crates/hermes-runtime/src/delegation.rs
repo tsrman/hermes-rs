@@ -96,6 +96,9 @@ pub struct Delegation {
     pub settings: DelegationSettings,
     /// Whether this is a finite one-shot run, whose child budget is limited.
     pub oneshot: bool,
+    /// `delegation.model` and friends: the route subagents use instead of the parent's. A pinned
+    /// route never borrows the parent's fallback chain.
+    route: Option<ModelRoute>,
     spawned: AtomicU32,
 }
 
@@ -104,8 +107,14 @@ impl Delegation {
         Self {
             settings,
             oneshot,
+            route: None,
             spawned: AtomicU32::new(0),
         }
+    }
+
+    pub fn with_route(mut self, route: Option<ModelRoute>) -> Self {
+        self.route = route;
+        self
     }
 
     /// Charge `requested` children against the one-shot budget; the error says to do the work inline.
@@ -598,8 +607,12 @@ pub(crate) fn call<'a>(
         let family = Family {
             options: cx.options,
             delegation,
-            route: cx.route,
-            fallbacks: cx.fallbacks,
+            route: delegation.route.as_ref().unwrap_or(cx.route),
+            fallbacks: if delegation.route.is_some() {
+                &[]
+            } else {
+                cx.fallbacks
+            },
             workspace,
             session: cx.options.state_key().to_owned(),
         };
@@ -625,7 +638,7 @@ pub(crate) fn call<'a>(
             entry.insert("summary".into(), json!(run.summary));
             entry.insert("api_calls".into(), json!(run.api_calls));
             entry.insert("duration_seconds".into(), json!(round2(elapsed)));
-            entry.insert("model".into(), json!(cx.route.model));
+            entry.insert("model".into(), json!(family.route.model));
             entry.insert("exit_reason".into(), json!(run.exit_reason));
             entry.insert(
                 "truncated".into(),

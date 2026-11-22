@@ -596,6 +596,33 @@ class DelegationTest(ToolTestCase):
         events = [json.loads(line) for line in journal.read_text().splitlines()]
         return run, requests, events
 
+    def test_delegation_model_pins_the_subagents_route(self):
+        run, requests, _ = self.delegate("--yolo", config="delegation:\n  model: child-model\n")
+        children = [r for r in requests if r["messages"][0]["content"].startswith("You are a focused subagent")]
+        parents = [r for r in requests if r not in children]
+        self.assertTrue(children)
+        self.assertEqual({r["model"] for r in children}, {"child-model"})
+        self.assertEqual({r["model"] for r in parents}, {"fixture"})
+        result = json.loads(next(m for m in parents[1]["messages"] if m.get("role") == "tool")["content"])
+        self.assertEqual({r["model"] for r in result["results"]}, {"child-model"})
+
+    def test_a_delegation_endpoint_without_a_model_is_refused_clearly(self):
+        (self.profile / "config.yaml").write_text(
+            self.config + "delegation:\n  provider: custom\n  base_url: https://elsewhere.example/v1\n"
+            "  model: m\n  api_key: k\n", encoding="utf-8")
+        run = subprocess.run([str(BINARY), "chat", "--oneshot", "-q", "delegate", "--yolo"], cwd=self.root,
+                             env=self.env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=40)
+        # A complete section is accepted at startup (the endpoint is only used when a child runs).
+        self.assertNotIn("delegation.model is required", run.stderr)
+        (self.profile / "config.yaml").write_text(
+            self.config + "delegation:\n  provider: openai\n  base_url: https://elsewhere.example/v1\n",
+            encoding="utf-8")
+        refused = subprocess.run([str(BINARY), "chat", "--oneshot", "-q", "delegate"], cwd=self.root,
+                                 env=self.env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                 timeout=40)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("delegation.model is required", refused.stderr)
+
     def test_children_run_in_isolation_and_their_summaries_come_back(self):
         run, requests, events = self.delegate("--yolo")
         children = [r for r in requests if r["messages"][0]["content"].startswith("You are a focused subagent")]
