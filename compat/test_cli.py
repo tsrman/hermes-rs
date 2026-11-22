@@ -40,7 +40,8 @@ class CliTest(unittest.TestCase):
             "test_web_search_uses_the_configured_backend_and_hides_tools_without_one": "web",
             "test_mcp_streamable_http_tool_uses_profile_secrets": "mcp",
             "test_mcp_resources_are_listed_and_read_for_the_model": "mcp_resources",
-            "test_cancelling_a_turn_cancels_the_mcp_call_and_stops_the_server": "mcp_slow",
+            "test_cancelling_a_turn_stops_the_stdio_mcp_server": "mcp_slow",
+            "test_cancelling_a_turn_cancels_the_http_mcp_call": "mcp_slow",
             "test_skill_index_uses_profile_and_opted_in_project_roots": "skill",
             "test_skill_view_resolves_exact_paths_and_refuses_ambiguous_names": "skill",
             "test_cancel_interrupts_pending_provider_request": "stall",
@@ -379,38 +380,66 @@ class CliTest(unittest.TestCase):
         self.assertEqual(recorded[1]["messages"][-1]["content"], corpus["list_output"])
         self.assertEqual(recorded[2]["messages"][-1]["content"], corpus["reads"]["mem://plain"])
 
-    def test_cancelling_a_turn_cancels_the_mcp_call_and_stops_the_server(self):
-        server = ROOT / "compat" / "mcp_fixture_server.py"
-        log = self.workdir / "mcp.log"
+    def interrupt_mcp_turn(self, config_extra, ready):
+        """Start a turn whose tool call waits on an MCP server, interrupt it once `ready()` holds."""
         home = self.workdir / "hermes"
         home.mkdir()
         (home / "config.yaml").write_text(
             f"model:\n  default: primary\n  provider: custom\n  base_url: {self.base}/v1\n"
-            f"mcp_servers:\n  fixture:\n    command: python3\n    args: ['-I', '{server}']\n"
-            f"    env:\n      HERMES_MCP_LOG: '{log}'\n", encoding="utf-8")
+            f"mcp_servers:\n  fixture:\n{config_extra}", encoding="utf-8")
         env = {"PATH": os.environ.get("PATH", ""), "HERMES_HOME": str(home), "HERMES_API_KEY": "fixture"}
         process = subprocess.Popen([str(BINARY), "chat", "-q", "slow"], cwd=self.workdir, env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: process.kill() if process.poll() is None else None)
-
-        def entries():
-            return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
         deadline = time.monotonic() + 15
-        while not any(e.get("method") == "tools/call" for e in entries()):
+        while not ready():
             self.assertLess(time.monotonic(), deadline, "the MCP server did not get the call")
             time.sleep(0.05)
         process.send_signal(signal.SIGINT)
         process.communicate(timeout=10)
         self.assertEqual(process.returncode, 130)
-        logged = entries()
-        call = next(e for e in logged if e.get("method") == "tools/call")
-        cancel = next(e for e in logged if e.get("method") == "notifications/cancelled")
-        self.assertEqual(cancel["params"], {"requestId": call["id"], "reason": "caller cancelled"})
-        pid = logged[0]["pid"]
+
+    def test_cancelling_a_turn_stops_the_stdio_mcp_server(self):
+        # The server is stopped with the turn, so it may be gone before it reads the cancellation
+        # (the Rust tests with a graceful shutdown check what it receives).
+        server = ROOT / "compat" / "mcp_fixture_server.py"
+        log = self.workdir / "mcp.log"
+
+        def entries():
+            return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+        self.interrupt_mcp_turn(
+            f"    command: python3\n    args: ['-I', '{server}']\n    env:\n      HERMES_MCP_LOG: '{log}'\n",
+            lambda: any(e.get("method") == "tools/call" for e in entries()))
+        pid = entries()[0]["pid"]
         deadline = time.monotonic() + 5
         while Path(f"/proc/{pid}").exists() and time.monotonic() < deadline:
             time.sleep(0.05)
         self.assertFalse(Path(f"/proc/{pid}").exists(), "the MCP server outlived the turn")
+
+    def test_cancelling_a_turn_cancels_the_http_mcp_call(self):
+        log = self.workdir / "mcp-log.json"
+        server = subprocess.Popen(
+            ["python3", str(ROOT / "compat" / "mcp_http_fixture_server.py"), "--token", "t", "--log", str(log)],
+            stdout=subprocess.PIPE, text=True)
+        self.addCleanup(server.wait)
+        self.addCleanup(server.kill)
+        self.addCleanup(server.stdout.close)
+        url = server.stdout.readline().strip()
+
+        def entries():
+            try:
+                return json.loads(log.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return []
+        self.interrupt_mcp_turn(
+            f"    url: {url}\n    headers:\n      Authorization: Bearer t\n",
+            lambda: any(e.get("params", {}).get("name") == "slow" for e in entries()))
+        # The CLI waited for the notification before it exited.
+        logged = entries()
+        call = next(e for e in logged if e.get("params", {}).get("name") == "slow")
+        cancel = next(e for e in logged if e.get("method") == "notifications/cancelled")
+        self.assertEqual(cancel["params"], {"requestId": call["id"], "reason": "caller cancelled"})
+        self.assertEqual(cancel["session"], "fixture-session")
 
     def test_web_search_uses_the_configured_backend_and_hides_tools_without_one(self):
         seen = []

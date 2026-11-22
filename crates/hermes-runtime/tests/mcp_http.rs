@@ -401,10 +401,10 @@ async fn resumption_gives_up_after_two_failed_attempts_with_the_reference_messag
 }
 
 #[tokio::test]
-async fn a_call_dropped_while_it_waits_to_resume_cancels_its_request() {
+async fn a_call_dropped_before_its_stream_is_answered_cancels_its_request() {
     let fixture = Fixture::start();
     let (mut clients, _) = McpClients::start(&[fixture.config("fixture-token", 10)]).await;
-    // `resume_fail` never answers: the call is dropped while it waits to retry.
+    // `resume_fail` never answers: the call is dropped early, whatever it is doing.
     let waited = tokio::time::timeout(
         std::time::Duration::from_millis(10),
         clients.call("mcp_web_resume_fail", "{}"),
