@@ -15,7 +15,7 @@ pub(super) struct WritePlan {
     pub(super) content: String,
     pub(super) before: Option<Stamp>,
     pub(super) display_path: String,
-    pub(super) patch: Option<(usize, String)>,
+    pub(super) patch: Option<(Vec<String>, String, serde_json::Value)>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]

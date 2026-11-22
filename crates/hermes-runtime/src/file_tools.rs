@@ -57,6 +57,8 @@ pub(crate) struct FileWorkspace<'a> {
     root: &'a Path,
     profile: Option<PathBuf>,
     observed: HashMap<PathBuf, Observation>,
+    /// Misses per file, so a model that keeps retrying a patch is told to stop.
+    patch_failures: HashMap<PathBuf, u32>,
 }
 
 struct Observation {
@@ -110,6 +112,7 @@ impl<'a> FileWorkspace<'a> {
             root,
             profile,
             observed: HashMap::new(),
+            patch_failures: HashMap::new(),
         }
     }
 
@@ -227,13 +230,17 @@ impl<'a> FileWorkspace<'a> {
         };
         #[cfg(target_os = "linux")]
         {
-            let plan = match if tool == PATCH {
-                self.prepare_patch(arguments)
+            let plan = if tool == PATCH {
+                match self.prepare_patch(arguments) {
+                    Ok(Prepared::Plan(plan)) => *plan,
+                    Ok(Prepared::Done(answer)) => return answer,
+                    Err(error) => return json!({"error": error}),
+                }
             } else {
-                self.prepare_write(arguments)
-            } {
-                Ok(plan) => plan,
-                Err(error) => return json!({"error": error}),
+                match self.prepare_write(arguments) {
+                    Ok(plan) => plan,
+                    Err(error) => return json!({"error": error}),
+                }
             };
             let Some(target) = plan.target.path.to_str() else {
                 return json!({"error": "The target path must be UTF-8 to display it for approval"});
@@ -256,10 +263,19 @@ impl<'a> FileWorkspace<'a> {
                 Ok(()) => {
                     let mut observation = Observation::new(fingerprint(plan.content.as_bytes()));
                     observation.complete = true;
-                    self.observed.insert(plan.target.path, observation);
-                    if let Some((count, diff)) = plan.patch {
-                        json!({"success": true, "files_modified": [plan.display_path], "replacements": count,
-                               "diff": diff, "verified": true})
+                    self.observed.insert(plan.target.path.clone(), observation);
+                    if let Some((notes, diff, lint)) = plan.patch {
+                        let resolved = plan.target.path.display().to_string();
+                        let mut result = serde_json::Map::new();
+                        result.insert("success".into(), json!(true));
+                        if !notes.is_empty() {
+                            result.insert("note".into(), json!(notes.join("\n")));
+                        }
+                        result.insert("diff".into(), json!(diff));
+                        result.insert("files_modified".into(), json!([resolved]));
+                        result.insert("lint".into(), lint);
+                        result.insert("resolved_path".into(), json!(resolved));
+                        Value::Object(result)
                     } else {
                         json!({"success": true, "path": plan.display_path, "bytes_written": plan.content.len(), "verified": true})
                     }
@@ -335,59 +351,143 @@ impl<'a> FileWorkspace<'a> {
     }
 
     #[cfg(target_os = "linux")]
-    fn prepare_patch(&self, arguments: &str) -> Result<linux::WritePlan, String> {
+    /// A patch: the plan for the write, or a finished answer (a miss, or an edit that is already
+    /// in the file).
+    fn prepare_patch(&mut self, arguments: &str) -> Result<Prepared, String> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Arguments {
             mode: Option<String>,
             path: String,
-            old_string: String,
-            new_string: String,
+            old_string: Option<String>,
+            new_string: Option<String>,
             #[serde(default)]
             replace_all: bool,
         }
         let args: Arguments = serde_json::from_str(arguments)
             .map_err(|_| "patch expects path, old_string, and new_string")?;
         if args.mode.as_deref().is_some_and(|mode| mode != "replace") {
-            return Err("patch supports exact replacement mode".into());
+            return Err(format!("Unknown mode: {}", args.mode.unwrap_or_default()));
         }
-        if args.old_string.is_empty()
-            || args.old_string == args.new_string
-            || args.new_string.contains('\0')
-        {
-            return Err(
-                "patch requires a nonempty match and different UTF-8 replacement text".into(),
-            );
+        let (Some(old), Some(new)) = (args.old_string.as_deref(), args.new_string.as_deref())
+        else {
+            return Err("old_string and new_string required".into());
+        };
+        if new.contains('\0') {
+            return Err("patch requires UTF-8 replacement text".into());
         }
         let target = self.write_target(&args.path)?;
-        let (before, original) = target
+        let (before, raw) = target
             .read_version()?
-            .ok_or("The file to patch does not exist")?;
-        let count = original.matches(&args.old_string).count();
-        match count {
-            0 => return Err("The exact old_string was not found".into()),
-            2.. if !args.replace_all => {
-                return Err(
-                    "old_string has multiple matches. Include more context or set replace_all."
-                        .into(),
-                )
-            }
-            _ => {}
+            .ok_or("Failed to read file: the file to patch does not exist")?;
+        // Match and diff on BOM-stripped text; the BOM is written back.
+        let (had_bom, original) = match raw.strip_prefix('\u{feff}') {
+            Some(rest) => (true, rest.to_owned()),
+            None => (false, raw.clone()),
+        };
+        let mut notes: Vec<String> = Vec::new();
+        let found =
+            crate::fuzzy::find_and_replace(&original, old, new, args.replace_all, &mut notes);
+        if found.error.is_some() || found.count == 0 {
+            return Ok(Prepared::Done(self.patch_miss(
+                &target.path,
+                &args.path,
+                &original,
+                old,
+                new,
+                found.count,
+                found.error,
+            )));
         }
-        let result_len = original.len() - count * args.old_string.len();
-        if result_len.saturating_add(count.saturating_mul(args.new_string.len())) > WRITE_LIMIT {
+        // Models send bare-LF strings; keep the file's line endings.
+        let mut content = found.content;
+        let head: String = original.chars().take(4096).collect();
+        let ending = if head.contains("\r\n") {
+            Some("\r\n")
+        } else if head.contains('\n') {
+            Some("\n")
+        } else {
+            None
+        };
+        if let Some(ending) = ending {
+            let lf = content.replace("\r\n", "\n").replace('\r', "\n");
+            content = if ending == "\r\n" {
+                lf.replace('\n', "\r\n")
+            } else {
+                lf
+            };
+        }
+        if let Some(note) = crate::fuzzy::boundary_note(found.strategy) {
+            notes.push(note);
+        }
+        let written = if had_bom {
+            format!("\u{feff}{content}")
+        } else {
+            content.clone()
+        };
+        if written.len() > WRITE_LIMIT {
             return Err("The patched file would exceed 64 KiB".into());
         }
-        let content = original.replace(&args.old_string, &args.new_string);
-        let diff = replacement_diff(&args.path, &original, &content);
-        Ok(linux::WritePlan {
+        let lint = crate::syntax_lint::lint_delta(&args.path, Some(&original), &content);
+        let path_text = target.path.display().to_string();
+        let diff = crate::difflib::unified_diff(
+            &original,
+            &content,
+            &format!("a/{path_text}"),
+            &format!("b/{path_text}"),
+        );
+        self.patch_failures.remove(&target.path);
+        Ok(Prepared::Plan(Box::new(linux::WritePlan {
             target,
-            content,
+            content: written,
             before: Some(before),
             display_path: args.path,
-            patch: Some((count, diff)),
-        })
+            patch: Some((notes, diff, lint)),
+        })))
     }
+
+    /// The answer for a patch that matched nothing: an already-applied edit is a no-op success;
+    /// otherwise the error carries a "Did you mean" snippet and, after repeated misses, a hint.
+    #[allow(clippy::too_many_arguments)]
+    fn patch_miss(
+        &mut self,
+        path: &Path,
+        shown: &str,
+        content: &str,
+        old: &str,
+        new: &str,
+        count: usize,
+        error: Option<String>,
+    ) -> Value {
+        if crate::fuzzy::is_already_applied(content, old, new) {
+            return json!({"success": true, "no_change": true, "note": format!(
+                "File already contains the target text — the edit appears to be already applied to {}. No write performed; do not re-send this patch.",
+                path.display())});
+        }
+        let mut message = error.unwrap_or_else(|| {
+            format!("Could not find match for old_string in {}", path.display())
+        });
+        message.push_str(&crate::fuzzy::no_match_hint(&message, count, old, content));
+        let mut result = json!({"success": false, "error": message});
+        if message.contains("Could not find") {
+            let failures = self.patch_failures.entry(path.to_owned()).or_insert(0);
+            *failures += 1;
+            if *failures >= 3 {
+                result["_hint"] = json!(format!(
+                    "This is failure #{failures} patching {shown:?}. Stop retrying with variations of the same old_string. Either: (1) re-read the file fresh to verify current content, (2) use a longer / more unique old_string with surrounding context lines, or (3) re-read the file in full, then use write_file to replace it if the targeted region is hard to anchor."
+                ));
+            } else if !message.contains("Did you mean one of these sections?") {
+                result["_hint"] = json!("old_string not found. Use read_file to verify the current content, or search_files to locate the text.");
+            }
+        }
+        result
+    }
+}
+
+/// What preparing a patch produced.
+enum Prepared {
+    Plan(Box<linux::WritePlan>),
+    Done(Value),
 }
 
 fn open_read(root: &Path, path: &Path) -> Result<std::fs::File, String> {
@@ -458,58 +558,11 @@ pub(crate) fn write_schema() -> Value {
 }
 
 pub(crate) fn patch_schema() -> Value {
-    json!({"type": "function", "function": {
-        "name": PATCH,
-        "description": "Replace exact text in an existing UTF-8 workspace file after approval. Provide context for a unique match or explicitly request replace_all.",
-        "parameters": {"type": "object", "properties": {
-            "path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"},
-            "replace_all": {"type": "boolean", "default": false}
-        }, "required": ["path", "old_string", "new_string"], "additionalProperties": false}
-    }})
+    json!({"type": "function", "function":
+        serde_json::from_str::<Value>(include_str!("schemas/patch.json")).unwrap_or_default()})
 }
 
 #[cfg(target_os = "linux")]
-fn replacement_diff(path: &str, before: &str, after: &str) -> String {
-    let old: Vec<_> = before.split_inclusive('\n').collect();
-    let new: Vec<_> = after.split_inclusive('\n').collect();
-    let head = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
-    let tail = old[head..]
-        .iter()
-        .rev()
-        .zip(new[head..].iter().rev())
-        .take_while(|(a, b)| a == b)
-        .count();
-    let start = head.saturating_sub(3);
-    let old_end = old.len() - tail;
-    let new_end = new.len() - tail;
-    let context = tail.min(3);
-    let old_count = old_end + context - start;
-    let new_count = new_end + context - start;
-    let quote_path = serde_json::to_string(path).expect("path string");
-    let mut diff = format!(
-        "--- {quote_path}\n+++ {quote_path}\n@@ -{},{} +{},{} @@\n",
-        start + usize::from(old_count > 0),
-        old_count,
-        start + usize::from(new_count > 0),
-        new_count
-    );
-    for (prefix, lines) in [
-        (' ', &old[start..head]),
-        ('-', &old[head..old_end]),
-        ('+', &new[head..new_end]),
-        (' ', &old[old_end..old_end + context]),
-    ] {
-        for line in lines {
-            diff.push(prefix);
-            diff.push_str(line);
-            if !line.ends_with('\n') {
-                diff.push_str("\n\\ No newline at end of file\n");
-            }
-        }
-    }
-    diff
-}
-
 #[cfg(test)]
 mod tests {
     use super::Observation;
@@ -522,5 +575,62 @@ mod tests {
         assert!(!observation.complete);
         observation.add(1, 2, 4);
         assert!(observation.complete);
+    }
+
+    #[tokio::test]
+    async fn patch_matches_loosely_and_reports_a_diff() {
+        use super::{ApprovalDecision, ApprovalRequest, FileWorkspace, PATCH};
+        use serde_json::json;
+
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("a.json");
+        std::fs::write(&file, "{\n  \"a\": 1,\n  \"b\": 2\n}\n").unwrap();
+        let mut workspace = FileWorkspace::new(directory.path(), None);
+        let mut approve = |_: ApprovalRequest| async { ApprovalDecision::Approved };
+        let patch = |arguments: serde_json::Value| {
+            let arguments = arguments.to_string();
+            (arguments, ())
+        };
+        // Indentation differs from the file: the fuzzy chain still lands the edit.
+        let (arguments, ()) =
+            patch(json!({"path": "a.json", "old_string": "\"a\": 1,", "new_string": "\"a\": 10,"}));
+        let result = workspace
+            .edit(PATCH, &arguments, Some(5), &mut approve)
+            .await;
+        assert_eq!(result["success"], true, "{result}");
+        assert!(result["diff"]
+            .as_str()
+            .unwrap()
+            .contains("-  \"a\": 1,\n+  \"a\": 10,"));
+        assert_eq!(result["lint"]["status"], "ok");
+        // An edit that breaks the syntax is flagged, not refused.
+        let (arguments, ()) =
+            patch(json!({"path": "a.json", "old_string": "\"b\": 2", "new_string": "\"b\": ,"}));
+        let broken = workspace
+            .edit(PATCH, &arguments, Some(5), &mut approve)
+            .await;
+        assert_eq!(broken["lint"]["status"], "error");
+        // A re-sent edit is a no-op, and a miss gets the reference's hint.
+        std::fs::write(directory.path().join("b.txt"), "alpha beta gamma delta\n").unwrap();
+        let (arguments, ()) = patch(
+            json!({"path": "b.txt", "old_string": "completely different words", "new_string": "beta gamma"}),
+        );
+        let again = workspace
+            .edit(PATCH, &arguments, Some(5), &mut approve)
+            .await;
+        assert_eq!(again["no_change"], true, "{again}");
+        let (arguments, ()) =
+            patch(json!({"path": "a.json", "old_string": "zzz not here", "new_string": "q"}));
+        let miss = workspace
+            .edit(PATCH, &arguments, Some(5), &mut approve)
+            .await;
+        assert!(miss["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("Could not find a match"));
+        assert!(miss["_hint"]
+            .as_str()
+            .unwrap()
+            .starts_with("old_string not found"));
     }
 }

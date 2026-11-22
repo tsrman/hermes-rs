@@ -319,14 +319,16 @@ class FileToolTest(ToolTestCase):
         self.assertEqual(target.read_text(), "keep before\nchanged\nkeep after\n")
         patched, _ = self.last_tool_result()
         self.assertTrue(patched["success"])
-        self.assertEqual(patched["files_modified"], ["notes.txt"])
+        self.assertEqual(len(patched["files_modified"]), 1)
+        self.assertTrue(patched["files_modified"][0].endswith("/notes.txt"))
+        self.assertIn("+changed", patched["diff"])
         process, _ = self.interactive(tool="patch", arguments={
             "path": "notes.txt", "old_string": "keep", "new_string": "remove",
         })
         _, error = process.communicate(timeout=20)
         self.assertEqual(process.returncode, 0, error)
         failed, _ = self.last_tool_result()
-        self.assertIn("multiple", failed["error"])
+        self.assertIn("Found 2 matches", failed["error"])
         self.assertEqual(target.read_text(), "keep before\nchanged\nkeep after\n")
         arguments = {"mode": "replace", "path": "notes.txt", "old_string": "keep",
                      "new_string": "save", "replace_all": True}

@@ -37,7 +37,6 @@ const PATCH_NEEDS_OLD_STRING: &str = "old_string is required for 'patch' and mus
 const PATCH_NEEDS_NEW_STRING: &str =
     "new_string is required for 'patch'. Use an empty string to delete matched text.";
 const PATCH_EITHER_OR: &str = "Pass EITHER content (full SKILL.md rewrite) OR old_string/new_string (targeted replacement), not both.";
-const IDENTICAL_STRINGS_ERROR: &str = "No edit was applied because old_string and new_string are identical. Provide the existing text to replace in old_string and the changed replacement text in new_string.";
 
 static NAME_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-z0-9][a-z0-9._-]*\n?$").expect("valid regex"));
@@ -975,23 +974,16 @@ impl Skills<'_> {
             Ok(text) => text,
             Err(error) => return refusal(error),
         };
-        let (updated, count) = match replace_exact(&content, old, new, op.replace_all) {
-            Ok(done) => done,
-            Err(error) => {
-                let mut message = error.clone();
-                if error.starts_with("Could not find") {
-                    let hint = closest_lines(old, &content);
-                    if !hint.is_empty() {
-                        message.push_str("\n\nDid you mean one of these sections?\n");
-                        message.push_str(&hint);
-                    }
-                }
-                return failed(
-                    message,
-                    &[("file_preview", json!(clip(&content, 500, "...")))],
-                );
-            }
-        };
+        let mut notes: Vec<String> = Vec::new();
+        let found = crate::fuzzy::find_and_replace(&content, old, new, op.replace_all, &mut notes);
+        if let Some(error) = found.error {
+            let hint = crate::fuzzy::no_match_hint(&error, found.count, old, &content);
+            return failed(
+                format!("{error}{hint}"),
+                &[("file_preview", json!(clip(&content, 500, "...")))],
+            );
+        }
+        let (updated, count) = (found.content, found.count);
         if let Some(error) = validate_content_size(&updated, target_label) {
             return refusal(error);
         }
@@ -1017,6 +1009,9 @@ impl Skills<'_> {
             "_change".into(),
             json!({"old": clip(old, 200, "…"), "new": clip(new, 200, "…")}),
         );
+        if !notes.is_empty() {
+            result.insert("note".into(), json!(notes.join("\n")));
+        }
         if label.is_none() {
             attach_lint(&mut result, &target, Some(&content), self.desc_limit());
         }
@@ -1238,218 +1233,6 @@ fn collect_files(dir: &Path, base: &Path, out: &mut Vec<String>) {
             out.push(relative.display().to_string());
         }
     }
-}
-
-// ── Exact replacement and the closest-lines hint ─────────────────────────────────────────────────
-
-fn replace_exact(
-    content: &str,
-    old: &str,
-    new: &str,
-    replace_all: bool,
-) -> Result<(String, usize), String> {
-    if old.trim().is_empty() {
-        return Err("old_string is only whitespace — provide non-blank text to match. Set it to the exact existing text the replacement should replace (read the file first if unsure). Do not re-send this call unchanged.".into());
-    }
-    if old == new {
-        return Err(IDENTICAL_STRINGS_ERROR.into());
-    }
-    let spans: Vec<usize> = content.match_indices(old).map(|(index, _)| index).collect();
-    if spans.is_empty() {
-        return Err("Could not find a match for old_string in the file".into());
-    }
-    if spans.len() > 1 && !replace_all {
-        let mut rows: Vec<String> = Vec::new();
-        for start in spans.iter().take(5) {
-            let line_no = content[..*start].matches('\n').count() + 1;
-            let line_start = content[..*start].rfind('\n').map_or(0, |i| i + 1);
-            let line_end = content[line_start..]
-                .find('\n')
-                .map_or(content.len(), |i| line_start + i);
-            let snippet = content[line_start..line_end].trim();
-            let snippet = if snippet.chars().count() > 80 {
-                format!("{}...", snippet.chars().take(77).collect::<String>())
-            } else {
-                snippet.to_owned()
-            };
-            rows.push(format!("  L{line_no}: {snippet}"));
-        }
-        if spans.len() > 5 {
-            rows.push(format!("  ... and {} more", spans.len() - 5));
-        }
-        return Err(format!(
-            "Found {} matches for old_string. Provide more context to make it unique, or use replace_all=True. Matches:\n{}",
-            spans.len(),
-            rows.join("\n")
-        ));
-    }
-    Ok((content.replace(old, new), spans.len()))
-}
-
-/// Python's `str.splitlines()`.
-fn split_lines(text: &str) -> Vec<&str> {
-    let mut lines = Vec::new();
-    let mut start = 0;
-    let mut chars = text.char_indices().peekable();
-    while let Some((index, c)) = chars.next() {
-        if matches!(
-            c,
-            '\n' | '\r'
-                | '\x0b'
-                | '\x0c'
-                | '\x1c'
-                | '\x1d'
-                | '\x1e'
-                | '\u{85}'
-                | '\u{2028}'
-                | '\u{2029}'
-        ) {
-            lines.push(&text[start..index]);
-            let mut next = index + c.len_utf8();
-            if c == '\r' && chars.peek().is_some_and(|(_, after)| *after == '\n') {
-                chars.next();
-                next += 1;
-            }
-            start = next;
-        }
-    }
-    if start < text.len() {
-        lines.push(&text[start..]);
-    }
-    lines
-}
-
-/// `difflib.SequenceMatcher(None, a, b).ratio()` (without the junk heuristic, which only applies
-/// to sequences of 200 or more elements).
-fn ratio(a: &[char], b: &[char]) -> f64 {
-    #[allow(clippy::needless_range_loop)]
-    fn longest(
-        a: &[char],
-        b: &[char],
-        alo: usize,
-        ahi: usize,
-        blo: usize,
-        bhi: usize,
-    ) -> (usize, usize, usize) {
-        let (mut best_i, mut best_j, mut best_size) = (alo, blo, 0);
-        let mut previous: std::collections::HashMap<usize, usize> =
-            std::collections::HashMap::new();
-        for i in alo..ahi {
-            let mut current: std::collections::HashMap<usize, usize> =
-                std::collections::HashMap::new();
-            for j in blo..bhi {
-                if a[i] == b[j] {
-                    let k = previous.get(&j.wrapping_sub(1)).copied().unwrap_or(0) + 1;
-                    current.insert(j, k);
-                    if k > best_size {
-                        best_i = i + 1 - k;
-                        best_j = j + 1 - k;
-                        best_size = k;
-                    }
-                }
-            }
-            previous = current;
-        }
-        (best_i, best_j, best_size)
-    }
-    fn matches(a: &[char], b: &[char], alo: usize, ahi: usize, blo: usize, bhi: usize) -> usize {
-        let (i, j, k) = longest(a, b, alo, ahi, blo, bhi);
-        if k == 0 {
-            return 0;
-        }
-        k + if alo < i && blo < j {
-            matches(a, b, alo, i, blo, j)
-        } else {
-            0
-        } + if i + k < ahi && j + k < bhi {
-            matches(a, b, i + k, ahi, j + k, bhi)
-        } else {
-            0
-        }
-    }
-    let total = a.len() + b.len();
-    if total == 0 {
-        return 1.0;
-    }
-    2.0 * matches(a, b, 0, a.len(), 0, b.len()) as f64 / total as f64
-}
-
-fn visualize_whitespace(text: &str) -> String {
-    text.chars()
-        .map(|c| match c {
-            '\t' => '→',
-            ' ' => '·',
-            other => other,
-        })
-        .collect()
-}
-
-/// Numbered snippets of the lines most similar to the anchor line of `old`, or "".
-fn closest_lines(old: &str, content: &str) -> String {
-    const CONTEXT: usize = 2;
-    if old.is_empty() || content.is_empty() {
-        return String::new();
-    }
-    let old_lines = split_lines(old);
-    let content_lines = split_lines(content);
-    if old_lines.is_empty() || content_lines.is_empty() {
-        return String::new();
-    }
-    let anchor = if old_lines[0].trim().is_empty() {
-        old_lines
-            .iter()
-            .map(|line| line.trim())
-            .find(|line| !line.is_empty())
-            .unwrap_or("")
-    } else {
-        old_lines[0].trim()
-    };
-    if anchor.is_empty() {
-        return String::new();
-    }
-    let anchor_chars: Vec<char> = anchor.chars().collect();
-    let mut scored: Vec<(f64, usize)> = content_lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| !line.trim().is_empty())
-        .map(|(index, line)| {
-            let chars: Vec<char> = line.trim().chars().collect();
-            (ratio(&anchor_chars, &chars), index)
-        })
-        .collect();
-    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let top: Vec<(f64, usize)> = scored.into_iter().filter(|s| s.0 > 0.3).take(3).collect();
-    if top.is_empty() {
-        return String::new();
-    }
-    let mut parts: Vec<String> = Vec::new();
-    let mut seen: Vec<(usize, usize)> = Vec::new();
-    for (_, line_index) in &top {
-        let start = line_index.saturating_sub(CONTEXT);
-        let end = content_lines
-            .len()
-            .min(line_index + old_lines.len() + CONTEXT);
-        if seen.contains(&(start, end)) {
-            continue;
-        }
-        seen.push((start, end));
-        parts.push(
-            (0..end - start)
-                .map(|j| format!("{:4}| {}", start + j + 1, content_lines[start + j]))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        );
-    }
-    let mut result = parts.join("\n---\n");
-    let best = content_lines[top[0].1];
-    if best.trim() == anchor && best != old_lines[0] {
-        result.push_str(&format!(
-            "\n\nWhitespace difference detected (→ = tab, · = space):\n  file has: {}\n  you sent: {}\nUse the exact whitespace shown in 'file has'.",
-            visualize_whitespace(best),
-            visualize_whitespace(old_lines[0])
-        ));
-    }
-    result
 }
 
 // ── One operation, then the batch ────────────────────────────────────────────────────────────────
@@ -1964,32 +1747,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_closest_lines_use_difflib_ratios() {
-        let a: Vec<char> = "abcd".chars().collect();
-        let b: Vec<char> = "bcde".chars().collect();
-        assert!((ratio(&a, &b) - 0.75).abs() < 1e-9);
-        assert!((ratio(&[], &[]) - 1.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn exact_replacement_counts_and_reports_matches() {
-        assert_eq!(
-            replace_exact("a b a", "a", "x", true),
-            Ok(("x b x".into(), 2))
-        );
-        assert!(replace_exact("a b a", "a", "x", false)
-            .unwrap_err()
-            .starts_with("Found 2 matches"));
-        assert!(replace_exact("abc", "zzz", "x", false)
-            .unwrap_err()
-            .starts_with("Could not find"));
-        assert_eq!(
-            replace_exact("abc", "abc", "abc", false),
-            Err(IDENTICAL_STRINGS_ERROR.into())
-        );
-    }
 
     fn visible_tree(root: &Path) -> serde_json::Map<String, Value> {
         fn walk(dir: &Path, base: &Path, out: &mut Vec<(String, String)>) {

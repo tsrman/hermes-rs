@@ -541,6 +541,7 @@ mod tests {
         let verbatim = [
             "clarify",
             "memory",
+            "patch",
             "skill_manage",
             "skill_view",
             "skills_list",
