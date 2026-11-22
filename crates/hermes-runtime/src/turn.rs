@@ -474,6 +474,27 @@ where
     let mut fallback_routes = fallbacks.iter();
     for _ in 0..options.max_turns {
         let result = loop {
+            // Before the request goes out: once the steps of this turn have outgrown the threshold,
+            // replace the early ones with a summary instead of waiting for the provider to refuse.
+            if squeezes < MAX_SQUEEZES {
+                if let Some(settings) = options.compression.filter(|s| {
+                    s.enabled() && s.over_threshold(messages_bytes(&sent) + messages_bytes(&tools))
+                }) {
+                    let summarizer = options.summarizer;
+                    if squeeze_turn(
+                        settings,
+                        summarizer.unwrap_or(route),
+                        summarizer.is_some(),
+                        &mut sent,
+                        first_new_message,
+                    )
+                    .await
+                    {
+                        squeezes += 1;
+                        on_event(TurnEvent::ContextSqueezed);
+                    }
+                }
+            }
             let request = chat_request(&route.model, &sent, &tools, options.prefill.unwrap_or(&[]));
             if let Some(journal) = options.journal {
                 journal.record_for(options.child, "request", json!({"body": request}));

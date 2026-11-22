@@ -32,6 +32,8 @@ class CliTest(unittest.TestCase):
             "test_context_overflow_after_a_tool_call_is_not_retried": "overflow_tools",
             "test_context_overflow_after_tool_calls_compresses_the_turns_earlier_steps": "overflow_midturn",
             "test_mid_turn_overflow_with_compression_disabled_is_an_error": "overflow_midturn",
+            "test_a_turn_over_the_threshold_compresses_its_earlier_steps_before_the_next_request": "pressure_midturn",
+            "test_a_turn_under_the_threshold_is_not_compressed": "pressure_midturn",
             "test_mcp_stdio_tool_is_exposed_and_called": "mcp",
             "test_todo_list_is_hidden_by_default_and_survives_a_resume": "todo",
             "test_memory_tool_writes_the_store_without_changing_the_prompt_snapshot": "memory",
@@ -297,6 +299,25 @@ class CliTest(unittest.TestCase):
                 "SELECT count(*) FROM messages WHERE session_id = ? AND role = 'tool'", (session,)).fetchone(), (3,))
             self.assertEqual(db.execute(
                 "SELECT count(*) FROM messages WHERE session_id = ? AND _compressed_summary = 1", (session,)).fetchone(), (0,))
+
+    def test_a_turn_over_the_threshold_compresses_its_earlier_steps_before_the_next_request(self):
+        # The provider never refuses: the runtime itself notices the request has outgrown the threshold.
+        config = "compression:\n  threshold_tokens: '50'\n"
+        result, recorded = self.chat_with_profile(extra_config=config)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "Ответ модели\n")
+        self.assertIn("replacing earlier steps of this turn with a summary", result.stderr)
+        tool_count = lambda request: sum(m.get("role") == "tool" for m in request["messages"])
+        self.assertEqual([tool_count(r) for r in recorded], [0, 1, 2, 0, 2])
+        self.assertNotIn("tools", recorded[3])
+        self.assertIn("[CONTEXT SUMMARY]", json.dumps(recorded[4]["messages"]))
+
+    def test_a_turn_under_the_threshold_is_not_compressed(self):
+        config = "compression:\n  threshold_tokens: '1000000'\n"
+        result, recorded = self.chat_with_profile(extra_config=config)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("replacing earlier steps", result.stderr)
+        self.assertNotIn("[CONTEXT SUMMARY]", json.dumps(recorded))
 
     def test_mid_turn_overflow_with_compression_disabled_is_an_error(self):
         result, recorded = self.chat_with_profile(extra_config="compression:\n  enabled: false\n")

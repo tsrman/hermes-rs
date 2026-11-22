@@ -71,6 +71,12 @@ impl CompactionSettings {
             .min();
     }
 
+    /// Whether a request of `bytes` has outgrown the compression threshold (about four bytes a token).
+    pub(crate) fn over_threshold(&self, bytes: usize) -> bool {
+        self.threshold
+            .is_some_and(|threshold| bytes.div_ceil(4) >= threshold)
+    }
+
     pub(crate) fn select(&self, history: &[Value], input_bytes: usize) -> Option<Range<usize>> {
         if input_bytes.div_ceil(4) < self.threshold? {
             return None;
@@ -244,6 +250,17 @@ mod in_turn_tests {
             messages.extend(exchange(&format!("c{index}")));
         }
         messages
+    }
+
+    #[test]
+    fn a_request_at_the_threshold_is_over_it_like_the_reference() {
+        let config: Yaml = serde_yaml::from_str("compression: {threshold_tokens: 100}").unwrap();
+        let settings = CompactionSettings::from_config(&config);
+        // About four bytes a token; the reference compresses once the tokens reach the threshold.
+        assert!(!settings.over_threshold(396));
+        assert!(settings.over_threshold(397));
+        assert!(settings.over_threshold(400));
+        assert!(!CompactionSettings::default().over_threshold(usize::MAX));
     }
 
     #[test]
