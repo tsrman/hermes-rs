@@ -33,8 +33,19 @@ pub enum Backend {
     Exa,
     Parallel,
     Firecrawl,
+    Keenable,
+    Xai,
     /// A backend of the Python agent that this crate does not implement.
     Unsupported(String),
+}
+
+/// `web.xai` of the config.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct XaiSettings {
+    pub model: Option<String>,
+    pub allowed_domains: Vec<String>,
+    pub excluded_domains: Vec<String>,
+    pub timeout_secs: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -55,8 +66,52 @@ pub struct WebSettings {
     pub parallel_mode: Option<String>,
     pub firecrawl_key: Option<String>,
     pub firecrawl_url: Option<String>,
+    pub keenable_key: Option<String>,
+    /// Only tests set this: the reference hard-codes Keenable's endpoint.
+    pub keenable_base: Option<String>,
+    pub xai_key: Option<String>,
+    pub xai_base: Option<String>,
+    pub xai: XaiSettings,
     pub char_limit: Option<usize>,
     pub allow_private_urls: bool,
+}
+
+impl XaiSettings {
+    fn from_config(block: Option<&serde_yaml::Value>) -> Self {
+        let Some(block) = block.filter(|block| block.is_mapping()) else {
+            return Self::default();
+        };
+        // At most five entries, strings only, trimmed and non-empty.
+        let domains = |key: &str| -> Vec<String> {
+            block
+                .get(key)
+                .and_then(serde_yaml::Value::as_sequence)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_yaml::Value::as_str)
+                        .map(|item| item.trim().to_owned())
+                        .filter(|item| !item.is_empty())
+                        .take(5)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        Self {
+            model: block
+                .get("model")
+                .and_then(serde_yaml::Value::as_str)
+                .map(|model| model.trim().to_owned())
+                .filter(|model| !model.is_empty()),
+            allowed_domains: domains("allowed_domains"),
+            excluded_domains: domains("excluded_domains"),
+            timeout_secs: block.get("timeout").and_then(|value| match value {
+                serde_yaml::Value::Number(number) => number.as_f64(),
+                serde_yaml::Value::String(text) => text.trim().parse().ok(),
+                _ => None,
+            }),
+        }
+    }
 }
 
 impl WebSettings {
@@ -111,6 +166,8 @@ impl WebSettings {
                 "exa" => Backend::Exa,
                 "parallel" => Backend::Parallel,
                 "firecrawl" => Backend::Firecrawl,
+                "keenable" => Backend::Keenable,
+                "xai" => Backend::Xai,
                 // The managed subscription is served by Firecrawl.
                 "nous" => Backend::Unsupported("firecrawl".into()),
                 other => Backend::Unsupported(other.to_owned()),
@@ -144,6 +201,11 @@ impl WebSettings {
             parallel_key: env("PARALLEL_API_KEY"),
             parallel_base: env("PARALLEL_BASE_URL"),
             parallel_mode: env("PARALLEL_SEARCH_MODE"),
+            keenable_key: env("KEENABLE_API_KEY"),
+            keenable_base: None,
+            xai_key: env("XAI_API_KEY"),
+            xai_base: env("XAI_BASE_URL").map(|url| url.trim_end_matches('/').to_owned()),
+            xai: XaiSettings::from_config(web.and_then(|web| web.get("xai"))),
             firecrawl_key: env("FIRECRAWL_API_KEY"),
             firecrawl_url: env("FIRECRAWL_API_URL").map(|url| url.trim_end_matches('/').to_owned()),
             char_limit: web
@@ -247,6 +309,8 @@ pub async fn search(settings: &WebSettings, arguments: &str) -> Value {
         Backend::Exa => crate::web_vendors::exa_search(settings, query, limit).await,
         Backend::Parallel => crate::web_vendors::parallel_search(settings, query, limit).await,
         Backend::Firecrawl => crate::web_vendors::firecrawl_search(settings, query, limit).await,
+        Backend::Keenable => crate::web_vendors::keenable_search(settings, query, limit).await,
+        Backend::Xai => crate::web_vendors::xai_search(settings, query, limit).await,
         Backend::Unsupported(name) => failure(unsupported(name)),
         Backend::None => {
             failure("No web search provider configured. Run `hermes tools` to set one up.")
@@ -257,7 +321,7 @@ pub async fn search(settings: &WebSettings, arguments: &str) -> Value {
 
 fn unsupported(name: &str) -> String {
     format!(
-        "The web backend '{name}' is not supported by the Rust CLI yet. Set web.backend to tavily, perplexity, exa, parallel, firecrawl, searxng (search only) or brave-free (search only)."
+        "The web backend '{name}' is not supported by the Rust CLI yet. Set web.backend to tavily, perplexity, exa, parallel, firecrawl, keenable, xai (search only), searxng (search only) or brave-free (search only)."
     )
 }
 
@@ -712,6 +776,13 @@ pub async fn extract(settings: &WebSettings, arguments: &str) -> Value {
             Backend::Exa => crate::web_vendors::exa_extract(settings, &urls).await,
             Backend::Parallel => crate::web_vendors::parallel_extract(settings, &urls).await,
             Backend::Firecrawl => crate::web_vendors::firecrawl_extract(settings, &urls).await,
+            Backend::Keenable => crate::web_vendors::keenable_extract(settings, &urls).await,
+            Backend::Xai => {
+                return Value::String(
+                    json!({"success": false, "error": "xAI Web Search (Grok) is a search-only backend and cannot extract URL content. Set web.extract_backend to firecrawl, tavily, keenable, exa, or parallel."})
+                        .to_string(),
+                );
+            }
             Backend::Searxng | Backend::BraveFree => {
                 let name = if settings.extract == Backend::Searxng {
                     "SearXNG"
@@ -1017,7 +1088,9 @@ mod settings_tests {
             "{}",
             &[("KEENABLE_API_KEY", "k"), ("SEARXNG_URL", "http://s")],
         );
-        assert_eq!(keenable.search, Backend::Unsupported("keenable".into()));
+        assert_eq!(keenable.search, Backend::Keenable);
+        let native = load("web: {search_backend: openai-native}", &[]);
+        assert_eq!(native.search, Backend::Unsupported("openai-native".into()));
         // Per-capability pins beat the shared backend.
         let pinned = load(
             "web: {backend: tavily, search_backend: Brave-Free, extract_backend: firecrawl}",

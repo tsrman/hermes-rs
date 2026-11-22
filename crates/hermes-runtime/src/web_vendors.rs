@@ -610,3 +610,380 @@ async fn firecrawl_scrape(settings: &WebSettings, url: &str) -> Value {
     });
     json!({"url": final_url, "title": title, "content": content, "raw_content": content, "error": error})
 }
+
+// ---- Keenable ----
+
+fn keenable_headers(request: reqwest::RequestBuilder, key: &str) -> reqwest::RequestBuilder {
+    request
+        .header("X-Keenable-Title", "hermes-agent")
+        .bearer_auth(key)
+}
+
+/// A response body for an error status, or `HTTP <code>` when it is empty.
+fn status_detail(status: u16, body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        format!("HTTP {status}")
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+fn keenable_base(settings: &WebSettings) -> &str {
+    settings
+        .keenable_base
+        .as_deref()
+        .unwrap_or("https://api.keenable.ai")
+        .trim_end_matches('/')
+}
+
+pub(crate) async fn keenable_search(settings: &WebSettings, query: &str, limit: usize) -> Value {
+    let Some(key) = settings.keenable_key.as_deref() else {
+        return failure(format!("KEENABLE_API_KEY is not set. {KEYLESS}"));
+    };
+    let payload = json!({"query": query, "max_results": limit.clamp(1, LIMIT_CAP)});
+    let http = match client(Duration::from_secs(30)) {
+        Ok(http) => http,
+        Err(error) => return failure(format!("Keenable search failed: {error}")),
+    };
+    let request = keenable_headers(
+        http.post(format!("{}/v1/search", keenable_base(settings))),
+        key,
+    )
+    .json(&payload);
+    let (status, body) = match send_text(request).await {
+        Ok(reply) => reply,
+        Err(error) => return failure(format!("Keenable search failed: {error}")),
+    };
+    if status >= 400 {
+        return failure(format!(
+            "Keenable search failed: {}",
+            status_detail(status, &body)
+        ));
+    }
+    let Ok(data) = serde_json::from_str::<Value>(&body) else {
+        return failure("Keenable search failed: Expecting value: line 1 column 1 (char 0)");
+    };
+    search_ok(
+        data["results"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .map(|(index, result)| {
+                let snippet = text(&result["snippet"]);
+                let description = if snippet.is_empty() {
+                    text(&result["description"])
+                } else {
+                    snippet
+                };
+                hit(
+                    text(&result["url"]),
+                    text(&result["title"]),
+                    description,
+                    index + 1,
+                )
+            })
+            .collect(),
+    )
+}
+
+async fn send_text(request: reqwest::RequestBuilder) -> Result<(u16, String), String> {
+    let response = request
+        .send()
+        .await
+        .map_err(|error| error.without_url().to_string())?;
+    let status = response.status().as_u16();
+    let body = read_body(response).await?;
+    Ok((status, String::from_utf8_lossy(&body).into_owned()))
+}
+
+/// `HTTP <status> from origin: <message>` when a fetch error describes the target's own answer
+/// (not Keenable's rate limit, authentication or server errors).
+fn keenable_origin_error(status: u16, body: &str) -> Option<String> {
+    let data = serde_json::from_str::<Value>(body).ok()?;
+    let message = data
+        .as_object()?
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    let lower = message.to_lowercase();
+    let origin = ["the target server", "the page does not exist"]
+        .iter()
+        .any(|prefix| {
+            lower
+                .strip_prefix(prefix)
+                .is_some_and(|rest| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+        });
+    (origin && status >= 400).then(|| format!("HTTP {status} from origin: {message}"))
+}
+
+pub(crate) async fn keenable_extract(settings: &WebSettings, urls: &[String]) -> Vec<Value> {
+    let Some(key) = settings.keenable_key.as_deref() else {
+        let message = format!("KEENABLE_API_KEY is not set. {KEYLESS}");
+        return urls.iter().map(|url| entry(url, Some(&message))).collect();
+    };
+    let http = match client(Duration::from_secs(30)) {
+        Ok(http) => http,
+        Err(error) => {
+            let message = format!("Keenable extract failed: {error}");
+            return urls.iter().map(|url| entry(url, Some(&message))).collect();
+        }
+    };
+    let mut pages = Vec::new();
+    for url in urls {
+        let request = keenable_headers(
+            http.get(format!("{}/v1/fetch", keenable_base(settings))),
+            key,
+        )
+        .query(&[("url", url.as_str())]);
+        let failed =
+            |detail: String| entry(url, Some(&format!("Keenable extract failed: {detail}")));
+        let (status, body) = match send_text(request).await {
+            Ok(reply) => reply,
+            Err(error) => {
+                pages.push(failed(error));
+                continue;
+            }
+        };
+        if status >= 400 {
+            pages.push(match keenable_origin_error(status, &body) {
+                Some(origin) => entry(url, Some(&origin)),
+                None => failed(status_detail(status, &body)),
+            });
+            continue;
+        }
+        let Ok(data) = serde_json::from_str::<Value>(&body) else {
+            pages.push(failed("Expecting value: line 1 column 1 (char 0)".into()));
+            continue;
+        };
+        let final_url = Some(text(&data["url"]))
+            .filter(|u| !u.is_empty())
+            .unwrap_or(url);
+        let mut page = document(final_url, text(&data["title"]), text(&data["content"]));
+        page["metadata"]["sourceURL"] = json!(url);
+        pages.push(page);
+    }
+    pages
+}
+
+// ---- xAI (search only, through the Responses API web_search tool) ----
+
+fn xai_prompt(query: &str, limit: usize) -> String {
+    format!(
+        "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object \u{2014} no prose, no markdown fences, no inline citation links \u{2014} matching this exact schema:\n\n{{\"results\": [{{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}}]}}\n\nReturn at most {limit} results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {{\"results\": []}}.\n\nQuery: {query}"
+    )
+}
+
+/// A row with the title first (the historical shape of the xAI, Brave and Tavily results).
+fn title_hit(title: &str, url: &str, description: &str, position: usize) -> Value {
+    json!({"title": title, "url": url, "description": description, "position": position})
+}
+
+/// Python's `str(value).strip()` for the JSON values a result row can hold.
+fn py_str(value: Option<&Value>) -> String {
+    match value {
+        None => String::new(),
+        Some(Value::Null) => "None".into(),
+        Some(Value::Bool(true)) => "True".into(),
+        Some(Value::Bool(false)) => "False".into(),
+        Some(Value::String(string)) => string.trim().to_owned(),
+        Some(other) => python_repr(other).trim().to_owned(),
+    }
+}
+
+fn xai_rows_from_json(block: &str, limit: usize) -> Option<Vec<Value>> {
+    let start = block.find('{');
+    let end = block.rfind('}');
+    let mut candidates = vec![block.to_owned()];
+    if let (Some(start), Some(end)) = (start, end) {
+        if end >= start && &block[start..=end] != block {
+            candidates.push(block[start..=end].to_owned());
+        }
+    }
+    for candidate in candidates {
+        let Ok(parsed) = serde_json::from_str::<Value>(&candidate) else {
+            continue;
+        };
+        let Some(results) = parsed.get("results").and_then(Value::as_array) else {
+            continue;
+        };
+        let mut rows: Vec<Value> = Vec::new();
+        for row in results.iter().take(limit) {
+            let Some(object) = row.as_object() else {
+                continue;
+            };
+            let url = py_str(object.get("url"));
+            if !url.is_empty() {
+                let position = rows.len() + 1;
+                rows.push(title_hit(
+                    &py_str(object.get("title")),
+                    &url,
+                    &py_str(object.get("description")),
+                    position,
+                ));
+            }
+        }
+        if !rows.is_empty() {
+            return Some(rows);
+        }
+    }
+    None
+}
+
+fn xai_rows_from_annotations(annotations: &[&Value], joined: &str, limit: usize) -> Vec<Value> {
+    let chars: Vec<char> = joined.chars().collect();
+    let mut seen: Vec<String> = Vec::new();
+    let mut rows = Vec::new();
+    for annotation in annotations {
+        let url = if annotation["type"] == "url_citation" {
+            py_str(annotation.get("url"))
+        } else {
+            String::new()
+        };
+        if url.is_empty() || seen.contains(&url) {
+            continue;
+        }
+        seen.push(url.clone());
+        let mut description = String::new();
+        if let (Some(start), Some(end)) = (
+            annotation["start_index"].as_i64(),
+            annotation["end_index"].as_i64(),
+        ) {
+            if 0 <= start && start < end && end as usize <= chars.len() {
+                let from = (start as usize).saturating_sub(200);
+                description = chars[from..start as usize]
+                    .iter()
+                    .collect::<String>()
+                    .trim()
+                    .to_owned();
+            }
+        }
+        let position = rows.len() + 1;
+        rows.push(title_hit("", &url, &description, position));
+        if rows.len() >= limit {
+            break;
+        }
+    }
+    rows
+}
+
+fn xai_rows(response: &Value, limit: usize) -> Vec<Value> {
+    let mut blocks: Vec<String> = Vec::new();
+    let mut annotations: Vec<&Value> = Vec::new();
+    for item in response["output"].as_array().into_iter().flatten() {
+        if item["type"] != "message" {
+            continue;
+        }
+        for chunk in item["content"].as_array().into_iter().flatten() {
+            if chunk["type"] != "output_text" {
+                continue;
+            }
+            if let Some(block) = chunk["text"]
+                .as_str()
+                .filter(|block| !block.trim().is_empty())
+            {
+                blocks.push(block.to_owned());
+            }
+            annotations.extend(
+                chunk["annotations"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|a| a.is_object()),
+            );
+        }
+    }
+    if let Some(rows) = blocks
+        .iter()
+        .find_map(|block| xai_rows_from_json(block, limit))
+    {
+        return rows;
+    }
+    if !annotations.is_empty() {
+        let rows = xai_rows_from_annotations(&annotations, &blocks.join("\n"), limit);
+        if !rows.is_empty() {
+            return rows;
+        }
+    }
+    response["citations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(limit)
+        .enumerate()
+        .filter_map(|(index, url)| {
+            url.as_str()
+                .filter(|u| !u.trim().is_empty())
+                .map(|u| title_hit("", u, "", index + 1))
+        })
+        .collect()
+}
+
+pub(crate) async fn xai_search(settings: &WebSettings, query: &str, limit: usize) -> Value {
+    let Some(key) = settings.xai_key.as_deref() else {
+        return failure("No xAI credentials found. Set XAI_API_KEY (Grok OAuth sign-in is not available in the Rust CLI).");
+    };
+    let base = settings
+        .xai_base
+        .as_deref()
+        .unwrap_or("https://api.x.ai/v1");
+    let config = &settings.xai;
+    if !config.allowed_domains.is_empty() && !config.excluded_domains.is_empty() {
+        return failure("web.xai.allowed_domains and web.xai.excluded_domains cannot both be set (xAI restriction).");
+    }
+    let mut tool = json!({"type": "web_search"});
+    if !config.allowed_domains.is_empty() {
+        tool["filters"] = json!({"allowed_domains": config.allowed_domains});
+    } else if !config.excluded_domains.is_empty() {
+        tool["filters"] = json!({"excluded_domains": config.excluded_domains});
+    }
+    let payload = json!({
+        "model": config.model.as_deref().unwrap_or("grok-build-0.1"),
+        "input": [{"role": "user", "content": xai_prompt(query, limit)}],
+        "tools": [tool],
+        "include": ["no_inline_citations"]
+    });
+    let timeout = config
+        .timeout_secs
+        .filter(|secs| *secs > 0.0)
+        .unwrap_or(90.0);
+    let http = match client(Duration::from_secs_f64(timeout)) {
+        Ok(http) => http,
+        Err(error) => return failure(format!("Could not reach xAI: {error}")),
+    };
+    let request = http
+        .post(format!("{base}/responses"))
+        .bearer_auth(key)
+        .header(
+            "User-Agent",
+            concat!("Hermes-Agent/", env!("CARGO_PKG_VERSION")),
+        )
+        .json(&payload);
+    let (status, body) = match send_text(request).await {
+        Ok(reply) => reply,
+        Err(error) => return failure(format!("Could not reach xAI: {error}")),
+    };
+    if status >= 400 {
+        let shown: String = body.chars().take(300).collect();
+        return failure(
+            format!("xAI web search returned HTTP {status}: {shown}")
+                .trim_end()
+                .to_owned(),
+        );
+    }
+    let Ok(data) = serde_json::from_str::<Value>(&body) else {
+        return failure("Could not parse xAI Responses API reply as JSON");
+    };
+    if let Some(error) = data.get("error").filter(|error| error.is_object()) {
+        let message = ["message", "code"]
+            .iter()
+            .map(|key| text(&error[*key]))
+            .find(|message| !message.is_empty())
+            .unwrap_or("unknown error");
+        return failure(format!("xAI returned an error: {message}"));
+    }
+    search_ok(xai_rows(&data, limit))
+}

@@ -1,0 +1,2903 @@
+[
+ {
+  "vendor": "keenable",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 200,
+   "text": "{\"results\": [{\"url\": \"http://93.184.216.34/a\", \"title\": \"A\", \"snippet\": \"alpha\", \"description\": \"ignored\"}, {\"url\": \"http://93.184.216.34/b\", \"title\": null, \"description\": \"beta\"}, {\"url\": null}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/v1/search",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": {
+     "query": "python asyncio",
+     "max_results": 5
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "url": "http://93.184.216.34/a",
+      "title": "A",
+      "description": "alpha",
+      "position": 1
+     },
+     {
+      "url": "http://93.184.216.34/b",
+      "title": "",
+      "description": "beta",
+      "position": 2
+     },
+     {
+      "url": "",
+      "title": "",
+      "description": "",
+      "position": 3
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "keenable",
+  "kind": "search",
+  "query": "many",
+  "limit": 50,
+  "answer": {
+   "status": 200,
+   "text": "{\"results\": [{\"url\": \"http://93.184.216.34/a\", \"title\": \"A\", \"snippet\": \"alpha\", \"description\": \"ignored\"}, {\"url\": \"http://93.184.216.34/b\", \"title\": null, \"description\": \"beta\"}, {\"url\": null}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/v1/search",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": {
+     "query": "many",
+     "max_results": 20
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "url": "http://93.184.216.34/a",
+      "title": "A",
+      "description": "alpha",
+      "position": 1
+     },
+     {
+      "url": "http://93.184.216.34/b",
+      "title": "",
+      "description": "beta",
+      "position": 2
+     },
+     {
+      "url": "",
+      "title": "",
+      "description": "",
+      "position": 3
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "keenable",
+  "kind": "search",
+  "query": "zero",
+  "limit": 0,
+  "answer": {
+   "status": 200,
+   "text": "{\"results\": [{\"url\": \"http://93.184.216.34/a\", \"title\": \"A\", \"snippet\": \"alpha\", \"description\": \"ignored\"}, {\"url\": \"http://93.184.216.34/b\", \"title\": null, \"description\": \"beta\"}, {\"url\": null}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/v1/search",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": {
+     "query": "zero",
+     "max_results": 1
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "url": "http://93.184.216.34/a",
+      "title": "A",
+      "description": "alpha",
+      "position": 1
+     },
+     {
+      "url": "http://93.184.216.34/b",
+      "title": "",
+      "description": "beta",
+      "position": 2
+     },
+     {
+      "url": "",
+      "title": "",
+      "description": "",
+      "position": 3
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "keenable",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 200,
+   "text": "{\"results\": null}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/v1/search",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": {
+     "query": "python asyncio",
+     "max_results": 5
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "vendor": "keenable",
+  "kind": "search",
+  "query": "many",
+  "limit": 50,
+  "answer": {
+   "status": 200,
+   "text": "{\"results\": null}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/v1/search",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": {
+     "query": "many",
+     "max_results": 20
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "vendor": "keenable",
+  "kind": "search",
+  "query": "zero",
+  "limit": 0,
+  "answer": {
+   "status": 200,
+   "text": "{\"results\": null}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/v1/search",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": {
+     "query": "zero",
+     "max_results": 1
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "vendor": "keenable",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 429,
+   "text": "slow down"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/v1/search",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": {
+     "query": "python asyncio",
+     "max_results": 5
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Keenable search failed: slow down"
+  }
+ },
+ {
+  "vendor": "keenable",
+  "kind": "search",
+  "query": "many",
+  "limit": 50,
+  "answer": {
+   "status": 429,
+   "text": "slow down"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/v1/search",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": {
+     "query": "many",
+     "max_results": 20
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Keenable search failed: slow down"
+  }
+ },
+ {
+  "vendor": "keenable",
+  "kind": "search",
+  "query": "zero",
+  "limit": 0,
+  "answer": {
+   "status": 429,
+   "text": "slow down"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/v1/search",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": {
+     "query": "zero",
+     "max_results": 1
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Keenable search failed: slow down"
+  }
+ },
+ {
+  "vendor": "keenable",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "answer": {
+   "status": 401,
+   "text": ""
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/v1/search",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": {
+     "query": "python asyncio",
+     "max_results": 5
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Keenable search failed: HTTP 401"
+  }
+ },
+ {
+  "vendor": "keenable",
+  "kind": "search",
+  "query": "many",
+  "limit": 50,
+  "answer": {
+   "status": 401,
+   "text": ""
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/v1/search",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": {
+     "query": "many",
+     "max_results": 20
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Keenable search failed: HTTP 401"
+  }
+ },
+ {
+  "vendor": "keenable",
+  "kind": "search",
+  "query": "zero",
+  "limit": 0,
+  "answer": {
+   "status": 401,
+   "text": ""
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/v1/search",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": {
+     "query": "zero",
+     "max_results": 1
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Keenable search failed: HTTP 401"
+  }
+ },
+ {
+  "vendor": "keenable",
+  "kind": "extract",
+  "urls": [
+   "http://93.184.216.34/a",
+   "http://93.184.216.34/b"
+  ],
+  "answer": {
+   "status": 200,
+   "text": "{\"url\": \"http://93.184.216.34/final\", \"title\": \"T\", \"content\": \"body\"}"
+  },
+  "requests": [
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/a"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   },
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/b"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/final",
+    "title": "T",
+    "content": "body",
+    "raw_content": "body",
+    "metadata": {
+     "sourceURL": "http://93.184.216.34/a",
+     "title": "T"
+    }
+   },
+   {
+    "url": "http://93.184.216.34/final",
+    "title": "T",
+    "content": "body",
+    "raw_content": "body",
+    "metadata": {
+     "sourceURL": "http://93.184.216.34/b",
+     "title": "T"
+    }
+   }
+  ]
+ },
+ {
+  "vendor": "keenable",
+  "kind": "extract",
+  "urls": [
+   "http://93.184.216.34/a",
+   "http://93.184.216.34/b"
+  ],
+  "answer": {
+   "status": 200,
+   "text": "{\"content\": null}"
+  },
+  "requests": [
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/a"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   },
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/b"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://93.184.216.34/a",
+     "title": ""
+    }
+   },
+   {
+    "url": "http://93.184.216.34/b",
+    "title": "",
+    "content": "",
+    "raw_content": "",
+    "metadata": {
+     "sourceURL": "http://93.184.216.34/b",
+     "title": ""
+    }
+   }
+  ]
+ },
+ {
+  "vendor": "keenable",
+  "kind": "extract",
+  "urls": [
+   "http://93.184.216.34/a",
+   "http://93.184.216.34/b"
+  ],
+  "answer": {
+   "status": 404,
+   "text": "{\"message\": \"the page does not exist\", \"code\": \"x\"}"
+  },
+  "requests": [
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/a"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   },
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/b"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "error": "HTTP 404 from origin: the page does not exist"
+   },
+   {
+    "url": "http://93.184.216.34/b",
+    "title": "",
+    "content": "",
+    "error": "HTTP 404 from origin: the page does not exist"
+   }
+  ]
+ },
+ {
+  "vendor": "keenable",
+  "kind": "extract",
+  "urls": [
+   "http://93.184.216.34/a",
+   "http://93.184.216.34/b"
+  ],
+  "answer": {
+   "status": 403,
+   "text": "{\"message\": \"the target server refused\"}"
+  },
+  "requests": [
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/a"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   },
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/b"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "error": "HTTP 403 from origin: the target server refused"
+   },
+   {
+    "url": "http://93.184.216.34/b",
+    "title": "",
+    "content": "",
+    "error": "HTTP 403 from origin: the target server refused"
+   }
+  ]
+ },
+ {
+  "vendor": "keenable",
+  "kind": "extract",
+  "urls": [
+   "http://93.184.216.34/a",
+   "http://93.184.216.34/b"
+  ],
+  "answer": {
+   "status": 429,
+   "text": "{\"message\": \"client rate limit\"}"
+  },
+  "requests": [
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/a"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   },
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/b"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "error": "Keenable extract failed: {\"message\": \"client rate limit\"}"
+   },
+   {
+    "url": "http://93.184.216.34/b",
+    "title": "",
+    "content": "",
+    "error": "Keenable extract failed: {\"message\": \"client rate limit\"}"
+   }
+  ]
+ },
+ {
+  "vendor": "keenable",
+  "kind": "extract",
+  "urls": [
+   "http://93.184.216.34/a",
+   "http://93.184.216.34/b"
+  ],
+  "answer": {
+   "status": 500,
+   "text": ""
+  },
+  "requests": [
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/a"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   },
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/b"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "error": "Keenable extract failed: HTTP 500"
+   },
+   {
+    "url": "http://93.184.216.34/b",
+    "title": "",
+    "content": "",
+    "error": "Keenable extract failed: HTTP 500"
+   }
+  ]
+ },
+ {
+  "vendor": "keenable",
+  "kind": "extract",
+  "urls": [
+   "http://93.184.216.34/a",
+   "http://93.184.216.34/b"
+  ],
+  "answer": {
+   "status": 200,
+   "text": "not json"
+  },
+  "requests": [
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/a"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   },
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/b"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "error": "Keenable extract failed: Expecting value: line 1 column 1 (char 0)"
+   },
+   {
+    "url": "http://93.184.216.34/b",
+    "title": "",
+    "content": "",
+    "error": "Keenable extract failed: Expecting value: line 1 column 1 (char 0)"
+   }
+  ]
+ },
+ {
+  "vendor": "keenable",
+  "kind": "extract",
+  "urls": [
+   "http://93.184.216.34/a",
+   "http://93.184.216.34/b"
+  ],
+  "answer": {
+   "status": 404,
+   "text": "{\"message\": \"the page is gone\"}"
+  },
+  "requests": [
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/a"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   },
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/b"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "error": "Keenable extract failed: {\"message\": \"the page is gone\"}"
+   },
+   {
+    "url": "http://93.184.216.34/b",
+    "title": "",
+    "content": "",
+    "error": "Keenable extract failed: {\"message\": \"the page is gone\"}"
+   }
+  ]
+ },
+ {
+  "vendor": "keenable",
+  "kind": "extract",
+  "urls": [
+   "http://93.184.216.34/a",
+   "http://93.184.216.34/b"
+  ],
+  "answer": {
+   "status": 404,
+   "text": "{\"message\": \"The Target Server said no\"}"
+  },
+  "requests": [
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/a"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   },
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/b"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "error": "HTTP 404 from origin: The Target Server said no"
+   },
+   {
+    "url": "http://93.184.216.34/b",
+    "title": "",
+    "content": "",
+    "error": "HTTP 404 from origin: The Target Server said no"
+   }
+  ]
+ },
+ {
+  "vendor": "keenable",
+  "kind": "extract",
+  "urls": [
+   "http://93.184.216.34/a",
+   "http://93.184.216.34/b"
+  ],
+  "answer": {
+   "status": 404,
+   "text": "{\"message\": \"the target servers ran\"}"
+  },
+  "requests": [
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/a"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   },
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/b"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "error": "Keenable extract failed: {\"message\": \"the target servers ran\"}"
+   },
+   {
+    "url": "http://93.184.216.34/b",
+    "title": "",
+    "content": "",
+    "error": "Keenable extract failed: {\"message\": \"the target servers ran\"}"
+   }
+  ]
+ },
+ {
+  "vendor": "keenable",
+  "kind": "extract",
+  "urls": [
+   "http://93.184.216.34/a",
+   "http://93.184.216.34/b"
+  ],
+  "answer": {
+   "status": 404,
+   "text": "[\"the page does not exist\"]"
+  },
+  "requests": [
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/a"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   },
+   {
+    "method": "GET",
+    "path": "/v1/fetch",
+    "query": {
+     "url": "http://93.184.216.34/b"
+    },
+    "auth": "Bearer <key>",
+    "title": "hermes-agent",
+    "agent": null,
+    "body": null
+   }
+  ],
+  "result": [
+   {
+    "url": "http://93.184.216.34/a",
+    "title": "",
+    "content": "",
+    "error": "Keenable extract failed: [\"the page does not exist\"]"
+   },
+   {
+    "url": "http://93.184.216.34/b",
+    "title": "",
+    "content": "",
+    "error": "Keenable extract failed: [\"the page does not exist\"]"
+   }
+  ]
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"{\\\"results\\\": [{\\\"title\\\": \\\" A \\\", \\\"url\\\": \\\"http://93.184.216.34/a\\\", \\\"description\\\": \\\"alpha\\\"}, {\\\"title\\\": \\\"no url\\\", \\\"url\\\": \\\"\\\"}, {\\\"title\\\": \\\"B\\\", \\\"url\\\": \\\"http://93.184.216.34/b\\\"}, 5]}\"}]}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "A",
+      "url": "http://93.184.216.34/a",
+      "description": "alpha",
+      "position": 1
+     },
+     {
+      "title": "B",
+      "url": "http://93.184.216.34/b",
+      "description": "",
+      "position": 2
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"{\\\"results\\\": [{\\\"title\\\": \\\" A \\\", \\\"url\\\": \\\"http://93.184.216.34/a\\\", \\\"description\\\": \\\"alpha\\\"}, {\\\"title\\\": \\\"no url\\\", \\\"url\\\": \\\"\\\"}, {\\\"title\\\": \\\"B\\\", \\\"url\\\": \\\"http://93.184.216.34/b\\\"}, 5]}\"}]}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "A",
+      "url": "http://93.184.216.34/a",
+      "description": "alpha",
+      "position": 1
+     },
+     {
+      "title": "B",
+      "url": "http://93.184.216.34/b",
+      "description": "",
+      "position": 2
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"Sure! {\\\"results\\\": [{\\\"title\\\": \\\"P\\\", \\\"url\\\": \\\"http://93.184.216.34/p\\\", \\\"description\\\": \\\"prose\\\"}]} done\"}]}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "P",
+      "url": "http://93.184.216.34/p",
+      "description": "prose",
+      "position": 1
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"Sure! {\\\"results\\\": [{\\\"title\\\": \\\"P\\\", \\\"url\\\": \\\"http://93.184.216.34/p\\\", \\\"description\\\": \\\"prose\\\"}]} done\"}]}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "P",
+      "url": "http://93.184.216.34/p",
+      "description": "prose",
+      "position": 1
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"no json here\", \"annotations\": [{\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/c1\", \"start_index\": 3, \"end_index\": 6}, {\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/c1\"}, {\"type\": \"other\", \"url\": \"http://93.184.216.34/c2\"}, {\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/c3\", \"start_index\": 0, \"end_index\": 2}]}]}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "",
+      "url": "http://93.184.216.34/c1",
+      "description": "no",
+      "position": 1
+     },
+     {
+      "title": "",
+      "url": "http://93.184.216.34/c3",
+      "description": "",
+      "position": 2
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"no json here\", \"annotations\": [{\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/c1\", \"start_index\": 3, \"end_index\": 6}, {\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/c1\"}, {\"type\": \"other\", \"url\": \"http://93.184.216.34/c2\"}, {\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/c3\", \"start_index\": 0, \"end_index\": 2}]}]}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "",
+      "url": "http://93.184.216.34/c1",
+      "description": "no",
+      "position": 1
+     },
+     {
+      "title": "",
+      "url": "http://93.184.216.34/c3",
+      "description": "",
+      "position": 2
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmn\", \"annotations\": [{\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/d1\", \"start_index\": 250, \"end_index\": 260}, {\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/d2\", \"start_index\": 100, \"end_index\": 301}, {\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/d3\", \"start_index\": 100, \"end_index\": 300}, {\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/d4\", \"start_index\": 5, \"end_index\": 6}, {\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/d5\", \"start_index\": 6, \"end_index\": 6}]}]}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "",
+      "url": "http://93.184.216.34/d1",
+      "description": "yzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnop",
+      "position": 1
+     },
+     {
+      "title": "",
+      "url": "http://93.184.216.34/d2",
+      "description": "",
+      "position": 2
+     },
+     {
+      "title": "",
+      "url": "http://93.184.216.34/d3",
+      "description": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuv",
+      "position": 3
+     },
+     {
+      "title": "",
+      "url": "http://93.184.216.34/d4",
+      "description": "abcde",
+      "position": 4
+     },
+     {
+      "title": "",
+      "url": "http://93.184.216.34/d5",
+      "description": "",
+      "position": 5
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmn\", \"annotations\": [{\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/d1\", \"start_index\": 250, \"end_index\": 260}, {\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/d2\", \"start_index\": 100, \"end_index\": 301}, {\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/d3\", \"start_index\": 100, \"end_index\": 300}, {\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/d4\", \"start_index\": 5, \"end_index\": 6}, {\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/d5\", \"start_index\": 6, \"end_index\": 6}]}]}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "",
+      "url": "http://93.184.216.34/d1",
+      "description": "yzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnop",
+      "position": 1
+     },
+     {
+      "title": "",
+      "url": "http://93.184.216.34/d2",
+      "description": "",
+      "position": 2
+     },
+     {
+      "title": "",
+      "url": "http://93.184.216.34/d3",
+      "description": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuv",
+      "position": 3
+     },
+     {
+      "title": "",
+      "url": "http://93.184.216.34/d4",
+      "description": "abcde",
+      "position": 4
+     },
+     {
+      "title": "",
+      "url": "http://93.184.216.34/d5",
+      "description": "",
+      "position": 5
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"  pad   text  here\", \"annotations\": [{\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/e1\", \"start_index\": 9, \"end_index\": 12}]}]}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "",
+      "url": "http://93.184.216.34/e1",
+      "description": "pad   t",
+      "position": 1
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"  pad   text  here\", \"annotations\": [{\"type\": \"url_citation\", \"url\": \"http://93.184.216.34/e1\", \"start_index\": 9, \"end_index\": 12}]}]}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "",
+      "url": "http://93.184.216.34/e1",
+      "description": "pad   t",
+      "position": 1
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"{\\\"results\\\": [{\\\"title\\\": null, \\\"url\\\": \\\"http://93.184.216.34/n\\\", \\\"description\\\": 5}, {\\\"title\\\": true, \\\"url\\\": \\\"http://93.184.216.34/t\\\", \\\"description\\\": [\\\"x\\\", 1]}, {\\\"title\\\": \\\"k\\\", \\\"url\\\": 7}]}\"}]}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "None",
+      "url": "http://93.184.216.34/n",
+      "description": "5",
+      "position": 1
+     },
+     {
+      "title": "True",
+      "url": "http://93.184.216.34/t",
+      "description": "['x', 1]",
+      "position": 2
+     },
+     {
+      "title": "k",
+      "url": "7",
+      "description": "",
+      "position": 3
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"{\\\"results\\\": [{\\\"title\\\": null, \\\"url\\\": \\\"http://93.184.216.34/n\\\", \\\"description\\\": 5}, {\\\"title\\\": true, \\\"url\\\": \\\"http://93.184.216.34/t\\\", \\\"description\\\": [\\\"x\\\", 1]}, {\\\"title\\\": \\\"k\\\", \\\"url\\\": 7}]}\"}]}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "None",
+      "url": "http://93.184.216.34/n",
+      "description": "5",
+      "position": 1
+     },
+     {
+      "title": "True",
+      "url": "http://93.184.216.34/t",
+      "description": "['x', 1]",
+      "position": 2
+     },
+     {
+      "title": "k",
+      "url": "7",
+      "description": "",
+      "position": 3
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"error\": {\"message\": \"m\", \"code\": \"c\"}}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI returned an error: m"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"error\": {\"message\": \"m\", \"code\": \"c\"}}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI returned an error: m"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"error\": {\"message\": \"\", \"code\": \"c\"}}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI returned an error: c"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"error\": {\"message\": \"\", \"code\": \"c\"}}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI returned an error: c"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 400,
+   "text": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI web search returned HTTP 400: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 400,
+   "text": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI web search returned HTTP 400: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 400,
+   "text": "  padded body \n"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI web search returned HTTP 400:   padded body"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 400,
+   "text": "  padded body \n"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI web search returned HTTP 400:   padded body"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [], \"citations\": [\"http://93.184.216.34/x\", \"  \", 5, \"http://93.184.216.34/y\"]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "",
+      "url": "http://93.184.216.34/x",
+      "description": "",
+      "position": 1
+     },
+     {
+      "title": "",
+      "url": "http://93.184.216.34/y",
+      "description": "",
+      "position": 4
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [], \"citations\": [\"http://93.184.216.34/x\", \"  \", 5, \"http://93.184.216.34/y\"]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "",
+      "url": "http://93.184.216.34/x",
+      "description": "",
+      "position": 1
+     },
+     {
+      "title": "",
+      "url": "http://93.184.216.34/y",
+      "description": "",
+      "position": 4
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": []}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": []}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": []
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"error\": {\"message\": \"overloaded\"}}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI returned an error: overloaded"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"error\": {\"message\": \"overloaded\"}}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI returned an error: overloaded"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"error\": {\"code\": \"refused\"}}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI returned an error: refused"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"error\": {\"code\": \"refused\"}}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI returned an error: refused"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"error\": {}}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI returned an error: unknown error"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "{\"error\": {}}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI returned an error: unknown error"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 500,
+   "text": "server broke"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI web search returned HTTP 500: server broke"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 500,
+   "text": "server broke"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI web search returned HTTP 500: server broke"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 401,
+   "text": ""
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI web search returned HTTP 401:"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 401,
+   "text": ""
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "xAI web search returned HTTP 401:"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "python asyncio",
+  "limit": 5,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "not json"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 5 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: python asyncio"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Could not parse xAI Responses API reply as JSON"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "many",
+  "limit": 500,
+  "config": "default",
+  "config_text": "",
+  "answer": {
+   "status": 200,
+   "text": "not json"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 100 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: many"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search"
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": false,
+   "error": "Could not parse xAI Responses API reply as JSON"
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "q",
+  "limit": 3,
+  "config": "model_and_domains",
+  "config_text": "web:\n  xai:\n    model: grok-custom\n    allowed_domains: [' a.test ', 'b.test', 5, '']\n",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"{\\\"results\\\": [{\\\"title\\\": \\\" A \\\", \\\"url\\\": \\\"http://93.184.216.34/a\\\", \\\"description\\\": \\\"alpha\\\"}, {\\\"title\\\": \\\"no url\\\", \\\"url\\\": \\\"\\\"}, {\\\"title\\\": \\\"B\\\", \\\"url\\\": \\\"http://93.184.216.34/b\\\"}, 5]}\"}]}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-custom",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 3 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: q"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search",
+       "filters": {
+        "allowed_domains": [
+         "a.test",
+         "b.test"
+        ]
+       }
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "A",
+      "url": "http://93.184.216.34/a",
+      "description": "alpha",
+      "position": 1
+     },
+     {
+      "title": "B",
+      "url": "http://93.184.216.34/b",
+      "description": "",
+      "position": 2
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "q",
+  "limit": 3,
+  "config": "excluded",
+  "config_text": "web:\n  xai:\n    excluded_domains: [x.test]\n",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"{\\\"results\\\": [{\\\"title\\\": \\\" A \\\", \\\"url\\\": \\\"http://93.184.216.34/a\\\", \\\"description\\\": \\\"alpha\\\"}, {\\\"title\\\": \\\"no url\\\", \\\"url\\\": \\\"\\\"}, {\\\"title\\\": \\\"B\\\", \\\"url\\\": \\\"http://93.184.216.34/b\\\"}, 5]}\"}]}]}"
+  },
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/responses",
+    "query": {},
+    "auth": "Bearer <key>",
+    "title": null,
+    "agent": "Hermes-Agent/unknown",
+    "body": {
+     "model": "grok-build-0.1",
+     "input": [
+      {
+       "role": "user",
+       "content": "Use the web_search tool to find current information for the query below, then respond with ONLY a single JSON object — no prose, no markdown fences, no inline citation links — matching this exact schema:\n\n{\"results\": [{\"title\": \"string\", \"url\": \"string\", \"description\": \"1-2 sentence summary\"}]}\n\nReturn at most 3 results, ordered by relevance, with absolute https:// URLs. If no usable results exist, return {\"results\": []}.\n\nQuery: q"
+      }
+     ],
+     "tools": [
+      {
+       "type": "web_search",
+       "filters": {
+        "excluded_domains": [
+         "x.test"
+        ]
+       }
+      }
+     ],
+     "include": [
+      "no_inline_citations"
+     ]
+    }
+   }
+  ],
+  "result": {
+   "success": true,
+   "data": {
+    "web": [
+     {
+      "title": "A",
+      "url": "http://93.184.216.34/a",
+      "description": "alpha",
+      "position": 1
+     },
+     {
+      "title": "B",
+      "url": "http://93.184.216.34/b",
+      "description": "",
+      "position": 2
+     }
+    ]
+   }
+  }
+ },
+ {
+  "vendor": "xai",
+  "kind": "search",
+  "query": "q",
+  "limit": 3,
+  "config": "both_filters",
+  "config_text": "web:\n  xai:\n    allowed_domains: [a.test]\n    excluded_domains: [b.test]\n",
+  "answer": {
+   "status": 200,
+   "text": "{\"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"{\\\"results\\\": [{\\\"title\\\": \\\" A \\\", \\\"url\\\": \\\"http://93.184.216.34/a\\\", \\\"description\\\": \\\"alpha\\\"}, {\\\"title\\\": \\\"no url\\\", \\\"url\\\": \\\"\\\"}, {\\\"title\\\": \\\"B\\\", \\\"url\\\": \\\"http://93.184.216.34/b\\\"}, 5]}\"}]}]}"
+  },
+  "requests": [],
+  "result": {
+   "success": false,
+   "error": "web.xai.allowed_domains and web.xai.excluded_domains cannot both be set (xAI restriction)."
+  }
+ }
+]
