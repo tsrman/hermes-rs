@@ -1084,7 +1084,7 @@ class CliTest(unittest.TestCase):
         database = home / "state.db"
         with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM sessions").fetchone(), (2,))
-            self.assertEqual(db.execute("SELECT count(*) FROM messages").fetchone(), (6,))
+            self.assertEqual(db.execute("SELECT count(*) FROM messages").fetchone(), (8,))
             persisted = db.execute("SELECT content FROM messages WHERE role = 'user'").fetchall()
             self.assertCountEqual(persisted, [(prompt,) for prompt in prompts])
 
