@@ -642,6 +642,7 @@ impl<'a> FileWorkspace<'a> {
 }
 
 /// What preparing a patch produced.
+#[cfg(target_os = "linux")]
 enum Prepared {
     Plan(Box<linux::WritePlan>),
     Done(Value),
@@ -793,6 +794,20 @@ where
     )
     .await
     .unwrap_or(ApprovalDecision::TimedOut)
+}
+
+/// Where commands and file changes cannot be approved (no terminal support), nothing is asked.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) async fn request_approval<A, F>(
+    request: ApprovalRequest,
+    approve: &mut A,
+) -> ApprovalDecision
+where
+    A: FnMut(ApprovalRequest) -> F,
+    F: Future<Output = ApprovalDecision>,
+{
+    let _ = (request, approve);
+    ApprovalDecision::Unavailable
 }
 
 pub(crate) fn write_schema() -> Value {
