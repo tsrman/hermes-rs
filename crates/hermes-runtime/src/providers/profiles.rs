@@ -16,11 +16,28 @@ pub struct Profile {
     pub base_url: String,
     pub key_envs: Vec<String>,
     pub base_url_envs: Vec<String>,
+    /// What the reference's hooks add to a request when no reasoning setting is given: `extra_body`
+    /// and top-level `api_kwargs` both end up at the top level of the JSON body.
+    #[serde(default)]
+    pub extra_body: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub api_kwargs: serde_json::Map<String, serde_json::Value>,
+    /// Parts of the reference's request handling that are not sent (model-specific extras, a per-request
+    /// session id).
+    #[serde(default)]
+    pub unsent: Vec<String>,
 }
 
 impl Profile {
     pub fn uses_responses(&self) -> bool {
         self.api_mode == "codex_responses"
+    }
+
+    /// The body fields the profile adds by default.
+    pub fn default_body(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut body = self.extra_body.clone();
+        super::merge(&mut body, &self.api_kwargs);
+        body
     }
 }
 
@@ -56,9 +73,36 @@ mod tests {
         assert_eq!(lookup("hf").unwrap().key_envs, ["HF_TOKEN"]);
         assert_eq!(lookup("gmi_cloud").unwrap().base_url_envs, ["GMI_BASE_URL"]);
         assert!(
-            lookup("deepseek").is_none(),
-            "profiles with request quirks are not listed"
+            lookup("nvidia").is_none(),
+            "profiles that rewrite messages are not listed"
         );
         assert!(lookup("nope").is_none());
+    }
+
+    #[test]
+    fn provider_defaults_follow_the_reference_hooks() {
+        // Stock providers add nothing; others add what their hooks return with no reasoning setting.
+        assert!(lookup("deepseek").unwrap().default_body().is_empty());
+        assert_eq!(lookup("kimi").unwrap().name, "kimi-coding");
+        assert_eq!(
+            serde_json::Value::Object(lookup("kimi-coding").unwrap().default_body()),
+            serde_json::json!({"thinking": {"type": "enabled"}})
+        );
+        assert_eq!(
+            serde_json::Value::Object(lookup("ai-gateway").unwrap().default_body()),
+            serde_json::json!({"reasoning": {"enabled": true, "effort": "medium"}})
+        );
+        assert_eq!(
+            serde_json::Value::Object(lookup("upstage").unwrap().default_body()),
+            serde_json::json!({"reasoning_effort": "medium"})
+        );
+        assert!(lookup("kimi-coding")
+            .unwrap()
+            .unsent
+            .iter()
+            .any(|u| u.contains("model-specific")));
+        assert!(lookup("meta-ai").unwrap().uses_responses());
+        assert_eq!(lookup("or").unwrap().name, "openrouter");
+        assert_eq!(lookup("glm").unwrap().key_envs[0], "GLM_API_KEY");
     }
 }

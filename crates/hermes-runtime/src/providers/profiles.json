@@ -1,5 +1,168 @@
 [
  {
+  "name": "actual",
+  "aliases": [
+   "actual-computer",
+   "actualcomputer",
+   "aci"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://api.actual.inc/v1",
+  "key_envs": [
+   "ACTUAL_API_KEY"
+  ],
+  "base_url_envs": [],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
+ },
+ {
+  "name": "ai-gateway",
+  "aliases": [
+   "vercel",
+   "vercel-ai-gateway",
+   "ai_gateway",
+   "aigateway"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://ai-gateway.vercel.sh/v1",
+  "key_envs": [
+   "AI_GATEWAY_API_KEY"
+  ],
+  "base_url_envs": [],
+  "extra_body": {
+   "reasoning": {
+    "enabled": true,
+    "effort": "medium"
+   }
+  },
+  "api_kwargs": {},
+  "unsent": []
+ },
+ {
+  "name": "alibaba",
+  "aliases": [
+   "dashscope",
+   "alibaba-cloud",
+   "qwen-dashscope",
+   "aliyun"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+  "key_envs": [
+   "DASHSCOPE_API_KEY"
+  ],
+  "base_url_envs": [],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": [
+   "model-specific extras"
+  ]
+ },
+ {
+  "name": "alibaba-cn",
+  "aliases": [
+   "dashscope-cn",
+   "alibaba-cloud-cn"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "key_envs": [
+   "DASHSCOPE_API_KEY"
+  ],
+  "base_url_envs": [
+   "DASHSCOPE_CN_BASE_URL"
+  ],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": [
+   "model-specific extras"
+  ]
+ },
+ {
+  "name": "alibaba-coding-plan",
+  "aliases": [
+   "alibaba_coding",
+   "alibaba-coding",
+   "dashscope-coding"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://coding-intl.dashscope.aliyuncs.com/v1",
+  "key_envs": [
+   "ALIBABA_CODING_PLAN_API_KEY",
+   "DASHSCOPE_API_KEY"
+  ],
+  "base_url_envs": [
+   "ALIBABA_CODING_PLAN_BASE_URL"
+  ],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": [
+   "model-specific extras"
+  ]
+ },
+ {
+  "name": "alibaba-coding-plan-cn",
+  "aliases": [
+   "alibaba-coding-cn",
+   "dashscope-coding-cn"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://coding.dashscope.aliyuncs.com/v1",
+  "key_envs": [
+   "ALIBABA_CODING_PLAN_CN_API_KEY",
+   "ALIBABA_CODING_PLAN_API_KEY",
+   "DASHSCOPE_API_KEY"
+  ],
+  "base_url_envs": [
+   "ALIBABA_CODING_PLAN_CN_BASE_URL"
+  ],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": [
+   "model-specific extras"
+  ]
+ },
+ {
+  "name": "alibaba-token-plan",
+  "aliases": [
+   "dashscope-token-plan"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+  "key_envs": [
+   "ALIBABA_TOKEN_PLAN_API_KEY"
+  ],
+  "base_url_envs": [
+   "ALIBABA_TOKEN_PLAN_BASE_URL"
+  ],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": [
+   "model-specific extras"
+  ]
+ },
+ {
+  "name": "alibaba-token-plan-cn",
+  "aliases": [
+   "dashscope-token-plan-cn"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+  "key_envs": [
+   "ALIBABA_TOKEN_PLAN_CN_API_KEY",
+   "ALIBABA_TOKEN_PLAN_API_KEY"
+  ],
+  "base_url_envs": [
+   "ALIBABA_TOKEN_PLAN_CN_BASE_URL"
+  ],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": [
+   "model-specific extras"
+  ]
+ },
+ {
   "name": "arcee",
   "aliases": [
    "arcee-ai",
@@ -10,7 +173,95 @@
   "key_envs": [
    "ARCEEAI_API_KEY"
   ],
-  "base_url_envs": []
+  "base_url_envs": [],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
+ },
+ {
+  "name": "commandcode",
+  "aliases": [
+   "commandcode-chat"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://api.commandcode.ai/provider/v1",
+  "key_envs": [
+   "COMMANDCODE_API_KEY"
+  ],
+  "base_url_envs": [
+   "COMMANDCODE_BASE_URL"
+  ],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
+ },
+ {
+  "name": "deepinfra",
+  "aliases": [
+   "deep-infra",
+   "deepinfra-ai"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://api.deepinfra.com/v1/openai",
+  "key_envs": [
+   "DEEPINFRA_API_KEY"
+  ],
+  "base_url_envs": [
+   "DEEPINFRA_BASE_URL"
+  ],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
+ },
+ {
+  "name": "deepseek",
+  "aliases": [
+   "deepseek-chat",
+   "deep-seek"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://api.deepseek.com/v1",
+  "key_envs": [
+   "DEEPSEEK_API_KEY"
+  ],
+  "base_url_envs": [],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
+ },
+ {
+  "name": "fireworks",
+  "aliases": [
+   "fireworks-ai",
+   "fw"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://api.fireworks.ai/inference/v1",
+  "key_envs": [
+   "FIREWORKS_API_KEY"
+  ],
+  "base_url_envs": [],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
+ },
+ {
+  "name": "gemini",
+  "aliases": [
+   "google",
+   "google-gemini",
+   "google-ai-studio"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://generativelanguage.googleapis.com/v1beta",
+  "key_envs": [
+   "GOOGLE_API_KEY",
+   "GEMINI_API_KEY"
+  ],
+  "base_url_envs": [],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
  },
  {
   "name": "gmi",
@@ -25,7 +276,10 @@
   ],
   "base_url_envs": [
    "GMI_BASE_URL"
-  ]
+  ],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
  },
  {
   "name": "huggingface",
@@ -39,7 +293,10 @@
   "key_envs": [
    "HF_TOKEN"
   ],
-  "base_url_envs": []
+  "base_url_envs": [],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
  },
  {
   "name": "kilocode",
@@ -53,7 +310,105 @@
   "key_envs": [
    "KILOCODE_API_KEY"
   ],
-  "base_url_envs": []
+  "base_url_envs": [],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
+ },
+ {
+  "name": "kimi-coding",
+  "aliases": [
+   "kimi",
+   "moonshot",
+   "kimi-for-coding"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://api.moonshot.ai/v1",
+  "key_envs": [
+   "KIMI_API_KEY",
+   "KIMI_CODING_API_KEY"
+  ],
+  "base_url_envs": [],
+  "extra_body": {
+   "thinking": {
+    "type": "enabled"
+   }
+  },
+  "api_kwargs": {},
+  "unsent": [
+   "model-specific extras"
+  ]
+ },
+ {
+  "name": "kimi-coding-cn",
+  "aliases": [
+   "kimi-cn",
+   "moonshot-cn"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://api.moonshot.cn/v1",
+  "key_envs": [
+   "KIMI_CN_API_KEY"
+  ],
+  "base_url_envs": [],
+  "extra_body": {
+   "thinking": {
+    "type": "enabled"
+   }
+  },
+  "api_kwargs": {},
+  "unsent": [
+   "model-specific extras"
+  ]
+ },
+ {
+  "name": "meta-ai",
+  "aliases": [
+   "meta",
+   "muse",
+   "muse-spark",
+   "model-api",
+   "msl"
+  ],
+  "api_mode": "codex_responses",
+  "base_url": "https://api.meta.ai/v1",
+  "key_envs": [
+   "MODEL_API_KEY",
+   "META_API_KEY",
+   "META_MODEL_API_KEY"
+  ],
+  "base_url_envs": [
+   "META_BASE_URL"
+  ],
+  "extra_body": {},
+  "api_kwargs": {
+   "reasoning_effort": "medium"
+  },
+  "unsent": []
+ },
+ {
+  "name": "nebius-token-factory",
+  "aliases": [
+   "nebius",
+   "nebius-tokenfactory",
+   "nebius-tf",
+   "token-factory",
+   "tokenfactory"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://api.tokenfactory.nebius.com/v1",
+  "key_envs": [
+   "NEBIUS_API_KEY",
+   "NEBIUS_TOKEN_FACTORY_API_KEY"
+  ],
+  "base_url_envs": [
+   "NEBIUS_BASE_URL"
+  ],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": [
+   "model-specific extras"
+  ]
  },
  {
   "name": "novita",
@@ -68,6 +423,77 @@
   ],
   "base_url_envs": [
    "NOVITA_BASE_URL"
+  ],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
+ },
+ {
+  "name": "ollama-cloud",
+  "aliases": [
+   "ollama_cloud"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://ollama.com/v1",
+  "key_envs": [
+   "OLLAMA_API_KEY"
+  ],
+  "base_url_envs": [],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
+ },
+ {
+  "name": "opencode-go",
+  "aliases": [
+   "opencode_go",
+   "go",
+   "opencode-go-sub"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://opencode.ai/zen/go/v1",
+  "key_envs": [
+   "OPENCODE_GO_API_KEY"
+  ],
+  "base_url_envs": [],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": [
+   "model-specific extras"
+  ]
+ },
+ {
+  "name": "opencode-zen",
+  "aliases": [
+   "opencode",
+   "opencode_zen",
+   "zen"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://opencode.ai/zen/v1",
+  "key_envs": [
+   "OPENCODE_ZEN_API_KEY"
+  ],
+  "base_url_envs": [],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
+ },
+ {
+  "name": "openrouter",
+  "aliases": [
+   "or"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://openrouter.ai/api/v1",
+  "key_envs": [
+   "OPENROUTER_API_KEY"
+  ],
+  "base_url_envs": [],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": [
+   "per-request extra body (session id)"
   ]
  },
  {
@@ -85,7 +511,10 @@
   ],
   "base_url_envs": [
    "RAMP_ROUTER_BASE_URL"
-  ]
+  ],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
  },
  {
   "name": "stepfun",
@@ -98,7 +527,29 @@
   "key_envs": [
    "STEPFUN_API_KEY"
   ],
-  "base_url_envs": []
+  "base_url_envs": [],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
+ },
+ {
+  "name": "upstage",
+  "aliases": [
+   "solar"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://api.upstage.ai/v1",
+  "key_envs": [
+   "UPSTAGE_API_KEY"
+  ],
+  "base_url_envs": [
+   "UPSTAGE_BASE_URL"
+  ],
+  "extra_body": {},
+  "api_kwargs": {
+   "reasoning_effort": "medium"
+  },
+  "unsent": []
  },
  {
   "name": "xai",
@@ -112,7 +563,10 @@
   "key_envs": [
    "XAI_API_KEY"
   ],
-  "base_url_envs": []
+  "base_url_envs": [],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
  },
  {
   "name": "xiaomi",
@@ -125,6 +579,29 @@
   "key_envs": [
    "XIAOMI_API_KEY"
   ],
-  "base_url_envs": []
+  "base_url_envs": [],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
+ },
+ {
+  "name": "zai",
+  "aliases": [
+   "glm",
+   "z-ai",
+   "z.ai",
+   "zhipu"
+  ],
+  "api_mode": "chat_completions",
+  "base_url": "https://api.z.ai/api/paas/v4",
+  "key_envs": [
+   "GLM_API_KEY",
+   "ZAI_API_KEY",
+   "Z_AI_API_KEY"
+  ],
+  "base_url_envs": [],
+  "extra_body": {},
+  "api_kwargs": {},
+  "unsent": []
  }
 ]

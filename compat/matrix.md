@@ -78,7 +78,7 @@ P0 относится к первому CLI-релизу, P3 — к заключ
 | OpenAI-compatible Chat Completions | `provider: custom` (по умолчанию), именованный провайдер из `providers:`/`custom_providers:` | Проверено; без ключа уходит заглушка `no-key-required` |
 | OpenAI Responses | `api_mode: codex_responses` | Проверено на имитаторе; OAuth Codex не поддержан |
 | Anthropic Messages | `provider: anthropic` | Проверено на имитаторе (текст, tool use, повтор 529, обрыв); OAuth не поддержан |
-| Именованные провайдеры по ключу | arcee, gmi, huggingface, kilocode, novita, router, stepfun, xiaomi, xai | Сверены с эталоном; без особой обработки запросов |
+| Именованные провайдеры по ключу | 32 профиля эталона с авторизацией по ключу (в их числе deepseek, openrouter, zai, gemini, kimi-coding, fireworks, alibaba, ai-gateway, xai); ключ, адрес, режим и переопределение адреса берутся из эталона (`compat/create_provider_fixture.py`) | Сверены с эталоном. Поля, которые хуки эталона добавляют без настройки рассуждений, отправляются; не отправляются зависящие от модели поля и идентификатор сессии (`unsent` в `profiles.json`). Профили, переписывающие сообщения (nvidia), OAuth и облачные (bedrock, vertex, nous) не поддержаны |
 | Резервные маршруты, отдельный маршрут сжатия и подагентов | `fallback_providers`, `auxiliary.compression`, `delegation.*` | Проверено |
 | Остальные провайдеры эталона, OAuth, мультимодальность | | Не поддержаны |
 

@@ -478,6 +478,22 @@ class CliTest(unittest.TestCase):
         self.assertNotEqual(refused.returncode, 0)
         self.assertIn("API key is required", refused.stderr)
 
+    def test_a_named_provider_sends_the_request_fields_its_reference_profile_adds(self):
+        home = self.workdir / "hermes"
+        home.mkdir(exist_ok=True)
+        (home / "config.yaml").write_text("model:\n  default: solar-pro\n  provider: solar\n", encoding="utf-8")
+        (home / ".env").write_text(f"UPSTAGE_API_KEY=up-secret\nUPSTAGE_BASE_URL={self.base}/v1\n", encoding="utf-8")
+        env = {"PATH": os.environ.get("PATH", ""), "HERMES_HOME": str(home)}
+        result = subprocess.run([str(BINARY), "chat", "-q", "hello"], cwd=self.workdir, env=env,
+                                capture_output=True, text=True, timeout=45)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with urlopen(self.base + "/requests", timeout=5) as response:
+            requests = json.load(response)
+        # `solar` is an alias of the upstage profile, whose hook adds reasoning_effort: medium.
+        self.assertEqual({r.get("reasoning_effort") for r in requests}, {"medium"})
+        with urlopen(self.base + "/authorizations", timeout=5) as response:
+            self.assertEqual(set(json.load(response)), {"Bearer up-secret"})
+
     def test_todo_list_is_hidden_by_default_and_survives_a_resume(self):
         hidden, recorded = self.chat_with_profile(query="read")
         self.assertEqual(hidden.returncode, 0, hidden.stderr)
