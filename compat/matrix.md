@@ -22,6 +22,75 @@ P0 относится к первому CLI-релизу, P3 — к заключ
 | P3 | Существующие TUI и Desktop, ACP, dashboard и API server | `ui-tui/`, `apps/desktop/`, `apps/shared/`, `acp_adapter/`, `web/` | Сквозные сценарии каждого заявленного клиента | Не проверено |
 | P3 | Telegram, Discord, Slack и другие внешние платформы | `plugins/platforms/`, `gateway/` | Имитация платформы, авторизация, повторы, треды и доставка cron | Не проверено |
 
+## Матрица первого релиза CLI (v0.3.0)
+
+Что входит в релиз и что нет. «Проверено» значит, что сквозной тест запускает настоящий `hermes` на временном профиле и локальном имитаторе провайдера (`compat/test_*.py`, `cargo test`); «не поддержано» значит, что функции нет и команда или ключ отвечает ошибкой либо игнорируется, как указано.
+
+### Команды
+
+| Команда | Что делает | Статус |
+| --- | --- | --- |
+| `hermes chat -q <запрос>` | Один ход, потоковый ответ, инструменты. `--oneshot` запрещает вопросы человеку. | Проверено |
+| `hermes chat` (без `-q`) | Интерактивный диалог: `rustyline`, история, Ctrl-C останавливает ход, `/sessions`, `/resume`, `/model`, `/yolo`, `/retry`. | Проверено |
+| `chat --save-session`, `--resume <id>`, `--continue` | Сохранение хода, продолжение сессии с арендой SQLite, последняя сессия CLI. | Проверено, включая `SIGKILL` посреди хода и отмену |
+| `chat --yolo`, `approvals.mode: off` | Одобрять всё, кроме `approvals.deny` и пола детектора (hardline). | Проверено |
+| `hermes sessions list \| show \| search \| migrate` | Чтение схем 32 и 33, поиск FTS5, миграция копии 32 → 33. | Проверено |
+| `hermes profile check \| migrate` | Опись профиля и проверенная копия для перехода. | Проверено |
+| `hermes cron list \| pause \| resume \| remove \| tick \| preview` | Чтение и изменение `jobs.json`, однократный проход планировщика. | Проверено на Linux и macOS. `add`, `edit`, `run` не поддержаны |
+| `hermes config set <ключ> <значение>` | Запись во вложенные поля `config.yaml` (комментарии не сохраняются). | Проверено |
+| `hermes owner` | Локальный процесс-владелец сессий (Unix-сокет). | Проверено на Linux и macOS |
+| `-p/--profile` | Выбор профиля; сессии одного профиля не видны другому. | Проверено |
+| Остальные команды Python (`model`, `gateway`, `doctor`, `update`, `skills`, `plugins` и др.) | | Не поддержаны |
+
+### Инструменты по умолчанию (набор `hermes-cli`)
+
+| Инструмент | Условие | Примечание |
+| --- | --- | --- |
+| `read_file`, `search_files` | всегда | Пути ограничены рабочей папкой, защищённые пути скрыты |
+| `write_file`, `patch` | Linux, есть кому одобрить | На macOS и Windows не предлагаются |
+| `terminal` | Linux и macOS | Без человека предлагается, помеченная детектором команда отклоняется, если `single_query_mode`/`cron_mode` не `approve`. Файлы инициализации оболочки читаются (`terminal.shell_init_files`) |
+| `process_manage` | вместе с `terminal` | Фоновые процессы, только Unix |
+| `execute_code` | `terminal` и есть кому одобрить | Постоянное ядро Python, только Unix; каждый запуск одобряется отдельно |
+| `delegate_task` | всегда в основном ходе | Параллельные подагенты со своим маршрутом провайдера |
+| `memory`, `todo_list`, `session_search`, `clarify` | профиль и хранилище доступны; `clarify` нужен человек | |
+| `skills_list`, `skill_view`, `skill_manage` | навыки включены | `skill_manage` одобряется каждый раз |
+| `web_search`, `web_extract` | настроен бэкенд | Tavily, SearXNG, Brave. Остальные бэкенды эталона не поддержаны |
+| `browser_cdp` | задан endpoint DevTools | Остальные browser-инструменты не поддержаны |
+| MCP (`mcp_<сервер>_<инструмент>`) | `mcp_servers` | stdio и Streamable HTTP. OAuth, `sampling`, ресурсы, `Last-Event-ID` не поддержаны |
+| `tool_search`, `tool_describe`, `tool_call` | всегда | Мост к инструментам, скрытым набором или мостом |
+| Voice, TTS, vision, `cronjob_manage`, `fact_store`, генерация изображений | | Не поддержаны |
+
+### Форматы профиля
+
+| Файл | Чтение | Запись |
+| --- | --- | --- |
+| `config.yaml`, `.env` | Разбор по правилам эталона (`${VAR}`, именованные провайдеры, камелКейс-ключи записи провайдера). Битый YAML отвергается, а не заменяется настройками по умолчанию | Только `hermes config set` и `command_allowlist` при ответе «always» |
+| `state.db` (SQLite, схемы 32 и 33, FTS5) | Да | Схема 33 с FTS 3; 32 читается и мигрируется копией |
+| `SOUL.md`, проектные инструкции, `memories/{MEMORY,USER}.md` | Да | `memory` пишет атомарно под блокировкой |
+| `skills/`, внешние каталоги, проектные навыки | Да | `skill_manage` |
+| `cron/jobs.json`, `cron/output/` | Да | Под общей с Python блокировкой, атомарно |
+| Профили Python-плагинов, `vault`, учётные данные OAuth | | Не поддержаны |
+
+### Режимы провайдера
+
+| Режим | Как включается | Статус |
+| --- | --- | --- |
+| OpenAI-compatible Chat Completions | `provider: custom` (по умолчанию), именованный провайдер из `providers:`/`custom_providers:` | Проверено; без ключа уходит заглушка `no-key-required` |
+| OpenAI Responses | `api_mode: codex_responses` | Проверено на имитаторе; OAuth Codex не поддержан |
+| Anthropic Messages | `provider: anthropic` | Проверено на имитаторе (текст, tool use, повтор 529, обрыв); OAuth не поддержан |
+| Именованные провайдеры по ключу | arcee, gmi, huggingface, kilocode, novita, router, stepfun, xiaomi, xai | Сверены с эталоном; без особой обработки запросов |
+| Резервные маршруты, отдельный маршрут сжатия и подагентов | `fallback_providers`, `auxiliary.compression`, `delegation.*` | Проверено |
+| Остальные провайдеры эталона, OAuth, мультимодальность | | Не поддержаны |
+
+### Операционные системы
+
+| Возможность | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| Чат, сессии, память, MCP, web, cron `tick` | Да | Да | Чат и сессии собираются; поддержка не проверена вручную |
+| Запись файлов (`write_file`, `patch`) | Да | Нет | Нет |
+| `terminal`, `process_manage`, `execute_code`, локальный владелец | Да | `terminal` и владелец да; `process_manage`, `execute_code` да | Нет |
+| Детектор опасных команд | Да | Да (включая `osascript`) | Не используется без терминала; пути Windows не разбираются |
+
 ## Результаты чтения исходников
 
 - Эталон использует `state.db`, SQLite schema version 33, независимую версию FTS и таблицы `runtime_epoch` и `session_admissions`. [Схема upstream](https://github.com/NousResearch/hermes-agent/blob/2f8c1e7ed051c311af4f3b3ca0f8976b9c40839b/persistence/sqlite/_schema_ddl.py)
