@@ -85,11 +85,94 @@ def t_deny():
         lambda p, out: ((p / "keep/data.txt").exists(), "rm -rf must be blocked by approvals.deny")
 
 
-TASKS = {f.__name__[2:]: f for f in (t_fix, t_rename, t_newdir, t_search, t_longout, t_cd, t_indent, t_deny)}
+# --- harder tasks
+
+def t_debug():
+    files = {
+        "shop/__init__.py": "",
+        "shop/pricing.py": "def apply_discount(price, percent):\n    \"\"\"Price after taking percent off.\"\"\"\n    return price * percent / 100\n",
+        "shop/inventory.py": "class Inventory:\n    def __init__(self, stock):\n        self.stock = dict(stock)\n\n    def reserve(self, sku, qty):\n        if self.stock.get(sku, 0) > qty:\n            self.stock[sku] -= qty\n            return True\n        return False\n",
+        "shop/cart.py": "from shop.pricing import apply_discount\n\nclass Cart:\n    def __init__(self, inventory):\n        self.inventory = inventory\n        self.lines = []\n\n    def add(self, sku, qty, price):\n        if self.inventory.reserve(sku, qty):\n            self.lines.append((sku, qty, price))\n            return True\n        return False\n\n    def total(self, discount=0):\n        cents = sum(qty * price for _, qty, price in self.lines)\n        return int(apply_discount(cents, discount) * 100) / 100\n",
+        "tests/__init__.py": "",
+        "tests/test_shop.py": (
+            "import unittest\nfrom shop.cart import Cart\nfrom shop.inventory import Inventory\nfrom shop.pricing import apply_discount\n\n"
+            "class Shop(unittest.TestCase):\n"
+            "    def test_discount(self):\n        self.assertEqual(apply_discount(200, 25), 150)\n"
+            "    def test_reserve_all_stock(self):\n        inv = Inventory({'a': 3})\n        self.assertTrue(inv.reserve('a', 3))\n        self.assertFalse(inv.reserve('a', 1))\n"
+            "    def test_cart_total(self):\n        cart = Cart(Inventory({'a': 5, 'b': 5}))\n        self.assertTrue(cart.add('a', 2, 3.33))\n        self.assertTrue(cart.add('b', 1, 1.10))\n        self.assertEqual(cart.total(), 7.76)\n"
+            "    def test_cart_discount(self):\n        cart = Cart(Inventory({'a': 5}))\n        cart.add('a', 4, 2.5)\n        self.assertEqual(cart.total(10), 9.0)\n"
+            "    def test_out_of_stock(self):\n        cart = Cart(Inventory({'a': 1}))\n        self.assertFalse(cart.add('a', 2, 1))\n"
+            "if __name__ == '__main__':\n    unittest.main()\n"),
+    }
+    import hashlib
+    digest = hashlib.sha256(files["tests/test_shop.py"].encode()).hexdigest()
+    return files, "Тесты в tests/ падают (запуск: python3 -m unittest discover). Найди все причины и исправь код. Сами тесты не меняй.", \
+        lambda p, out: (sh(p, "python3 -m unittest discover").returncode == 0
+                        and hashlib.sha256((p / "tests/test_shop.py").read_bytes()).hexdigest() == digest, "")
+
+
+def t_bigfile():
+    lines = ['"""Generated operations."""', ""]
+    for i in range(60):
+        lines += [f"def op_{i}(x):", f'    """Operation number {i}."""', f"    y = x + {i}", f"    # step {i}: keep the value as is", "    return y", "", ""]
+    original = "\n".join(lines)
+
+    def check(p, out):
+        text = (p / "ops.py").read_text()
+        ns = {}
+        exec(compile(text, "ops.py", "exec"), ns)
+        good = ns["op_17"](2) == 34 and ns["op_23"](2, scale=3) == 75 and ns["op_23"](2) == 25 and ns["op_5"](1) == 6 and ns["op_59"](1) == 60
+        before, after = set(original.splitlines()), text.splitlines()
+        changed = sum(1 for line in after if line not in before)
+        return good and changed <= 8 and len(after) >= len(original.splitlines()), f"changed lines: {changed}"
+    return {"ops.py": original}, "В ops.py: функцию op_17 сделай умножающей (return x * 17), а в op_23 добавь параметр scale=1, на который умножается результат. Остальные функции не трогай, файл не переписывай целиком.", check
+
+
+def t_git():
+    files = {"calc.py": "def add(a, b):\n    return a + b\n", "test_calc.py": "import unittest\nfrom calc import add, mul\nclass T(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n    def test_mul(self):\n        self.assertEqual(mul(4, 5), 20)\nunittest.main()\n"}
+
+    def prepare(project):
+        run = lambda c: subprocess.run(c, shell=True, cwd=project, check=True, capture_output=True)
+        run("git init -q -b main && git config user.email t@example.com && git config user.name Tester")
+        run("git add -A && git commit -q -m 'add calc'")
+        (project / "calc.py").write_text("def add(a, b):\n    return a + b\n\ndef mul(a, b):\n    return a * b\n")
+        run("git add -A && git commit -q -m 'add mul'")
+        (project / "calc.py").write_text("def add(a, b):\n    return a + b\n\ndef mul(a, b):\n    return a + b\n")
+        run("git add -A && git commit -q -m 'tidy helpers'")
+        (project / "notes.txt").write_text("todo\n")
+        run("git add -A && git commit -q -m 'notes'")
+        return {"first": run("git rev-list --max-parents=0 HEAD").stdout.decode().strip(), "head": run("git rev-parse HEAD").stdout.decode().strip()}
+
+    def check(p, out, state=None):
+        git = lambda c: sh(p, c).stdout.strip()
+        ok = (sh(p, "python3 test_calc.py").returncode == 0 and git("git branch --show-current") == "fix/regression"
+              and git("git rev-list --count HEAD") == "5" and sh(p, f"git merge-base --is-ancestor {state['head']} HEAD").returncode == 0
+              and git("git status --porcelain --untracked-files=no") == "")
+        return ok, ""
+    return files, "Тесты падают. Через историю git найди коммит, который сломал mul, исправь, и закоммить исправление в новой ветке fix/regression. Историю не переписывай.", check, prepare
+
+
+def t_resume():
+    files = {"config.ini": "[server]\nport = 7741\nhost = localhost\n"}
+
+    def between(project):
+        (project / "config.ini").write_text("[server]\nport = 1234\nhost = localhost\n")
+
+    def check(p, out, state=None):
+        return "7741" in out and "port = 9090" in (p / "config.ini").read_text(), ""
+    return files, ["Прочитай config.ini и запомни значение port. Ничего не меняй.",
+                   "Какой port ты видел в config.ini в самом начале? Назови число. Затем открой файл и замени текущий port на 9090."], check, None, between
+
+
+TASKS = {f.__name__[2:]: f for f in (t_fix, t_rename, t_newdir, t_search, t_longout, t_cd, t_indent, t_deny, t_debug, t_bigfile, t_git, t_resume)}
 
 
 def run_task(name, binary, model, env, timeout, provider="custom"):
-    files, prompt, check = TASKS[name]()
+    spec = TASKS[name]()
+    files, prompts, check = spec[:3]
+    prepare = spec[3] if len(spec) > 3 else None
+    between = spec[4] if len(spec) > 4 else None
+    prompts = [prompts] if isinstance(prompts, str) else prompts
     base = Path(tempfile.mkdtemp(prefix=f"live-{name}-"))
     project, profile = base / "proj", base / "profile"
     project.mkdir(); profile.mkdir()
@@ -102,20 +185,31 @@ def run_task(name, binary, model, env, timeout, provider="custom"):
     journal = base / "journal.jsonl"
     run_env = {k: v for k, v in os.environ.items() if k not in ("LLM_GATEWAY_URL", "GATEWAY_API_KEY")}
     run_env.update(HERMES_HOME=str(profile), HERMES_API_KEY=env["GATEWAY_API_KEY"])
+    state = prepare(project) if prepare else None
     started = time.monotonic()
-    try:
-        run = subprocess.run([binary, "chat", "--oneshot", "--yolo", "--debug-log", str(journal), "-q", prompt],
-                             cwd=project, env=run_env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
-        out, code = run.stdout, run.returncode
-    except subprocess.TimeoutExpired as error:
-        out, code = (error.stdout or b"").decode() if isinstance(error.stdout, bytes) else (error.stdout or ""), "timeout"
+    session, out, code = None, "", 0
+    for index, prompt in enumerate(prompts):
+        if index and between:
+            between(project)
+        command = [binary, "chat", "--oneshot", "--yolo", "--debug-log", str(journal), "-q", prompt]
+        if len(prompts) > 1:
+            command += ["--resume", session] if session else ["--save-session"]
+        try:
+            run = subprocess.run(command, cwd=project, env=run_env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
+            out, code = run.stdout, run.returncode
+        except subprocess.TimeoutExpired as error:
+            out, code = (error.stdout or b"").decode() if isinstance(error.stdout, bytes) else (error.stdout or ""), "timeout"
+            break
+        marker = [line for line in (out + "\n" + run.stderr).splitlines() if line.startswith("Session: ")]
+        if marker:
+            session = marker[-1].split(": ", 1)[1].strip()
     seconds = time.monotonic() - started
     events = [json.loads(l) for l in journal.read_text().splitlines()] if journal.exists() else []
     tools = [e for e in events if e["event"] == "tool"]
     errors = [e for e in events if e["event"] == "provider_error"]
     usage = [e["usage"] for e in events if e["event"] == "response" and e.get("usage")]
     try:
-        ok, note = check(project, out)
+        ok, note = check(project, out, state) if prepare else check(project, out)
     except Exception as error:  # a broken check is a failed task, not a crashed suite
         ok, note = False, f"check raised {error!r}"
     return {"task": name, "ok": bool(ok), "exit": code, "seconds": round(seconds, 1), "requests": sum(e["event"] == "request" for e in events),
