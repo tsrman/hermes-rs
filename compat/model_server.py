@@ -24,6 +24,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/requests":
             self.send_json(200, self.server.requests)
+        elif self.path == "/headers":
+            self.send_json(200, getattr(self.server, "headers_seen", []))
         elif self.path == "/authorizations":
             self.send_json(200, getattr(self.server, "authorizations", []))
         elif self.path == "/release" and self.server.scenario in ("stall_on_resume", "compact"):
@@ -51,6 +53,9 @@ class Handler(BaseHTTPRequestHandler):
         if not hasattr(self.server, "authorizations"):
             self.server.authorizations = []
         self.server.authorizations.append(self.headers.get("Authorization"))
+        if not hasattr(self.server, "headers_seen"):
+            self.server.headers_seen = []
+        self.server.headers_seen.append({key.lower(): value for key, value in self.headers.items()})
         model = body.get("model", "fixture")
         scenario = self.server.scenario
         if scenario == "fallback_after_tool" and model == "backup":

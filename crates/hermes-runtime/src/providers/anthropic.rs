@@ -21,6 +21,7 @@ pub struct AnthropicProvider {
     endpoint: String,
     api_key: String,
     max_attempts: u32,
+    extras: super::Extras,
 }
 
 impl AnthropicProvider {
@@ -30,7 +31,14 @@ impl AnthropicProvider {
             endpoint: endpoint_url(base_url, "/messages")?,
             api_key: api_key.to_owned(),
             max_attempts: 3,
+            extras: super::Extras::default(),
         })
+    }
+
+    /// Body fields and headers the configured endpoint adds to every request.
+    pub fn with_extras(mut self, extras: super::Extras) -> Self {
+        self.extras = extras;
+        self
     }
 
     pub fn with_max_attempts(mut self, max_attempts: u32) -> Self {
@@ -41,19 +49,47 @@ impl AnthropicProvider {
     pub async fn complete<F>(
         &self,
         request: &Value,
-        mut on_text: F,
+        on_text: F,
     ) -> Result<Completion, ProviderError>
     where
         F: FnMut(&str),
     {
-        let request = translate_request(request)?;
+        self.complete_with(request, on_text, true).await
+    }
+
+    /// A side request such as the compression summary: the configured body fields are not sent.
+    pub async fn complete_plain<F>(
+        &self,
+        request: &Value,
+        on_text: F,
+    ) -> Result<Completion, ProviderError>
+    where
+        F: FnMut(&str),
+    {
+        self.complete_with(request, on_text, false).await
+    }
+
+    async fn complete_with<F>(
+        &self,
+        request: &Value,
+        mut on_text: F,
+        with_extra_body: bool,
+    ) -> Result<Completion, ProviderError>
+    where
+        F: FnMut(&str),
+    {
+        let mut request = translate_request(request)?;
+        if with_extra_body {
+            self.extras.merge_body(&mut request);
+        }
         let mut response = open_stream(
             &self.client,
             &self.endpoint,
             &request,
             self.max_attempts,
             |builder| {
-                builder
+                self.extras
+                    .apply_headers(builder)
                     .header("x-api-key", &self.api_key)
                     .header("anthropic-version", API_VERSION)
             },

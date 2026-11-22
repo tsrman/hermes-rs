@@ -195,3 +195,31 @@ async fn rejects_non_object_requests_and_bad_urls() {
     let error = provider.complete(&json!([]), |_| {}).await.unwrap_err();
     assert!(matches!(error, ProviderError::InvalidRequest));
 }
+
+#[tokio::test]
+async fn sends_extras_except_the_body_fields_on_plain_requests() {
+    let done = || {
+        sse(&[
+            json!({"type": "message_start", "message": {"id": "m"}}),
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}}),
+            json!({"type": "message_stop"}),
+        ])
+    };
+    let (url, handle) = server(vec![done(), done()]);
+    let extras = hermes_runtime::providers::Extras {
+        body: serde_json::from_value(json!({"thinking": {"type": "enabled"}})).unwrap(),
+        headers: vec![("X-Gateway-Token".into(), "tok".into())],
+    };
+    let provider = AnthropicProvider::new(&url, "secret", Duration::from_secs(5))
+        .unwrap()
+        .with_extras(extras);
+    provider.complete(&request(), |_| {}).await.unwrap();
+    provider.complete_plain(&request(), |_| {}).await.unwrap();
+    let seen = handle.join().unwrap();
+    for (headers, _) in &seen {
+        assert!(headers.to_lowercase().contains("x-gateway-token: tok"));
+        assert!(headers.to_lowercase().contains("x-api-key: secret"));
+    }
+    assert_eq!(seen[0].1["thinking"], json!({"type": "enabled"}));
+    assert!(seen[1].1.get("thinking").is_none());
+}

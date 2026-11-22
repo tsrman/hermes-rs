@@ -736,3 +736,26 @@ class CustomEndpointConfigTest(ToolTestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         with urlopen(self.url + "/requests", timeout=4) as response:
             self.assertEqual(json.load(response)[0]["model"], "qwen-flash")
+
+    def test_extra_headers_are_sent_but_never_journaled(self):
+        journal = self.root / "journal.jsonl"
+        (self.profile / "config.yaml").write_text(
+            f"model:\n  api_key: sk-key\n  base_url: {self.url}/v1\n  default: qwen-flash\n"
+            "  provider: custom\n  default_headers: {X-Default: d, X-Gateway-Token: old}\n"
+            f"providers:\n  gw:\n    base_url: {self.url}/v1\n"
+            "    extra_headers: {X-Gateway-Token: secret-token, X-Num: 5, X-Skip: null}\n",
+            encoding="utf-8")
+        env = {key: value for key, value in self.env.items() if key != "HERMES_API_KEY"}
+        run = subprocess.run(
+            [*self.command(oneshot=True), "--debug-log", str(journal)], cwd=self.root, env=env,
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        with urlopen(self.url + "/headers", timeout=4) as response:
+            seen = json.load(response)[0]
+        self.assertEqual(seen["x-gateway-token"], "secret-token")
+        self.assertEqual(seen["x-default"], "d")
+        self.assertEqual(seen["x-num"], "5")
+        self.assertNotIn("x-skip", seen)
+        self.assertEqual(seen["authorization"], "Bearer sk-key")
+        self.assertNotIn("secret-token", journal.read_text(encoding="utf-8"))
+        self.assertNotIn("secret-token", run.stdout + run.stderr)

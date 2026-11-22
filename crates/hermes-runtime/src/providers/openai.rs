@@ -13,7 +13,7 @@ pub struct OpenAiProvider {
     endpoint: String,
     api_key: String,
     max_attempts: u32,
-    extra_body: Map<String, Value>,
+    extras: super::Extras,
 }
 
 impl OpenAiProvider {
@@ -23,13 +23,13 @@ impl OpenAiProvider {
             endpoint: endpoint_url(base_url, "/chat/completions")?,
             api_key: api_key.to_owned(),
             max_attempts: 3,
-            extra_body: Map::new(),
+            extras: super::Extras::default(),
         })
     }
 
-    /// Fields merged into every request body (nested objects merge, other values replace).
-    pub fn with_extra_body(mut self, extra_body: Map<String, Value>) -> Self {
-        self.extra_body = extra_body;
+    /// Body fields and headers the configured endpoint adds to every request.
+    pub fn with_extras(mut self, extras: super::Extras) -> Self {
+        self.extras = extras;
         self
     }
 
@@ -48,6 +48,7 @@ impl OpenAiProvider {
             request,
             self.max_attempts,
             |builder| {
+                let builder = self.extras.apply_headers(builder);
                 if self.api_key.is_empty() {
                     builder
                 } else {
@@ -96,7 +97,7 @@ impl OpenAiProvider {
             .cloned()
             .ok_or(ProviderError::InvalidRequest)?;
         if with_extra_body {
-            merge(&mut request, &self.extra_body);
+            self.extras.merge_body(&mut request);
         }
         request.insert("stream".into(), Value::Bool(true));
         request
@@ -425,17 +426,6 @@ pub(super) async fn is_transient_rate_limit(
     Ok(code == "rate_limit_exceeded"
         || has_reset
         || rate_signals.iter().any(|signal| message.contains(signal)))
-}
-
-fn merge(target: &mut Map<String, Value>, extra: &Map<String, Value>) {
-    for (key, value) in extra {
-        match (target.get_mut(key), value) {
-            (Some(Value::Object(existing)), Value::Object(more)) => merge(existing, more),
-            _ => {
-                target.insert(key.clone(), value.clone());
-            }
-        }
-    }
 }
 
 #[cfg(test)]

@@ -118,7 +118,7 @@ struct Route {
     base_url: String,
     api_key: String,
     #[serde(default)]
-    extra_body: Option<serde_json::Map<String, serde_json::Value>>,
+    extras: hermes_runtime::providers::Extras,
 }
 
 impl Route {
@@ -138,19 +138,21 @@ impl Route {
             Provider::Anthropic(
                 AnthropicProvider::new(&self.base_url, &self.api_key, timeout)
                     .map_err(setup)?
+                    .with_extras(self.extras.clone())
                     .with_max_attempts(attempts),
             )
         } else if self.responses {
             Provider::Responses(
                 ResponsesProvider::new(&self.base_url, &self.api_key, timeout)
                     .map_err(setup)?
+                    .with_extras(self.extras.clone())
                     .with_max_attempts(attempts),
             )
         } else {
             Provider::OpenAi(
                 OpenAiProvider::new(&self.base_url, &self.api_key, timeout)
                     .map_err(setup)?
-                    .with_extra_body(self.extra_body.clone().unwrap_or_default())
+                    .with_extras(self.extras.clone())
                     .with_max_attempts(attempts),
             )
         };
@@ -208,12 +210,27 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         .or(vendor_api_key)
         .filter(|value| !value.is_empty())
         .ok_or(format!("API key is required. {SETUP_HINT}"))?;
-    let extra_body = (settings.provider == "custom" && !settings.responses)
-        .then(|| {
-            let model = args.model.as_deref().or(settings.model.as_deref())?;
-            hermes_runtime::config::custom_extra_body(&settings.custom_providers, &base_url, model)
-        })
-        .flatten();
+    let mut extras = hermes_runtime::providers::Extras::default();
+    if let Some(model) = args.model.as_deref().or(settings.model.as_deref()) {
+        if settings.provider == "custom" || settings.named_custom {
+            extras.body = hermes_runtime::config::custom_extra_body(
+                &settings.custom_providers,
+                &base_url,
+                model,
+            )
+            .unwrap_or_default();
+        }
+    }
+    // `model.default_headers` first; the endpoint's own `extra_headers` win over them.
+    extras.headers = settings.default_headers.clone();
+    for (name, value) in
+        hermes_runtime::config::custom_extra_headers(&settings.custom_providers, &base_url)
+    {
+        extras
+            .headers
+            .retain(|(known, _)| !known.eq_ignore_ascii_case(&name));
+        extras.headers.push((name, value));
+    }
     Ok(ChatRequest {
         state_scope: None,
         root: std::env::current_dir()
@@ -251,7 +268,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
             model: settings.model,
             provider: settings.provider.into(),
             responses: settings.responses,
-            extra_body,
+            extras,
             base_url,
             api_key,
         },
@@ -264,7 +281,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
                 responses: config.responses,
                 base_url: config.base_url,
                 api_key: config.api_key.unwrap_or_default(),
-                extra_body: None,
+                extras: Default::default(),
             })
             .collect(),
     })

@@ -63,6 +63,48 @@ pub enum Provider {
     Responses(ResponsesProvider),
 }
 
+/// What the configured endpoint adds to every request: body fields and headers. Header values
+/// may carry credentials, so they are never logged or journaled.
+#[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
+pub struct Extras {
+    #[serde(default)]
+    pub body: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub headers: Vec<(String, String)>,
+}
+
+impl Extras {
+    /// Merge the body fields into `request` (nested objects merge, other values replace).
+    pub(crate) fn merge_body(&self, request: &mut serde_json::Map<String, serde_json::Value>) {
+        merge(request, &self.body);
+    }
+
+    pub(crate) fn apply_headers(
+        &self,
+        mut builder: reqwest::RequestBuilder,
+    ) -> reqwest::RequestBuilder {
+        for (name, value) in &self.headers {
+            builder = builder.header(name, value);
+        }
+        builder
+    }
+}
+
+pub(crate) fn merge(
+    target: &mut serde_json::Map<String, serde_json::Value>,
+    extra: &serde_json::Map<String, serde_json::Value>,
+) {
+    use serde_json::Value;
+    for (key, value) in extra {
+        match (target.get_mut(key), value) {
+            (Some(Value::Object(existing)), Value::Object(more)) => merge(existing, more),
+            _ => {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
 impl Provider {
     pub async fn complete<F>(
         &self,
@@ -92,7 +134,8 @@ impl Provider {
     {
         match self {
             Self::OpenAi(provider) => provider.complete_plain(request, on_text).await,
-            other => other.complete(request, on_text).await,
+            Self::Anthropic(provider) => provider.complete_plain(request, on_text).await,
+            Self::Responses(provider) => provider.complete_plain(request, on_text).await,
         }
     }
 }

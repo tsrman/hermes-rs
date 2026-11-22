@@ -41,9 +41,9 @@ routes ignore it); `auxiliary.compression.extra_body` is not read; fallback rout
    read for the primary route (only for `fallback_providers`) [code]. Same fix as item 1.
 4. **(done) `model.api_mode`** is honoured, but `providers.*.api_mode`/`transport` is not, so a Responses-only
    endpoint declared under `providers:` is called with Chat Completions [code].
-5. **`providers.*.extra_headers`, `ssl_verify`, `ssl_ca_cert`, `session_affinity_header`** are ignored
+5. **(headers done; TLS options deliberately not) `providers.*.extra_headers`, `model.default_headers`, `ssl_verify`, `ssl_ca_cert`, `session_affinity_header`** were ignored
    [keys]. Headers carry credentials for some gateways; never log them. Plan: send, redact in journal.
-6. **`extra_body` for non-chat transports and for fallbacks** (see limits above); the reference applies
+6. **(transports done, fallbacks not) `extra_body` for non-chat transports and for fallbacks**; the reference applies
    `request_overrides` to every transport.
 7. **`auxiliary.<task>.*` is not read at all** (`provider`, `model`, `base_url`, `api_key`, `timeout`,
    `extra_body`, `reasoning_effort`) [keys]. The port runs compression on the main route. Plan: read
@@ -132,3 +132,19 @@ fixtures in `crates/hermes-runtime/tests/fixtures` and the 134 compat tests guar
   text if that matters for such a setup.
 - The reference refuses an unknown provider with its own message; the port says `provider '…' is not
   supported`. Both are errors; only that an error occurs is compared.
+
+## Notes on headers and transports (done)
+
+- `extra_headers` of the first enabled entry for the endpoint URL, and `model.default_headers` beneath it
+  (the entry wins per header name), go on every request of every transport (chat completions, Responses,
+  Anthropic). Values are converted like the reference's `str()` (numbers and booleans as text, null
+  dropped). They are never written to the debug journal or printed; a test checks both.
+- `extra_body` reaches the Responses and Anthropic transports too, gated like the reference on a `custom`
+  provider (or a named provider). Side requests (the compression summary) carry the headers but not the
+  body fields, on all three transports.
+- **Not done on purpose:** `ssl_verify: false` and `ssl_ca_cert`. The port's rule is to verify TLS
+  against the system roots for every API request (stage 2 of the migration plan). Honouring
+  `ssl_verify: false` would weaken that for a config key; it needs an explicit decision, and a
+  `ssl_ca_cert` option needs the same review. `session_affinity_header` is not read either.
+- **Not done:** fallback routes get no `extra_body`/headers (the reference's rule for fallbacks was not
+  recorded yet).

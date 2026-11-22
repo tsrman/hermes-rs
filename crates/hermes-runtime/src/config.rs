@@ -41,6 +41,10 @@ pub struct ChatSettings {
     pub api_key: Option<String>,
     /// `model.api_key` from config.yaml.
     pub config_api_key: Option<String>,
+    /// `model.provider` named an entry of `providers:`.
+    pub named_custom: bool,
+    /// `model.default_headers`.
+    pub default_headers: Vec<(String, String)>,
     /// `providers` / `custom_providers` entries that may carry an `extra_body`.
     pub custom_providers: Vec<CustomProvider>,
     pub api_max_attempts: u32,
@@ -85,6 +89,8 @@ impl Default for ChatSettings {
             base_url: None,
             api_key: None,
             config_api_key: None,
+            named_custom: false,
+            default_headers: Vec::new(),
             custom_providers: Vec::new(),
             api_max_attempts: 3,
             max_turns: 16,
@@ -344,6 +350,17 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
                 ));
             }
             settings.provider = provider;
+            settings.named_custom = named.is_some();
+            settings.default_headers = model
+                .get("default_headers")
+                .and_then(serde_yaml::Value::as_mapping)
+                .map(|headers| {
+                    headers
+                        .iter()
+                        .filter_map(|(name, value)| Some((scalar_text(name)?, scalar_text(value)?)))
+                        .collect()
+                })
+                .unwrap_or_default();
             let configured_mode = named
                 .as_ref()
                 .and_then(|entry| entry.api_mode.as_deref())
@@ -807,6 +824,7 @@ pub struct CustomProvider {
     key_env: Option<String>,
     api_mode: Option<String>,
     extra_body: Option<serde_json::Map<String, serde_json::Value>>,
+    extra_headers: Vec<(String, String)>,
 }
 
 /// How the reference compares provider names: lower case, spaces as hyphens.
@@ -903,7 +921,30 @@ fn custom_provider(key: Option<&str>, entry: &serde_yaml::Value) -> Option<Custo
         key_env: text(&["key_env", "api_key_env"]).map(str::to_owned),
         api_mode: text(&["api_mode", "transport"]).map(canonical_api_mode),
         extra_body,
+        extra_headers: entry
+            .get("extra_headers")
+            .and_then(serde_yaml::Value::as_mapping)
+            .map(|headers| {
+                headers
+                    .iter()
+                    .filter_map(|(name, value)| {
+                        let name = scalar_text(name)?;
+                        Some((name, scalar_text(value)?))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
+}
+
+/// A scalar as the reference's `str()` shows it; null and collections are dropped.
+fn scalar_text(value: &serde_yaml::Value) -> Option<String> {
+    match value {
+        serde_yaml::Value::String(text) => Some(text.clone()),
+        serde_yaml::Value::Bool(flag) => Some(if *flag { "True" } else { "False" }.into()),
+        serde_yaml::Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    }
 }
 
 /// The entry a `model.provider` of `name` or `custom:name` selects.
@@ -913,6 +954,17 @@ fn named_provider<'a>(entries: &'a [CustomProvider], provider: &str) -> Option<&
     entries
         .iter()
         .find(|entry| entry.ids.iter().any(|known| known == id))
+}
+
+/// `extra_headers` of the first enabled entry for `base_url` that declares any.
+pub fn custom_extra_headers(entries: &[CustomProvider], base_url: &str) -> Vec<(String, String)> {
+    let target = base_url.trim().trim_end_matches('/');
+    entries
+        .iter()
+        .filter(|entry| entry.enabled && entry.base_url == target)
+        .find(|entry| !entry.extra_headers.is_empty())
+        .map(|entry| entry.extra_headers.clone())
+        .unwrap_or_default()
 }
 
 /// The `extra_body` for the `custom` provider at `base_url` running `model`: the first entry
