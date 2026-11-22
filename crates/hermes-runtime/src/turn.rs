@@ -725,7 +725,7 @@ async fn squeeze_turn(
         return false;
     };
     let summary = json!({"role": "user", "content": compaction.summary});
-    if messages_bytes(&[summary.clone()]) >= messages_bytes(middle) {
+    if messages_bytes(std::slice::from_ref(&summary)) >= messages_bytes(middle) {
         return false;
     }
     sent.splice(range, [summary]);
