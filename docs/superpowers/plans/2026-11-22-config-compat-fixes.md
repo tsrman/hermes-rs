@@ -68,9 +68,9 @@ routes ignore it); `auxiliary.compression.extra_body` is not read; fallback rout
     `run_budget_seconds`, `stall_guards`, `image_input_mode`. They change the system prompt or the request,
     so the first check is a recorded request from the reference for the default values (the defaults must
     match what the port sends now).
-12. **`tool_output.max_bytes/max_lines/max_line_length`**, **`file_read_max_chars`**, **`context_file_max_chars`
+12. **(done) `tool_output.max_bytes/max_lines/max_line_length`**, **`file_read_max_chars`**, **`context_file_max_chars`
     / `context_file_read_timeout`** [keys, the last is read]: the port's limits are constants.
-13. **`security.redact_secrets`, `privacy.redact_pii`, `security.redact_phone_numbers`.** The port always
+13. **(switch done; PII and phone options not) `security.redact_secrets`, `privacy.redact_pii`, `security.redact_phone_numbers`.** The port always
     redacts secrets and has no switch [keys]. Decide whether to add the switch; defaulting to the
     reference's default is mandatory either way.
 14. **`terminal.*`** read: `backend`, `env_passthrough`, timeouts for code. Not read [keys]: `cwd`,
@@ -251,3 +251,23 @@ turn; matching the reference adds about 2000 tokens to every request (more with 
   `context_file_max_chars` cap derived from the model window (the port keeps 20000 unless configured); the
   rule that `Conversation started` keeps the session's original date when a compaction rebuilds the prompt
   (the port uses the rebuild day).
+
+## Notes on output limits and the redaction switch (done)
+
+- `tool_output.max_bytes` (default 50000), `max_lines` (2000), `max_line_length` (2000) and
+  `file_read_max_chars` (100000) are read with the reference's coercion (`int(value) >= 1`, else the default;
+  `file_read_max_chars` only for positive numbers; 16 inputs checked against `_coerce_positive_int`).
+  `max_lines` and `max_line_length` and `file_read_max_chars` shape `read_file`; `max_bytes` shapes terminal
+  output.
+- **Terminal output now truncates like the reference** (it did not before: 16 KiB head and 48 KiB tail of
+  bytes with a different notice). Characters, not bytes: 40% from the start and 60% from the end of the limit,
+  with `... [OUTPUT TRUNCATED - N chars omitted out of T total] ...` between. 35 cases (ASCII, lines, Cyrillic,
+  emoji, short text; budgets from 10 to 5000) from `truncate_head_tail`, fed in chunks of 1 to 100000 bytes,
+  give identical text. The wrapper's final-directory line is cut off before the count, so it never counts as
+  output. Not ported: the spill file with the omitted middle, and the same limit for `execute_code` output
+  and MCP results (they keep their own limits).
+- `security.redact_secrets` and `HERMES_REDACT_SECRETS` (environment, then profile `.env`, then config; true
+  unless it says otherwise, parsed as `1/true/yes/on`) switch redaction of terminal output, file reads and
+  search results off. The stored-conversation text of `session_search`, the debug journal and CDP results stay
+  redacted, as the reference's forced path does. A warning is printed at startup when it is off.
+  `privacy.redact_pii` and `security.redact_phone_numbers` are still not read.

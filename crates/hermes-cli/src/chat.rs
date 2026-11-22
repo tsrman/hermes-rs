@@ -308,6 +308,10 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         }
     }
     settings.terminal_env.scratch = home.and_then(hermes_runtime::scratch::directory);
+    hermes_runtime::redact::set_enabled(settings.redact_secrets);
+    if !settings.redact_secrets {
+        eprintln!("Warning: secret redaction is off (security.redact_secrets or HERMES_REDACT_SECRETS); credentials in tool output reach the model unmasked.");
+    }
     let mut extras = hermes_runtime::providers::Extras::default();
     if let Some(model) = args.model.as_deref().or(settings.model.as_deref()) {
         if settings.provider == "custom" || settings.named_custom {

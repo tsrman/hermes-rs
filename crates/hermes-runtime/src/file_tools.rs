@@ -63,6 +63,7 @@ pub(crate) struct FileWorkspace<'a> {
     patch_failures: HashMap<PathBuf, u32>,
     /// The last search and how many times in a row it ran.
     search_repeat: (Option<String>, u32),
+    limits: crate::terminal::OutputLimits,
 }
 
 struct Observation {
@@ -118,7 +119,14 @@ impl<'a> FileWorkspace<'a> {
             observed: HashMap::new(),
             patch_failures: HashMap::new(),
             search_repeat: (None, 0),
+            limits: crate::terminal::OutputLimits::default(),
         }
+    }
+
+    /// How much of a read the model sees (`tool_output.*`, `file_read_max_chars`).
+    pub(crate) fn with_limits(mut self, limits: crate::terminal::OutputLimits) -> Self {
+        self.limits = limits;
+        self
     }
 
     pub(crate) fn read(&mut self, arguments: &str) -> Value {
@@ -141,7 +149,7 @@ impl<'a> FileWorkspace<'a> {
             .map_or(Some(2000), Value::as_u64)
             .filter(|value| *value > 0)
             .ok_or("Invalid limit")?
-            .min(2000);
+            .min(self.limits.max_lines as u64);
         let (root, resolved) = match self.resolve(path) {
             Ok(found) => found,
             Err(error) if error.contains("No such file") => {
@@ -203,17 +211,17 @@ impl<'a> FileWorkspace<'a> {
                 "Note: offset {offset} is beyond the end of the file ({total} lines total). Retry with offset <= {total}.")}),
             );
         }
-        const MAX_LINE: usize = 2000;
+        let max_line = self.limits.max_line_length;
         let mut clipped_lines = false;
         let mut content = lines[start..end]
             .iter()
             .enumerate()
             .map(|(index, line)| {
-                let line = if line.chars().count() > MAX_LINE {
+                let line = if line.chars().count() > max_line {
                     clipped_lines = true;
                     format!(
                         "{}... [truncated]",
-                        line.chars().take(MAX_LINE).collect::<String>()
+                        line.chars().take(max_line).collect::<String>()
                     )
                 } else {
                     (*line).to_owned()
@@ -231,13 +239,13 @@ impl<'a> FileWorkspace<'a> {
         });
         let mut extra = serde_json::Map::new();
         // A read is capped at a character budget, trimmed to the last whole line.
-        const MAX_CHARS: usize = 100_000;
-        if content.chars().count() > MAX_CHARS {
+        let max_chars = self.limits.file_read_max_chars;
+        if content.chars().count() > max_chars {
             let mut kept: Vec<&str> = Vec::new();
             let mut running = 0;
             for line in content.split('\n') {
                 let addition = line.chars().count() + usize::from(!kept.is_empty());
-                if running + addition > MAX_CHARS {
+                if running + addition > max_chars {
                     break;
                 }
                 kept.push(line);
@@ -250,7 +258,7 @@ impl<'a> FileWorkspace<'a> {
                     .next()
                     .unwrap_or("")
                     .chars()
-                    .take(MAX_CHARS)
+                    .take(max_chars)
                     .collect::<String>()
             } else {
                 kept.join("\n")
@@ -952,5 +960,44 @@ mod tests {
             .unwrap()
             .join("escape.txt")
             .exists());
+    }
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+    use crate::terminal::OutputLimits;
+
+    #[test]
+    fn read_file_follows_the_configured_output_limits() {
+        let directory = tempfile::tempdir().unwrap();
+        let body: String = (1..=10)
+            .map(|n| format!("{}\n", "x".repeat(n * 10)))
+            .collect();
+        std::fs::write(directory.path().join("f.txt"), body).unwrap();
+        let limits = OutputLimits {
+            max_lines: 4,
+            max_line_length: 25,
+            file_read_max_chars: 100_000,
+            ..OutputLimits::default()
+        };
+        let mut workspace = FileWorkspace::new(directory.path(), None).with_limits(limits);
+        let page = workspace.read(r#"{"path": "f.txt", "limit": 50}"#);
+        let content = page["content"].as_str().unwrap();
+        assert_eq!(content.lines().count(), 4, "{page}");
+        assert!(content.contains("... [truncated]"), "{content}");
+        assert_eq!(page["truncated"], true);
+
+        let tiny = OutputLimits {
+            file_read_max_chars: 40,
+            ..OutputLimits::default()
+        };
+        let mut workspace = FileWorkspace::new(directory.path(), None).with_limits(tiny);
+        let page = workspace.read(r#"{"path": "f.txt"}"#);
+        assert!(
+            page["content"].as_str().unwrap().chars().count() <= 40,
+            "{page}"
+        );
+        assert!(page.get("next_offset").is_some(), "{page}");
     }
 }

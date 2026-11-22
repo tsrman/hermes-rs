@@ -507,6 +507,14 @@ class UnattendedWorkTest(ToolTestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         return self.last_tool_result()
 
+    def test_tool_output_limits_cut_what_the_model_sees(self):
+        config = "tool_output:\n  max_bytes: 100\n"
+        result, _ = self.run_tool(
+            "terminal", {"command": "head -c 1000 /dev/zero | tr '\\0' x"}, "--yolo", config=config)
+        self.assertEqual(result["truncated"], True, result)
+        self.assertIn("... [OUTPUT TRUNCATED - 900 chars omitted out of 1,000 total] ...", result["output"])
+        self.assertEqual(result["output"].count("x"), 100)
+
     def test_yolo_approves_work_without_a_terminal_and_the_deny_list_still_blocks(self):
         result, _ = self.run_tool(
             "write_file", {"path": "made/by/yolo.txt", "content": "hello"}, "--yolo")
@@ -539,6 +547,22 @@ class UnattendedWorkTest(ToolTestCase):
         self.assertEqual(lines[:2], ["visible", "withheld"])
         self.assertTrue(lines[2].startswith("/"), lines)
         self.assertEqual(result["cwd"], str(self.root / "sub"))
+
+    def test_the_redaction_switch_follows_the_config_and_the_environment(self):
+        (self.root / ".netrc").write_text("machine example.test login alice password hunter2hunter2\n",
+                                          encoding="utf-8")
+        arguments = {"path": ".netrc"}
+        masked, _ = self.run_tool("read_file", arguments)
+        self.assertNotIn("hunter2hunter2", masked["content"])
+        off, _ = self.run_tool("read_file", arguments, config="security:\n  redact_secrets: false\n")
+        self.assertIn("hunter2hunter2", off["content"])
+        # The environment wins over the config.
+        self.env["HERMES_REDACT_SECRETS"] = "true"
+        again, _ = self.run_tool("read_file", arguments, config="security:\n  redact_secrets: false\n")
+        self.assertNotIn("hunter2hunter2", again["content"])
+        self.env["HERMES_REDACT_SECRETS"] = "off"
+        env_off, _ = self.run_tool("read_file", arguments)
+        self.assertIn("hunter2hunter2", env_off["content"])
 
     def test_the_debug_journal_records_requests_responses_and_tools_redacted(self):
         journal = self.root / "journal.jsonl"

@@ -63,12 +63,32 @@ pub struct Mode {
     pub secret_file: bool,
     /// Also redact credential-named URL parameters and user information.
     pub strict_urls: bool,
+    /// Redact even when `security.redact_secrets` is off (the reference's `force=True`).
+    pub force: bool,
+}
+
+static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Turn redaction of tool output on or off for this run (`security.redact_secrets`). Forced
+/// redaction (stored-conversation text, the debug journal, CDP results) is not affected.
+pub fn set_enabled(enabled: bool) {
+    ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn enabled() -> bool {
+    ENABLED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Redact credential shapes in `text` (the reference's `force=True` path, so no setting can
 /// switch it off). Passes that are not ported yet leave the text as it is.
 pub fn redact_sensitive_text(text: &str) -> String {
-    redact(text, Mode::default())
+    redact(
+        text,
+        Mode {
+            force: true,
+            ..Mode::default()
+        },
+    )
 }
 
 /// Text derived from stored conversations (summaries, search results) re-enters unrelated
@@ -78,6 +98,7 @@ pub fn redact_derived_text(text: &str) -> String {
         text,
         Mode {
             strict_urls: true,
+            force: true,
             ..Mode::default()
         },
     )
@@ -104,6 +125,9 @@ pub fn redact_with(text: &str, mode: Mode) -> String {
 fn redact(text: &str, mode: Mode) -> String {
     if text.is_empty() {
         return String::new();
+    }
+    if !mode.force && !enabled() {
+        return text.to_owned();
     }
     let Mode {
         file_read,

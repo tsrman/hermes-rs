@@ -22,6 +22,8 @@ fn modes_match_the_reference() {
             file_read: row["file_read"] == true,
             secret_file: row["secret_file"] == true,
             strict_urls: false,
+            // The rows were recorded from the reference's forced path.
+            force: true,
         };
         let input = row["input"].as_str().unwrap();
         let got = redact_with(input, mode);

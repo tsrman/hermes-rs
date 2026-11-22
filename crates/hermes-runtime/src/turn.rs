@@ -357,7 +357,12 @@ where
     A: FnMut(ApprovalRequest) -> D + Send,
     D: Future<Output = ApprovalDecision> + Send + 'static,
 {
-    let mut files = FileWorkspace::new(options.root, options.profile);
+    let mut files = FileWorkspace::new(options.root, options.profile).with_limits(
+        options
+            .terminal_env
+            .map(|terminal| terminal.output.clone())
+            .unwrap_or_default(),
+    );
     // The task list lives in the history, so resuming a session keeps it.
     let mut todo = TodoStore::from_history(&history.messages);
     let saved_prompt = history.system_prompt.as_deref();

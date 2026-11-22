@@ -17,8 +17,72 @@ pub(crate) const TERMINAL: &str = "terminal";
 /// Which of the user's environment variables a command sees. The toolchain variables below are
 /// always passed (a build or a test needs them); `terminal.env_passthrough` adds more by name.
 /// The profile's own provider credentials are never passed.
+/// `tool_output.*` and `file_read_max_chars`: how much of a tool result the model sees.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct OutputLimits {
+    /// Characters of command output kept (40% from the start, 60% from the end).
+    pub max_bytes: usize,
+    /// The most lines one `read_file` call may return.
+    pub max_lines: usize,
+    /// Longer lines are cut with `... [truncated]`.
+    pub max_line_length: usize,
+    /// Characters one `read_file` call may return.
+    pub file_read_max_chars: usize,
+}
+
+impl Default for OutputLimits {
+    fn default() -> Self {
+        Self {
+            max_bytes: 50_000,
+            max_lines: 2000,
+            max_line_length: 2000,
+            file_read_max_chars: 100_000,
+        }
+    }
+}
+
+impl OutputLimits {
+    pub(crate) fn from_config(config: &serde_yaml::Value) -> Self {
+        let defaults = Self::default();
+        // Python's `int(value) >= 1`, else the default: numbers truncate, numeric text parses.
+        let positive = |value: &serde_yaml::Value, default: usize| {
+            let parsed = match value {
+                serde_yaml::Value::Number(number) => number.as_i64().or_else(|| {
+                    number
+                        .as_f64()
+                        .filter(|f| f.is_finite())
+                        .map(|f| f.trunc() as i64)
+                }),
+                serde_yaml::Value::String(text) => text.trim().parse::<i64>().ok(),
+                serde_yaml::Value::Bool(flag) => Some(i64::from(*flag)),
+                _ => None,
+            };
+            parsed
+                .filter(|number| *number >= 1)
+                .and_then(|number| usize::try_from(number).ok())
+                .unwrap_or(default)
+        };
+        let section = &config["tool_output"];
+        let read_chars = match &config["file_read_max_chars"] {
+            serde_yaml::Value::Number(number) => number
+                .as_f64()
+                .filter(|chars| *chars > 0.0)
+                .map(|chars| chars as usize),
+            _ => None,
+        };
+        Self {
+            max_bytes: positive(&section["max_bytes"], defaults.max_bytes),
+            max_lines: positive(&section["max_lines"], defaults.max_lines),
+            max_line_length: positive(&section["max_line_length"], defaults.max_line_length),
+            file_read_max_chars: read_chars.unwrap_or(defaults.file_read_max_chars),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct TerminalSettings {
+    #[serde(default)]
+    pub output: OutputLimits,
     pub env_passthrough: Vec<String>,
     /// `code_execution.timeout`: seconds one `execute_code` call may run.
     #[serde(default)]
@@ -82,6 +146,7 @@ impl TerminalSettings {
             .unwrap_or_default();
         let section = &config["code_execution"];
         Self {
+            output: OutputLimits::from_config(config),
             env_passthrough: names,
             code_timeout: section["timeout"].as_u64().filter(|seconds| *seconds > 0),
             code_max_tool_calls: section["max_tool_calls"]
@@ -247,8 +312,6 @@ mod shell {
 
     /// Output kept for the model: the start (what the command announced) and the end (where
     /// errors and results are), with the middle omitted.
-    const HEAD_LIMIT: usize = 16 * 1024;
-    const TAIL_LIMIT: usize = 48 * 1024;
     const CWD_MARKER: &str = "__HERMES_CWD__";
 
     #[derive(Deserialize)]
@@ -460,17 +523,18 @@ mod shell {
             std::os::fd::OwnedFd::from(reader),
         ))
         .map_err(|error| error.to_string())?;
-        let mut kept = Kept::default();
+        let mut kept = Kept::with_limit(settings.output.max_bytes);
         let result = timeout(duration, async {
             tokio::try_join!(group.wait(), capture(receiver, &mut kept))
         })
         .await;
         match result {
             Ok(Ok((status, ()))) => {
-                let (text, ended) = split_directory_marker(&kept.render());
+                let ended = kept.take_directory();
+                let text = kept.render();
                 let text = redact_terminal_output(&text, Some(command), &[]);
                 let mut result = json!({"output": text, "exit_code": status.code().unwrap_or(-1),
-                           "status": "completed", "truncated": kept.omitted > 0});
+                           "status": "completed", "truncated": kept.omitted() > 0});
                 if let Some(ended) = ended {
                     result["_cwd"] = json!(ended);
                 }
@@ -480,7 +544,8 @@ mod shell {
             Err(_) => {
                 group.stop();
                 let _ = group.child.wait().await;
-                let (text, _) = split_directory_marker(&kept.render());
+                kept.take_directory();
+                let text = kept.render();
                 Ok(
                     json!({"error": "The command timed out", "exit_code": -1, "status": "timeout",
                            "output": redact_terminal_output(&text, Some(command), &[])}),
@@ -489,49 +554,155 @@ mod shell {
         }
     }
 
-    /// The first bytes and the last bytes of what a command printed.
-    #[derive(Default)]
-    struct Kept {
+    /// The first and the last characters of what a command printed, 40% and 60% of the limit,
+    /// with a notice between them when the middle was left out.
+    pub(super) struct Kept {
+        max_chars: usize,
+        head_limit: usize,
+        tail_limit: usize,
         head: Vec<u8>,
+        head_chars: usize,
+        head_full: bool,
         tail: std::collections::VecDeque<u8>,
+        tail_chars: usize,
         omitted: usize,
+        total: usize,
+    }
+
+    const MARKER_SLACK: usize = 8192;
+
+    impl Default for Kept {
+        fn default() -> Self {
+            Self::with_limit(OutputLimits::default().max_bytes)
+        }
     }
 
     impl Kept {
-        fn push(&mut self, bytes: &[u8]) {
-            let room = HEAD_LIMIT.saturating_sub(self.head.len());
-            let (first, rest) = bytes.split_at(room.min(bytes.len()));
-            self.head.extend_from_slice(first);
-            self.tail.extend(rest);
-            while self.tail.len() > TAIL_LIMIT {
-                self.tail.pop_front();
-                self.omitted += 1;
+        pub(super) fn with_limit(max_chars: usize) -> Self {
+            let head_limit = (max_chars as f64 * 0.4) as usize;
+            Self {
+                max_chars,
+                head_limit,
+                tail_limit: max_chars - head_limit,
+                head: Vec::new(),
+                head_chars: 0,
+                head_full: false,
+                tail: std::collections::VecDeque::new(),
+                tail_chars: 0,
+                omitted: 0,
+                total: 0,
             }
         }
 
-        fn render(&self) -> String {
-            let mut bytes = self.head.clone();
-            if self.omitted > 0 {
-                bytes.extend_from_slice(
-                    format!("\n… [{} bytes omitted] …\n", self.omitted).as_bytes(),
+        /// Characters are counted by their first byte, so a character split across two reads
+        /// is still one.
+        pub(super) fn push(&mut self, bytes: &[u8]) {
+            for &byte in bytes {
+                let starts = byte & 0xC0 != 0x80;
+                self.total += usize::from(starts);
+                if !self.head_full {
+                    if starts && self.head_chars == self.head_limit {
+                        self.head_full = true;
+                    } else {
+                        self.head.push(byte);
+                        self.head_chars += usize::from(starts);
+                        continue;
+                    }
+                }
+                self.tail.push_back(byte);
+                self.tail_chars += usize::from(starts);
+                // The tail keeps some slack so the wrapper's final-directory line, which is not
+                // output, can be cut off without having eaten real output.
+                if self.tail_chars > self.tail_limit + MARKER_SLACK {
+                    self.tail.pop_front();
+                    while self.tail.front().is_some_and(|next| next & 0xC0 == 0x80) {
+                        self.tail.pop_front();
+                    }
+                    self.tail_chars -= 1;
+                    self.omitted += 1;
+                }
+            }
+        }
+
+        pub(super) fn omitted(&self) -> usize {
+            self.omitted + self.tail_chars.saturating_sub(self.tail_limit)
+        }
+
+        /// Cut the wrapper's final-directory line off the end and return the directory.
+        pub(super) fn take_directory(&mut self) -> Option<String> {
+            let needle = format!("\n{CWD_MARKER}").into_bytes();
+            let at = |bytes: &[u8]| {
+                bytes
+                    .windows(needle.len())
+                    .rposition(|window| window == needle)
+            };
+            if self.omitted == 0 {
+                // Everything is still here: rebuild from the text without the line.
+                let mut all = self.head.clone();
+                all.extend(self.tail.iter());
+                let index = at(&all)?;
+                let after = &all[index + needle.len()..];
+                let line = after.split(|byte| *byte == b'\n').next().unwrap_or(&[]);
+                let path = String::from_utf8_lossy(line).into_owned();
+                let mut fresh = Self::with_limit(self.max_chars);
+                fresh.push(&all[..index]);
+                *self = fresh;
+                return (!path.is_empty()).then_some(path);
+            }
+            let tail: Vec<u8> = self.tail.iter().copied().collect();
+            let index = at(&tail)?;
+            let after = &tail[index + needle.len()..];
+            let line = after.split(|byte| *byte == b'\n').next().unwrap_or(&[]);
+            let path = String::from_utf8_lossy(line).into_owned();
+            let removed = tail[index..]
+                .iter()
+                .filter(|byte| **byte & 0xC0 != 0x80)
+                .count();
+            self.tail.truncate(index);
+            self.tail_chars -= removed;
+            self.total -= removed;
+            (!path.is_empty()).then_some(path)
+        }
+
+        pub(super) fn render(&self) -> String {
+            // Characters beyond the limit (the slack) are omitted too.
+            let mut skip = 0;
+            let mut dropped = 0;
+            let bytes: Vec<u8> = self.tail.iter().copied().collect();
+            while self.tail_chars - dropped > self.tail_limit && skip < bytes.len() {
+                skip += 1;
+                while bytes.get(skip).is_some_and(|next| next & 0xC0 == 0x80) {
+                    skip += 1;
+                }
+                dropped += 1;
+            }
+            let omitted = self.omitted + dropped;
+            let mut out = self.head.clone();
+            if omitted > 0 {
+                out.extend_from_slice(
+                    format!(
+                        "\n\n... [OUTPUT TRUNCATED - {} chars omitted out of {} total] ...\n\n",
+                        thousands(omitted),
+                        thousands(self.total)
+                    )
+                    .as_bytes(),
                 );
             }
-            bytes.extend(self.tail.iter());
-            String::from_utf8_lossy(&bytes).into_owned()
+            out.extend_from_slice(&bytes[skip..]);
+            String::from_utf8_lossy(&out).into_owned()
         }
     }
 
-    /// Remove the final-directory line the wrapper prints, and return that directory.
-    fn split_directory_marker(text: &str) -> (String, Option<String>) {
-        let needle = format!("\n{CWD_MARKER}");
-        match text.rfind(&needle) {
-            Some(index) => {
-                let after = &text[index + needle.len()..];
-                let path = after.lines().next().unwrap_or("").to_owned();
-                (text[..index].to_owned(), (!path.is_empty()).then_some(path))
+    fn thousands(count: usize) -> String {
+        let digits = count.to_string();
+        let mut grouped = String::new();
+        for (position, digit) in digits.chars().enumerate() {
+            if position > 0 && (digits.len() - position).is_multiple_of(3) {
+                grouped.push(',');
             }
-            None => (text.to_owned(), None),
+            grouped.push(digit);
         }
+        grouped
     }
 
     struct ProcessGroup {
@@ -599,6 +770,63 @@ mod tests {
             &mut approve,
         )
         .await
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Truncation {
+        text: String,
+        max: usize,
+        expected: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct LimitCase {
+        value: serde_json::Value,
+        expected: usize,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Recorded {
+        truncation: Vec<Truncation>,
+        limits: Vec<LimitCase>,
+    }
+
+    fn recorded() -> Recorded {
+        serde_json::from_str(include_str!("../tests/fixtures/truncation_cases.json")).unwrap()
+    }
+
+    #[test]
+    fn kept_output_equals_the_reference_head_tail_truncation_for_any_chunking() {
+        for case in recorded().truncation {
+            for chunk in [1usize, 3, 7, 64, 100_000] {
+                let mut kept = shell::Kept::with_limit(case.max);
+                for piece in case.text.as_bytes().chunks(chunk) {
+                    kept.push(piece);
+                }
+                assert_eq!(
+                    kept.render(),
+                    case.expected,
+                    "max {} chunk {chunk}",
+                    case.max
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn limit_values_coerce_like_the_reference() {
+        for case in recorded().limits {
+            let config = serde_yaml::to_value(serde_json::json!({
+                "tool_output": {"max_bytes": case.value}
+            }))
+            .unwrap();
+            assert_eq!(
+                OutputLimits::from_config(&config).max_bytes,
+                case.expected,
+                "{:?}",
+                case.value
+            );
+        }
     }
 
     #[tokio::test]
@@ -778,7 +1006,8 @@ mod tests {
         assert_eq!(result["exit_code"], 3);
         assert_eq!(result["truncated"], true);
         assert!(text.starts_with("line-0\n"));
-        assert!(text.contains("bytes omitted"));
+        assert!(text.contains("... [OUTPUT TRUNCATED - "));
+        assert!(text.contains(" chars omitted out of "));
         assert!(
             text.trim_end().ends_with("the-end"),
             "{}",

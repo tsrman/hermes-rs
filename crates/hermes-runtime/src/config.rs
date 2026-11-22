@@ -41,6 +41,9 @@ pub struct ChatSettings {
     pub api_key: Option<String>,
     /// `model.api_key` from config.yaml.
     pub config_api_key: Option<String>,
+    /// `HERMES_REDACT_SECRETS` (environment or profile `.env`), else `security.redact_secrets`;
+    /// on unless it says otherwise.
+    pub redact_secrets: bool,
     /// `model.provider` named an entry of `providers:`.
     pub named_custom: bool,
     /// `auxiliary.compression`: where the compression summary is made.
@@ -145,6 +148,7 @@ impl Default for ChatSettings {
             base_url: None,
             api_key: None,
             config_api_key: None,
+            redact_secrets: true,
             named_custom: false,
             compression_route: AuxiliaryRoute::default(),
             default_headers: Vec::new(),
@@ -495,6 +499,22 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
         }
     }
     settings.secrets = secrets.clone();
+    let policy = std::env::var("HERMES_REDACT_SECRETS")
+        .ok()
+        .or_else(|| secrets.get("HERMES_REDACT_SECRETS").cloned())
+        .or_else(|| match &config["security"]["redact_secrets"] {
+            serde_yaml::Value::Null => None,
+            serde_yaml::Value::Bool(flag) => Some(flag.to_string()),
+            serde_yaml::Value::String(text) => Some(text.clone()),
+            serde_yaml::Value::Number(number) => Some(number.to_string()),
+            _ => Some(String::new()),
+        });
+    if let Some(raw) = policy {
+        settings.redact_secrets = matches!(
+            raw.trim().to_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        );
+    }
     // A named provider's endpoint may be overridden from the environment or the profile `.env`.
     let configured_base_url = config["model"]
         .get("base_url")
