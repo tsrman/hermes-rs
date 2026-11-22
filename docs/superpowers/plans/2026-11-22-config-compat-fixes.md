@@ -347,8 +347,10 @@ read are refused whatever the mode says, and `command_allowlist` entries still a
 terminal still asks, where the reference's `-q` never asks; `--oneshot` is the port's no-person switch.
 `approvals.unattended_mode` (webhook platforms) has no counterpart.
 
-Not ported yet: the macOS `osascript` classifier (`approval_applescript.py`), the
-`cron.lifecycle_guard` splice check, Windows path spellings (the detector is POSIX only), the guardian
+The macOS `osascript` classifier (`approval_applescript.py`) is ported and checked against 229
+recorded commands; its two findings are answered for that one command only (no session or "always"
+grant, as the reference's manual-only descriptions). Not ported yet: the
+`cron.lifecycle_guard` splice check (a prompt-only layer for gateway lifecycle verbs; the port has no gateway), Windows path spellings (the detector is POSIX only), the guardian
 (`smart`) mode and `cron_mode`/`unattended_mode`. `config set` rewrites `config.yaml` without keeping
 comments, which also applies to the `command_allowlist` write.
 
