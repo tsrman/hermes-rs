@@ -631,7 +631,7 @@ where
             on_event(TurnEvent::ToolStarted(&name));
             let started = std::time::Instant::now();
             let mcp_tool = match options.mcp {
-                Some(mcp) if name.starts_with("mcp_") && !through_bridge => {
+                Some(mcp) if name.starts_with("mcp__") && !through_bridge => {
                     let mcp = mcp.lock().await;
                     mcp.owns(&name).then_some(())
                 }

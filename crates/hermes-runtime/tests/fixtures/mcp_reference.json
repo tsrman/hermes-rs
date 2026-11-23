@@ -1,4 +1,317 @@
 {
+  "calls": {
+    "names": [
+      {
+        "name": "mcp__srv__echo",
+        "server": "srv",
+        "tool": "echo"
+      },
+      {
+        "name": "mcp__my_server_v2__do_it_now",
+        "server": "my-server.v2",
+        "tool": "do-it.now"
+      },
+      {
+        "name": "mcp___n___t__l",
+        "server": "ünï",
+        "tool": "tööl"
+      },
+      {
+        "name": "mcp____",
+        "server": "",
+        "tool": ""
+      },
+      {
+        "name": "mcp__a_b__c_d",
+        "server": "a b",
+        "tool": "c/d"
+      },
+      {
+        "name": "mcp__srv__list_resources",
+        "server": "srv",
+        "tool": "list_resources"
+      },
+      {
+        "name": "mcp__xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx__yyyyyyyy_83dba6e7",
+        "server": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tool": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+      },
+      {
+        "name": "mcp__xxxxxxxxxxxxxxxxxxxxxxxxxx__yyyyyyyyyyyyyyyyyyyyyyyyyy",
+        "server": "xxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tool": "yyyyyyyyyyyyyyyyyyyyyyyyyy"
+      },
+      {
+        "name": "mcp__xxxxxxxxxxxxxxxxxxxxxxxxxxx__yyyyyyyyyyyyyyyyyyyyyyyyyy",
+        "server": "xxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tool": "yyyyyyyyyyyyyyyyyyyyyyyyyy"
+      },
+      {
+        "name": "mcp__srv________________________________________________b69ed9ed",
+        "server": "srv",
+        "tool": "üüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüü"
+      }
+    ],
+    "results": {
+      "empty": {
+        "output": "{\"result\": \"\"}",
+        "wire": "{\"content\": []}"
+      },
+      "error": {
+        "output": "{\"error\": \"tool failed\"}",
+        "wire": "{\"isError\": true, \"content\": [{\"type\": \"text\", \"text\": \"tool failed\"}]}"
+      },
+      "error_blank_text": {
+        "output": "{\"error\": \"MCP tool returned an error\"}",
+        "wire": "{\"isError\": true, \"content\": [{\"type\": \"text\", \"text\": \"\"}]}"
+      },
+      "error_empty": {
+        "output": "{\"error\": \"MCP tool returned an error\"}",
+        "wire": "{\"isError\": true, \"content\": []}"
+      },
+      "error_hidden": {
+        "output": "{\"error\": \"badx\"}",
+        "wire": "{\"isError\": true, \"content\": [{\"type\": \"text\", \"text\": \"bad󠁁x\"}]}"
+      },
+      "error_image_only": {
+        "output": "{\"error\": \"MCP tool returned an error\"}",
+        "wire": "{\"isError\": true, \"content\": [{\"type\": \"image\", \"data\": \"AAAA\", \"mimeType\": \"image/png\"}]}"
+      },
+      "error_long": {
+        "output": "{\"error\": \"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee… [truncated]\"}",
+        "wire": "{\"isError\": true, \"content\": [{\"type\": \"text\", \"text\": \"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"}]}"
+      },
+      "error_multi": {
+        "output": "{\"error\": \"ab\"}",
+        "wire": "{\"isError\": true, \"content\": [{\"type\": \"text\", \"text\": \"a\"}, {\"type\": \"text\", \"text\": \"b\"}]}"
+      },
+      "error_resource": {
+        "output": "{\"error\": \"embedded failure\"}",
+        "wire": "{\"isError\": true, \"content\": [{\"type\": \"resource\", \"resource\": {\"uri\": \"file:///e\", \"text\": \"embedded failure\"}}]}"
+      },
+      "error_secret": {
+        "output": "{\"error\": \"denied: Authorization [REDACTED] and [REDACTED] in the request\"}",
+        "wire": "{\"isError\": true, \"content\": [{\"type\": \"text\", \"text\": \"denied: Authorization Bearer abc123def and token=xyz789 in the request\"}]}"
+      },
+      "hidden_text": {
+        "output": "{\"result\": \"ab\"}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"a󠁁b\"}]}"
+      },
+      "meta_and_structured": {
+        "output": "{\"result\": {\"s\": 1}, \"_meta\": {\"k\": \"v\"}}",
+        "wire": "{\"content\": [], \"structuredContent\": {\"s\": 1}, \"_meta\": {\"k\": \"v\"}}"
+      },
+      "meta_only": {
+        "output": "{\"_meta\": {\"k\": \"v\"}, \"result\": \"\"}",
+        "wire": "{\"content\": [], \"_meta\": {\"k\": \"v\"}}"
+      },
+      "meta_reserved_only": {
+        "output": "{\"result\": \"x\"}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"x\"}], \"_meta\": {\"modelcontextprotocol.io/r\": 2}}"
+      },
+      "meta_structured_text": {
+        "output": "{\"result\": \"t\", \"structuredContent\": {\"s\": 1}, \"_meta\": {\"k\": \"v\"}}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"t\"}], \"structuredContent\": {\"s\": 1}, \"_meta\": {\"k\": \"v\"}}"
+      },
+      "meta_with_text": {
+        "output": "{\"result\": \"x\", \"_meta\": {\"com.example.mcp/k\": 1, \"plain\": \"v\", \"mcp/t\": 4, \"io.mcp/u\": 5}}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"x\"}], \"_meta\": {\"com.example.mcp/k\": 1, \"plain\": \"v\", \"modelcontextprotocol.io/r\": 2, \"tools.mcp.com/s\": 3, \"mcp/t\": 4, \"io.mcp/u\": 5}}"
+      },
+      "multi": {
+        "output": "{\"result\": \"one\\n  \\ntwo\"}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"one\"}, {\"type\": \"text\", \"text\": \"\"}, {\"type\": \"text\", \"text\": \"  \"}, {\"type\": \"text\", \"text\": \"two\"}]}"
+      },
+      "non_ascii": {
+        "output": "{\"result\": \"привет ☃ 😀\"}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"привет ☃ 😀\"}]}"
+      },
+      "plain": {
+        "output": "{\"result\": \"x\"}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"x\"}]}"
+      },
+      "resource_blob": {
+        "output": "{\"result\": \"[MCP resource saved to <path> (x/y, 3 bytes) — read it with read_file or terminal tools]\"}",
+        "wire": "{\"content\": [{\"type\": \"resource\", \"resource\": {\"uri\": \"file:///b\", \"blob\": \"AAAA\", \"mimeType\": \"x/y\"}}]}"
+      },
+      "resource_link": {
+        "output": "{\"result\": \"[MCP resource link: uri=file:///l, name=l, mimeType=text/plain — fetch it with mcp__fx__read_resource]\"}",
+        "wire": "{\"content\": [{\"type\": \"resource_link\", \"uri\": \"file:///l\", \"name\": \"l\", \"mimeType\": \"text/plain\"}]}"
+      },
+      "resource_text": {
+        "output": "{\"result\": \"body\"}",
+        "wire": "{\"content\": [{\"type\": \"resource\", \"resource\": {\"uri\": \"file:///r\", \"text\": \"body󠁁\"}}]}"
+      },
+      "structured_dual": {
+        "output": "{\"result\": \"{\\\"a\\\":1,\\\"b\\\":2}\"}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"{\\\"a\\\":1,\\\"b\\\":2}\"}], \"structuredContent\": {\"a\": 1, \"b\": 2}}"
+      },
+      "structured_dual_float": {
+        "output": "{\"result\": \"{\\\"a\\\":1.0}\", \"structuredContent\": {\"a\": 1}}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"{\\\"a\\\":1.0}\"}], \"structuredContent\": {\"a\": 1}}"
+      },
+      "structured_dual_type_differs": {
+        "output": "{\"result\": \"{\\\"a\\\":true}\", \"structuredContent\": {\"a\": 1}}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"{\\\"a\\\":true}\"}], \"structuredContent\": {\"a\": 1}}"
+      },
+      "structured_floats": {
+        "output": "{\"result\": {\"a\": 1e+22, \"b\": 1e-07, \"c\": 1.25, \"d\": 100.0, \"e\": 1e+16, \"f\": 1000000000000000.0}}",
+        "wire": "{\"content\": [], \"structuredContent\": {\"a\": 1e+22, \"b\": 1e-07, \"c\": 1.25, \"d\": 100.0, \"e\": 1e+16, \"f\": 1000000000000000.0}}"
+      },
+      "structured_next_to_prose": {
+        "output": "{\"result\": \"summary\", \"structuredContent\": {\"a\": 1, \"z\": 2}}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"summary\"}], \"structuredContent\": {\"a\": 1, \"z\": 2}}"
+      },
+      "structured_only": {
+        "output": "{\"result\": {\"a\": 1, \"b\": [1.5, true, null], \"c\": \"ü\"}}",
+        "wire": "{\"content\": [], \"structuredContent\": {\"a\": 1, \"b\": [1.5, true, null], \"c\": \"ü\"}}"
+      },
+      "wrapped_list": {
+        "output": "{\"result\": \"[1, \\\"two\\\"]\"}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"1\"}, {\"type\": \"text\", \"text\": \"two\"}], \"structuredContent\": {\"result\": [1, \"two\"]}}"
+      },
+      "wrapped_list_mismatch": {
+        "output": "{\"result\": \"1\", \"structuredContent\": {\"result\": [1, 2]}}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"1\"}], \"structuredContent\": {\"result\": [1, 2]}}"
+      },
+      "wrapped_number": {
+        "output": "{\"result\": \"7\"}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"7\"}], \"structuredContent\": {\"result\": 7}}"
+      },
+      "wrapped_other_key": {
+        "output": "{\"result\": \"x\", \"structuredContent\": {\"result\": \"x\", \"more\": 1}}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"x\"}], \"structuredContent\": {\"result\": \"x\", \"more\": 1}}"
+      },
+      "wrapped_string": {
+        "output": "{\"result\": \"abc\"}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"abc\"}], \"structuredContent\": {\"result\": \"abc\"}}"
+      }
+    },
+    "timeouts": [
+      {
+        "resolved": 300.0,
+        "server": {},
+        "timeouts": null
+      },
+      {
+        "resolved": 7,
+        "server": {
+          "timeout": 7
+        },
+        "timeouts": null
+      },
+      {
+        "resolved": 2.5,
+        "server": {
+          "timeout": 2.5
+        },
+        "timeouts": null
+      },
+      {
+        "resolved": 7,
+        "server": {
+          "timeout": 7
+        },
+        "timeouts": {
+          "mcp": {
+            "tool_call": 9
+          }
+        }
+      },
+      {
+        "resolved": 9.0,
+        "server": {},
+        "timeouts": {
+          "mcp": {
+            "tool_call": 9
+          }
+        }
+      },
+      {
+        "resolved": 45.5,
+        "server": {},
+        "timeouts": {
+          "mcp": {
+            "tool_call": 45.5
+          }
+        }
+      },
+      {
+        "resolved": 30.0,
+        "server": {},
+        "timeouts": {
+          "mcp": {
+            "tool_call": "30"
+          }
+        }
+      },
+      {
+        "resolved": 300,
+        "server": {},
+        "timeouts": {
+          "mcp": {
+            "tool_call": 0
+          }
+        }
+      },
+      {
+        "resolved": 300,
+        "server": {},
+        "timeouts": {
+          "mcp": {
+            "tool_call": -1
+          }
+        }
+      },
+      {
+        "resolved": 300.0,
+        "server": {},
+        "timeouts": {
+          "mcp": {
+            "tool_call": true
+          }
+        }
+      },
+      {
+        "resolved": 300.0,
+        "server": {},
+        "timeouts": {
+          "mcp": {
+            "tool_call": "soon"
+          }
+        }
+      },
+      {
+        "resolved": 31536000.0,
+        "server": {},
+        "timeouts": {
+          "mcp": {
+            "tool_call": 1000000000000.0
+          }
+        }
+      },
+      {
+        "resolved": 300.0,
+        "server": {},
+        "timeouts": {
+          "mcp.tool_call": 9
+        }
+      },
+      {
+        "resolved": 300.0,
+        "server": {},
+        "timeouts": {
+          "mcp": 9
+        }
+      },
+      {
+        "resolved": 300.0,
+        "server": {},
+        "timeouts": {
+          "default": 9
+        }
+      }
+    ]
+  },
   "mcp_version": "2.3.0",
   "messages": {
     "expired_markers": {

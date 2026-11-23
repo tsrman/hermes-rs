@@ -6,6 +6,12 @@ use std::process::{Child, Command, Stdio};
 use hermes_runtime::mcp::{McpClients, McpServerConfig};
 use serde_json::{json, Value};
 
+/// A tool answer is the JSON text the reference writes (Python separators); the tests read it as a value.
+fn parsed(output: Value) -> Value {
+    serde_json::from_str(output.as_str().expect("an MCP answer is JSON text"))
+        .expect("an MCP answer is valid JSON")
+}
+
 struct Fixture {
     child: Child,
     url: String,
@@ -56,7 +62,7 @@ impl Fixture {
             env: BTreeMap::new(),
             url: Some(self.url.clone()),
             headers: BTreeMap::from([("Authorization".into(), format!("Bearer {token}"))]),
-            timeout_secs,
+            timeout_secs: timeout_secs as f64,
             connect_timeout_secs: 10,
             resources: true,
         }
@@ -75,9 +81,9 @@ async fn lists_calls_and_ends_the_session() {
     let fixture = Fixture::start();
     let (mut clients, warnings) = McpClients::start(&[fixture.config("fixture-token", 10)]).await;
     assert!(warnings.is_empty(), "{warnings:?}");
-    assert!(clients.owns("mcp_web_echo"));
+    assert!(clients.owns("mcp__web__echo"));
     // The answer arrives in an event stream that also carries a notification and a request.
-    let echoed = clients.call("mcp_web_echo", r#"{"text":"привет"}"#).await;
+    let echoed = parsed(clients.call("mcp__web__echo", r#"{"text":"привет"}"#).await);
     assert_eq!(echoed, json!({"result": "привет"}));
     clients.shutdown().await;
 
@@ -126,7 +132,7 @@ async fn rejected_credentials_make_the_server_unavailable_without_leaking_them()
 async fn call_timeout_is_an_error() {
     let fixture = Fixture::start();
     let (mut clients, _) = McpClients::start(&[fixture.config("fixture-token", 1)]).await;
-    let output = clients.call("mcp_web_slow", "{}").await;
+    let output = parsed(clients.call("mcp__web__slow", "{}").await);
     assert!(output["error"].as_str().unwrap().contains("timed out"));
     clients.shutdown().await;
 }
@@ -179,7 +185,7 @@ async fn a_dropped_call_is_cancelled_on_the_server_as_the_reference_does() {
     // The turn is cancelled while the call waits: its future is dropped.
     let waited = tokio::time::timeout(
         std::time::Duration::from_millis(400),
-        clients.call("mcp_web_slow", "{}"),
+        clients.call("mcp__web__slow", "{}"),
     )
     .await;
     assert!(waited.is_err());
@@ -208,7 +214,7 @@ async fn a_dropped_call_is_cancelled_on_the_server_as_the_reference_does() {
 async fn a_call_that_times_out_is_cancelled_and_reported_like_the_reference() {
     let fixture = Fixture::start();
     let (mut clients, _) = McpClients::start(&[fixture.config("fixture-token", 1)]).await;
-    let output = clients.call("mcp_web_slow", "{}").await;
+    let output = parsed(clients.call("mcp__web__slow", "{}").await);
     assert_eq!(
         output["error"],
         "MCP call failed: TimeoutError: MCP call timed out after 1.0s (configured timeout: 1.0s)"
@@ -224,7 +230,7 @@ async fn a_call_that_times_out_is_cancelled_and_reported_like_the_reference() {
 async fn finished_calls_and_initialize_are_never_cancelled() {
     let fixture = Fixture::start();
     let (mut clients, _) = McpClients::start(&[fixture.config("fixture-token", 10)]).await;
-    clients.call("mcp_web_echo", r#"{"text":"a"}"#).await;
+    parsed(clients.call("mcp__web__echo", r#"{"text":"a"}"#).await);
     clients.shutdown().await;
     assert!(cancellations(&fixture).is_empty());
 }
@@ -234,9 +240,9 @@ async fn an_expired_session_is_renewed_and_a_read_only_call_is_repeated() {
     let fixture = Fixture::start();
     let (mut clients, _) = McpClients::start(&[fixture.config("fixture-token", 10)]).await;
     // The server forgets the session; the next request gets a 404.
-    let ended = clients.call("mcp_web_expire", "{}").await;
+    let ended = parsed(clients.call("mcp__web__expire", "{}").await);
     assert_eq!(ended, json!({"result": ""}));
-    let echoed = clients.call("mcp_web_echo", r#"{"text":"again"}"#).await;
+    let echoed = parsed(clients.call("mcp__web__echo", r#"{"text":"again"}"#).await);
     assert_eq!(echoed, json!({"result": "again"}));
     clients.shutdown().await;
     let entries = fixture.entries();
@@ -271,8 +277,8 @@ async fn an_expired_session_is_renewed_and_a_read_only_call_is_repeated() {
 async fn an_expired_session_is_renewed_but_a_write_call_is_not_repeated() {
     let fixture = Fixture::start();
     let (mut clients, _) = McpClients::start(&[fixture.config("fixture-token", 10)]).await;
-    clients.call("mcp_web_expire", "{}").await;
-    let output = clients.call("mcp_web_write", r#"{"text":"once"}"#).await;
+    parsed(clients.call("mcp__web__expire", "{}").await);
+    let output = parsed(clients.call("mcp__web__write", r#"{"text":"once"}"#).await);
     let recorded = corpus()["messages"]["session_outcome_uncertain"]
         .as_str()
         .unwrap()
@@ -283,7 +289,7 @@ async fn an_expired_session_is_renewed_but_a_write_call_is_not_repeated() {
         json!({"error": recorded, "outcome_uncertain": true, "server": "web"})
     );
     // The connection is usable again, and the write reached the server only once.
-    let echoed = clients.call("mcp_web_echo", r#"{"text":"after"}"#).await;
+    let echoed = parsed(clients.call("mcp__web__echo", r#"{"text":"after"}"#).await);
     assert_eq!(echoed, json!({"result": "after"}));
     clients.shutdown().await;
     let writes = fixture
@@ -299,12 +305,12 @@ async fn a_session_that_cannot_be_renewed_reports_the_first_failure() {
     let fixture = Fixture::start();
     let (mut clients, _) = McpClients::start(&[fixture.config("fixture-token", 10)]).await;
     // The session ends and the server refuses to open another.
-    clients.call("mcp_web_expire_for_good", "{}").await;
+    parsed(clients.call("mcp__web__expire_for_good", "{}").await);
     let recorded = corpus()["wire"]["session_expired"]["error"]["message"].clone();
-    let output = clients.call("mcp_web_echo", r#"{"text":"x"}"#).await;
+    let output = parsed(clients.call("mcp__web__echo", r#"{"text":"x"}"#).await);
     assert_eq!(output, json!({"error": recorded}));
     // The next call tries again; it never reaches the server, so a write is not "uncertain".
-    let output = clients.call("mcp_web_write", "{}").await;
+    let output = parsed(clients.call("mcp__web__write", "{}").await);
     assert!(output["error"]
         .as_str()
         .unwrap()
@@ -324,14 +330,14 @@ async fn a_stream_that_ends_early_is_resumed_with_last_event_id_as_the_reference
     let fixture = Fixture::start();
     let (mut clients, _) = McpClients::start(&[fixture.config("fixture-token", 10)]).await;
     let recorded = corpus();
-    let output = clients.call("mcp_web_resume", "{}").await;
+    let output = parsed(clients.call("mcp__web__resume", "{}").await);
     assert_eq!(output, json!({"result": "resumed"}));
     assert_eq!(
         json!(resumptions(&fixture)),
         recorded["wire"]["resume"]["gets"]
     );
     // The answer came after a second drop: the new stream carries the new event id.
-    let output = clients.call("mcp_web_resume_twice", "{}").await;
+    let output = parsed(clients.call("mcp__web__resume_twice", "{}").await);
     assert_eq!(output, json!({"result": "resumed"}));
     let gets = resumptions(&fixture);
     assert_eq!(
@@ -349,7 +355,7 @@ async fn resumption_follows_every_new_stream_and_starts_from_a_priming_event() {
     let recorded = corpus();
     // Three drops in a row would exhaust two attempts, but each resumed stream ends well first.
     let started = std::time::Instant::now();
-    let output = clients.call("mcp_web_resume_thrice", "{}").await;
+    let output = parsed(clients.call("mcp__web__resume_thrice", "{}").await);
     assert_eq!(output, json!({"result": "resumed"}));
     // The server's `retry: 20` is the pause, not the default of a second.
     assert!(started.elapsed() < std::time::Duration::from_millis(800));
@@ -359,7 +365,7 @@ async fn resumption_follows_every_new_stream_and_starts_from_a_priming_event() {
     );
     // The only id is the one of the priming event, which has no data.
     let before = resumptions(&fixture).len();
-    let output = clients.call("mcp_web_resume_primed", "{}").await;
+    let output = parsed(clients.call("mcp__web__resume_primed", "{}").await);
     assert_eq!(output, json!({"result": "resumed"}));
     assert_eq!(
         json!(resumptions(&fixture)[before..]),
@@ -375,11 +381,11 @@ async fn a_tool_of_the_server_wins_over_a_resource_utility_of_the_same_name() {
     let schemas = clients.schemas();
     let readers: Vec<&Value> = schemas
         .iter()
-        .filter(|schema| schema["function"]["name"] == "mcp_web_read_resource")
+        .filter(|schema| schema["function"]["name"] == "mcp__web__read_resource")
         .collect();
     assert_eq!(readers.len(), 1);
     assert_eq!(readers[0]["function"]["description"], "Native.");
-    assert!(clients.owns("mcp_web_list_resources"));
+    assert!(clients.owns("mcp__web__list_resources"));
     clients.shutdown().await;
 }
 
@@ -388,12 +394,12 @@ async fn resumption_gives_up_after_two_failed_attempts_with_the_reference_messag
     let fixture = Fixture::start();
     let (mut clients, _) = McpClients::start(&[fixture.config("fixture-token", 10)]).await;
     let recorded = corpus();
-    let output = clients.call("mcp_web_resume_fail", "{}").await;
+    let output = parsed(clients.call("mcp__web__resume_fail", "{}").await);
     let failed = &recorded["wire"]["resume_fail"];
     assert_eq!(output["error"], failed["outcome"]["error"]["message"]);
     assert_eq!(json!(resumptions(&fixture)), failed["gets"]);
     // Without an event id there is nothing to resume from.
-    let output = clients.call("mcp_web_drop", "{}").await;
+    let output = parsed(clients.call("mcp__web__drop", "{}").await);
     let dropped = &recorded["wire"]["drop"];
     assert_eq!(output["error"], dropped["outcome"]["error"]["message"]);
     assert_eq!(resumptions(&fixture).len(), 2);
@@ -407,7 +413,7 @@ async fn a_call_dropped_before_its_stream_is_answered_cancels_its_request() {
     // `resume_fail` never answers: the call is dropped early, whatever it is doing.
     let waited = tokio::time::timeout(
         std::time::Duration::from_millis(10),
-        clients.call("mcp_web_resume_fail", "{}"),
+        clients.call("mcp__web__resume_fail", "{}"),
     )
     .await;
     assert!(waited.is_err());
@@ -419,7 +425,7 @@ async fn a_call_dropped_before_its_stream_is_answered_cancels_its_request() {
 async fn resource_tools_follow_the_servers_capability_and_the_config() {
     let plain = Fixture::start();
     let (clients, _) = McpClients::start(&[plain.config("fixture-token", 10)]).await;
-    assert!(!clients.owns("mcp_web_list_resources"));
+    assert!(!clients.owns("mcp__web__list_resources"));
     drop(clients);
 
     let fixture = Fixture::start_with(&["--resources"]);
@@ -433,7 +439,7 @@ async fn resource_tools_follow_the_servers_capability_and_the_config() {
     {
         let function = &schema["function"];
         let key = expected["key"].as_str().unwrap();
-        assert_eq!(function["name"], format!("mcp_web_{key}"));
+        assert_eq!(function["name"], format!("mcp__web__{key}"));
         assert_eq!(
             function["description"],
             expected["description"]
@@ -448,7 +454,7 @@ async fn resource_tools_follow_the_servers_capability_and_the_config() {
     let mut config = fixture.config("fixture-token", 10);
     config.resources = false;
     let (clients, _) = McpClients::start(&[config]).await;
-    assert!(!clients.owns("mcp_web_list_resources"));
+    assert!(!clients.owns("mcp__web__list_resources"));
 }
 
 #[tokio::test]
@@ -458,17 +464,20 @@ async fn resources_are_listed_and_read_in_the_text_the_reference_gives() {
     let recorded = corpus();
     let resources = &recorded["resources"];
     // Two pages of the list come back as one.
-    let listed = clients.call("mcp_web_list_resources", "{}").await;
+    let listed = clients.call("mcp__web__list_resources", "{}").await;
     assert_eq!(text(&listed), resources["list_output"].as_str().unwrap());
     for uri in ["file:///notes/a.txt", "mem://plain"] {
         let read = clients
-            .call("mcp_web_read_resource", &json!({"uri": uri}).to_string())
+            .call("mcp__web__read_resource", &json!({"uri": uri}).to_string())
             .await;
         assert_eq!(text(&read), resources["reads"][uri].as_str().unwrap());
     }
     // A binary resource is not saved: the model is told so instead of getting a path.
     let read = clients
-        .call("mcp_web_read_resource", r#"{"uri":"file:///notes/b.bin"}"#)
+        .call(
+            "mcp__web__read_resource",
+            r#"{"uri":"file:///notes/b.bin"}"#,
+        )
         .await;
     assert_eq!(
         text(&read),
@@ -476,11 +485,11 @@ async fn resources_are_listed_and_read_in_the_text_the_reference_gives() {
     );
     // The server's error and a missing argument.
     let missing = clients
-        .call("mcp_web_read_resource", r#"{"uri":"file:///missing"}"#)
+        .call("mcp__web__read_resource", r#"{"uri":"file:///missing"}"#)
         .await;
     let message = resources["missing"]["message"].as_str().unwrap();
     assert_eq!(text(&missing), format!(r#"{{"error": "{message}"}}"#));
-    let no_uri = clients.call("mcp_web_read_resource", "{}").await;
+    let no_uri = clients.call("mcp__web__read_resource", "{}").await;
     assert_eq!(
         text(&no_uri),
         corpus()["messages"]["missing_uri"].as_str().unwrap()
@@ -501,15 +510,15 @@ async fn resource_calls_are_repeated_after_a_session_expired() {
     let fixture = Fixture::start_with(&["--resources"]);
     let (mut clients, _) = McpClients::start(&[fixture.config("fixture-token", 10)]).await;
     let recorded = corpus();
-    clients.call("mcp_web_expire", "{}").await;
-    let listed = clients.call("mcp_web_list_resources", "{}").await;
+    parsed(clients.call("mcp__web__expire", "{}").await);
+    let listed = clients.call("mcp__web__list_resources", "{}").await;
     assert_eq!(
         text(&listed),
         recorded["resources"]["list_output"].as_str().unwrap()
     );
-    clients.call("mcp_web_expire", "{}").await;
+    parsed(clients.call("mcp__web__expire", "{}").await);
     let read = clients
-        .call("mcp_web_read_resource", r#"{"uri":"mem://plain"}"#)
+        .call("mcp__web__read_resource", r#"{"uri":"mem://plain"}"#)
         .await;
     assert_eq!(
         text(&read),
@@ -525,7 +534,7 @@ async fn resumption_works_when_the_stream_arrives_one_byte_at_a_time() {
     let fixture = Fixture::start_with(&["--dribble"]);
     let (mut clients, _) = McpClients::start(&[fixture.config("fixture-token", 10)]).await;
     // The id and retry fields of the first stream, and the whole replay, are split across reads.
-    let output = clients.call("mcp_web_resume_twice", "{}").await;
+    let output = parsed(clients.call("mcp__web__resume_twice", "{}").await);
     assert_eq!(output, json!({"result": "resumed"}));
     let gets = resumptions(&fixture);
     assert_eq!(

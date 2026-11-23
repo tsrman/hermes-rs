@@ -17,6 +17,10 @@ What is recorded:
   * `messages`: the text the model gets for each outcome, from the reference's own handlers
     (`_mcp_call_failed_message`, the session-expired outcome, the utility tools' errors).
   * `resources`: the schemas of the resource tools and their rendered output for sample answers.
+  * `calls`: the text the model gets for `tools/call` answers (`_render_call_tool_result` with
+    `for_model=True`, the registry handler's view), from wire dictionaries parsed by the SDK's own
+    `CallToolResult`; the registry names (`mcp_prefixed_tool_name`); and the tool-call timeout
+    (`_resolve_tool_timeout`) for each configuration.
 """
 
 import asyncio
@@ -227,6 +231,79 @@ async def record_resources(sdk):
     return out
 
 
+def record_calls():
+    """`tools/call` rendering, registry names and the tool timeout, from the reference's own functions."""
+    from agent import deadline
+    from mcp import types
+    from tools import mcp_tool_handlers as handlers
+    from tools.mcp_tool_common import _resolve_tool_timeout
+    from tools.mcp_tool_schema import mcp_prefixed_tool_name
+
+    def text(value):
+        return {"type": "text", "text": value}
+
+    secret_text = "denied: Authorization Bearer abc123def and token=xyz789 in the request"
+    cases = {
+        "plain": {"content": [text("x")]},
+        "empty": {"content": []},
+        "multi": {"content": [text("one"), text(""), text("  "), text("two")]},
+        "non_ascii": {"content": [text("привет \u2603 \U0001f600")]},
+        "error": {"isError": True, "content": [text("tool failed")]},
+        "error_empty": {"isError": True, "content": []},
+        "error_blank_text": {"isError": True, "content": [text("")]},
+        "error_multi": {"isError": True, "content": [text("a"), text("b")]},
+        "error_secret": {"isError": True, "content": [text(secret_text)]},
+        "error_hidden": {"isError": True, "content": [text("bad\U000e0041x")]},
+        "error_resource": {"isError": True, "content": [
+            {"type": "resource", "resource": {"uri": "file:///e", "text": "embedded failure"}}]},
+        "error_image_only": {"isError": True, "content": [{"type": "image", "data": "AAAA", "mimeType": "image/png"}]},
+        "error_long": {"isError": True, "content": [text("e" * 3000)]},
+        "structured_only": {"content": [], "structuredContent": {"a": 1, "b": [1.5, True, None], "c": "ü"}},
+        "structured_dual": {"content": [text('{"a":1,"b":2}')], "structuredContent": {"a": 1, "b": 2}},
+        "structured_dual_type_differs": {"content": [text('{"a":true}')], "structuredContent": {"a": 1}},
+        "structured_dual_float": {"content": [text('{"a":1.0}')], "structuredContent": {"a": 1}},
+        "structured_next_to_prose": {"content": [text("summary")], "structuredContent": {"a": 1, "z": 2}},
+        "wrapped_string": {"content": [text("abc")], "structuredContent": {"result": "abc"}},
+        "wrapped_number": {"content": [text("7")], "structuredContent": {"result": 7}},
+        "wrapped_list": {"content": [text("1"), text("two")], "structuredContent": {"result": [1, "two"]}},
+        "wrapped_list_mismatch": {"content": [text("1")], "structuredContent": {"result": [1, 2]}},
+        "wrapped_other_key": {"content": [text("x")], "structuredContent": {"result": "x", "more": 1}},
+        "meta_with_text": {"content": [text("x")], "_meta": {"com.example.mcp/k": 1, "plain": "v",
+                           "modelcontextprotocol.io/r": 2, "tools.mcp.com/s": 3, "mcp/t": 4, "io.mcp/u": 5}},
+        "meta_reserved_only": {"content": [text("x")], "_meta": {"modelcontextprotocol.io/r": 2}},
+        "meta_only": {"content": [], "_meta": {"k": "v"}},
+        "meta_and_structured": {"content": [], "structuredContent": {"s": 1}, "_meta": {"k": "v"}},
+        "meta_structured_text": {"content": [text("t")], "structuredContent": {"s": 1}, "_meta": {"k": "v"}},
+        "resource_link": {"content": [{"type": "resource_link", "uri": "file:///l", "name": "l", "mimeType": "text/plain"}]},
+        "resource_text": {"content": [{"type": "resource", "resource": {"uri": "file:///r", "text": "body\U000e0041"}}]},
+        "resource_blob": {"content": [{"type": "resource", "resource": {"uri": "file:///b", "blob": "AAAA", "mimeType": "x/y"}}]},
+        "structured_floats": {"content": [], "structuredContent": {"a": 1e22, "b": 1e-7, "c": 1.25, "d": 100.0, "e": 1e16, "f": 1e15}},
+        "hidden_text": {"content": [text("a\U000e0041b")]},
+    }
+    results = {}
+    for name, wire in cases.items():
+        result = types.CallToolResult.model_validate(wire)
+        output = handlers._render_call_tool_result(result, "fx", [], for_model=True)
+        # The wire is kept as text: the corpus file sorts keys, and the order of the server's keys is part of the output.
+        # The document cache path of a saved binary block differs on every run.
+        results[name] = {"wire": json.dumps(wire, ensure_ascii=False), "output": re.sub(r"saved to \S+ \(", "saved to <path> (", output)}
+    names = [("srv", "echo"), ("my-server.v2", "do-it.now"), ("ünï", "tööl"), ("", ""), ("a b", "c/d"),
+             ("srv", "list_resources"), ("x" * 40, "y" * 40), ("x" * 26, "y" * 26), ("x" * 27, "y" * 26),
+             ("srv", "ü" * 70)]
+    named = [{"server": s, "tool": t, "name": mcp_prefixed_tool_name(s, t)} for s, t in names]
+
+    timeouts = []
+    for config, section in [
+            ({}, None), ({"timeout": 7}, None), ({"timeout": 2.5}, None), ({"timeout": 7}, {"mcp": {"tool_call": 9}}),
+            ({}, {"mcp": {"tool_call": 9}}), ({}, {"mcp": {"tool_call": 45.5}}), ({}, {"mcp": {"tool_call": "30"}}),
+            ({}, {"mcp": {"tool_call": 0}}), ({}, {"mcp": {"tool_call": -1}}), ({}, {"mcp": {"tool_call": True}}),
+            ({}, {"mcp": {"tool_call": "soon"}}), ({}, {"mcp": {"tool_call": 1e12}}),
+            ({}, {"mcp.tool_call": 9}), ({}, {"mcp": 9}), ({}, {"default": 9})]:
+        deadline._timeouts_section = (lambda section=section: section or {})
+        timeouts.append({"server": config, "timeouts": section, "resolved": _resolve_tool_timeout(config)})
+    return {"results": results, "names": named, "timeouts": timeouts}
+
+
 def record_messages():
     from tools import mcp_tool_handlers as handlers
     from tools.mcp_tool_errors import _is_session_expired_error
@@ -271,7 +348,8 @@ def main():
     # The document cache path of a saved binary resource differs on every run.
     text = re.sub(r"saved to \S+ \(", "saved to <path> (", json.dumps(resources))
     resources = json.loads(text)
-    corpus = {"mcp_version": version, "wire": wire, "messages": record_messages(), "resources": resources}
+    corpus = {"mcp_version": version, "wire": wire, "messages": record_messages(), "resources": resources,
+              "calls": record_calls()}
     Path(out_path).write_text(json.dumps(corpus, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
                               encoding="utf-8")
 

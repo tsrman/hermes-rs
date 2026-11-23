@@ -51,6 +51,7 @@ class CliTest(unittest.TestCase):
             "test_web_search_uses_the_configured_backend_and_hides_tools_without_one": "web",
             "test_mcp_streamable_http_tool_uses_profile_secrets": "mcp",
             "test_mcp_resources_are_listed_and_read_for_the_model": "mcp_resources",
+            "test_a_history_with_the_old_mcp_names_resumes_and_a_repeated_old_call_is_unknown": "mcp_old_name",
             "test_cancelling_a_turn_stops_the_stdio_mcp_server": "mcp_slow",
             "test_cancelling_a_turn_cancels_the_http_mcp_call": "mcp_slow",
             "test_skill_index_uses_profile_and_opted_in_project_roots": "skill",
@@ -488,13 +489,13 @@ class CliTest(unittest.TestCase):
         self.assertEqual(result.stdout, "Ответ модели\n")
         self.assertIn('MCP server "broken" is unavailable', result.stderr)
         self.assertNotIn("disabled", result.stderr)
-        self.assertIn("Tool completed: \"mcp_fixture_echo\"", result.stderr)
+        self.assertIn("Tool completed: \"mcp__fixture__echo\"", result.stderr)
         names = [tool["function"]["name"] for tool in recorded[0]["tools"]]
-        self.assertIn("mcp_fixture_echo", names)
-        self.assertIn("mcp_fixture_spawn_child", names)
+        self.assertIn("mcp__fixture__echo", names)
+        self.assertIn("mcp__fixture__spawn_child", names)
         tool_message = recorded[1]["messages"][-1]
         self.assertEqual(tool_message["role"], "tool")
-        self.assertEqual(json.loads(tool_message["content"]), {"result": "from mcp"})
+        self.assertEqual(tool_message["content"], '{"result": "from mcp"}')  # Python separators, as the reference
 
     def test_mcp_streamable_http_tool_uses_profile_secrets(self):
         log = self.workdir / "mcp-log.json"
@@ -511,7 +512,7 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("unavailable", result.stderr)
         self.assertNotIn("s3cret", result.stdout + result.stderr)
         tool_message = recorded[1]["messages"][-1]
-        self.assertEqual(json.loads(tool_message["content"]), {"result": "from mcp"})
+        self.assertEqual(tool_message["content"], '{"result": "from mcp"}')  # Python separators, as the reference
         entries = json.loads(log.read_text(encoding="utf-8"))
         self.assertEqual(entries[-1], {"delete": "fixture-session"})
 
@@ -522,13 +523,33 @@ class CliTest(unittest.TestCase):
         result, recorded = self.chat_with_profile(extra_config=config)
         self.assertEqual(result.returncode, 0, result.stderr)
         names = [tool["function"]["name"] for tool in recorded[0]["tools"]]
-        self.assertIn("mcp_fixture_list_resources", names)
-        self.assertIn("mcp_fixture_read_resource", names)
+        self.assertIn("mcp__fixture__list_resources", names)
+        self.assertIn("mcp__fixture__read_resource", names)
         corpus = json.loads((ROOT / "crates" / "hermes-runtime" / "tests" / "fixtures" / "mcp_reference.json")
                             .read_text(encoding="utf-8"))["resources"]
         # The model gets the text the reference's handlers produce (Python's JSON separators).
         self.assertEqual(recorded[1]["messages"][-1]["content"], corpus["list_output"])
         self.assertEqual(recorded[2]["messages"][-1]["content"], corpus["reads"]["mem://plain"])
+
+    def test_a_history_with_the_old_mcp_names_resumes_and_a_repeated_old_call_is_unknown(self):
+        # Sessions saved before the tools were named `mcp__<server>__<tool>` hold calls to
+        # `mcp_<server>_<tool>`. The reference never produced those names, so nothing answers them:
+        # the history is replayed to the provider as it is, and a call to an old name is an unknown tool.
+        server = ROOT / "compat" / "mcp_fixture_server.py"
+        config = f"mcp_servers:\n  fixture:\n    command: python3\n    args: ['-I', '{server}']\n"
+        first, recorded = self.chat_with_profile(extra_config=config, args=("--save-session",))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        names = [tool["function"]["name"] for tool in recorded[0]["tools"]]
+        self.assertIn("mcp__fixture__echo", names)
+        self.assertNotIn("mcp_fixture_echo", names)
+        self.assertEqual(json.loads(recorded[1]["messages"][-1]["content"]), {"error": "Unknown tool: mcp_fixture_echo"})
+        session = first.stderr.splitlines()[-1].removeprefix("Session: ")
+        resumed, recorded = self.chat_with_profile(extra_config=config, args=("--resume", session), query="again")
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        replayed = recorded[2]["messages"]
+        self.assertTrue(any(call["function"]["name"] == "mcp_fixture_echo"
+                            for message in replayed for call in message.get("tool_calls") or []))
+        self.assertEqual(json.loads(recorded[3]["messages"][-1]["content"]), {"error": "Unknown tool: mcp_fixture_echo"})
 
     def interrupt_mcp_turn(self, config_extra, ready):
         """Start a turn whose tool call waits on an MCP server, interrupt it once `ready()` holds."""

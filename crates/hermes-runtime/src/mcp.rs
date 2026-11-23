@@ -12,7 +12,13 @@
 //! * an event stream that ends before the answer is resumed with a GET and `Last-Event-ID`
 //!   (the `retry` field or one second apart, two failed attempts in a row end the call);
 //! * a server that advertises `resources` (and has not turned them off with `tools.resources`)
-//!   gets `mcp_<server>_list_resources` and `mcp_<server>_read_resource`.
+//!   gets `mcp__<server>__list_resources` and `mcp__<server>__read_resource`;
+//! * every tool is named `mcp__<server>__<tool>` (`mcp_prefixed_tool_name`), the 64-character
+//!   limit of the providers is kept with a hash suffix, and a name two tools of one server share
+//!   after sanitising is given to neither;
+//! * a call answers with the text `_render_call_tool_result` makes (`json.dumps` separators,
+//!   `structuredContent`, `_meta`, `isError`), and is given 300 s unless `timeout` or
+//!   `timeouts.mcp.tool_call` says otherwise.
 //!
 //! Not ported: prompts and event utilities, OAuth, sampling, elicitation, the SSE transport,
 //! the circuit breaker, stdio respawn, and saving binary resources to a document cache.
@@ -36,6 +42,10 @@ use crate::session_search::py_json_dumps;
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const MAX_LINE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_RESULT_BYTES: usize = 100_000;
+/// The longest time the reference hands to a platform wait (`MAX_SAFE_TIMEOUT_S`, one year).
+pub const MAX_TIMEOUT_SECS: f64 = 31_536_000.0;
+/// What a tool call may take when neither the server nor `timeouts.mcp.tool_call` says (`_DEFAULT_TOOL_TIMEOUT`).
+pub const DEFAULT_TOOL_TIMEOUT_SECS: f64 = 300.0;
 /// The reference follows `nextCursor` for at most this many pages of one list.
 const MAX_LIST_PAGES: usize = 50;
 /// What the SDK waits before it resumes a stream when the server sent no `retry`, and how many
@@ -85,7 +95,8 @@ pub struct McpServerConfig {
     pub url: Option<String>,
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
-    pub timeout_secs: u64,
+    /// The time a tool call may take (the reference's `tool_timeout`), in seconds.
+    pub timeout_secs: f64,
     pub connect_timeout_secs: u64,
     /// `tools.resources`: offer the resource tools of a server that advertises resources.
     #[serde(default = "enabled")]
@@ -880,7 +891,6 @@ async fn handshake(
     config: &McpServerConfig,
 ) -> Result<Discovered, String> {
     let connect_limit = Duration::from_secs(config.connect_timeout_secs);
-    let request_limit = Duration::from_secs(config.timeout_secs);
     let init = transport
         .request(
             "initialize",
@@ -894,10 +904,10 @@ async fn handshake(
         .await
         .map_err(|error| error.to_string())?;
     transport
-        .notify("notifications/initialized", request_limit)
+        .notify("notifications/initialized", connect_limit)
         .await
         .map_err(|error| error.to_string())?;
-    let tools = list_all(transport, "tools/list", "tools", request_limit)
+    let tools = list_all(transport, "tools/list", "tools", connect_limit)
         .await
         .map_err(|error| error.to_string())?;
     Ok(Discovered {
@@ -965,16 +975,32 @@ impl McpClients {
     }
 
     /// Replace the tools of server `index` with what discovery found.
+    ///
+    /// Names follow `_resolve_name_collisions`: a tool twice under one name is kept once, two
+    /// tools that sanitise onto one name are both skipped, a resource tool never shadows a tool
+    /// of the server, and a name another server holds stays with that server.
     fn register(&mut self, index: usize, discovered: Discovered) {
         self.tools.retain(|tool| tool.server != index);
         let config_name = self.servers[index].config.name.clone();
-        let prefix = format!("mcp_{}_", sanitize(&config_name));
-        for tool in discovered.tools {
+        let mut natives: Vec<(String, &Value)> = Vec::new();
+        for tool in &discovered.tools {
             let Some(name) = tool["name"].as_str() else {
                 continue;
             };
-            let exposed = format!("{prefix}{}", sanitize(name));
-            if self.owns(&exposed) {
+            if !natives.iter().any(|(seen, _)| seen == name) {
+                natives.push((name.to_owned(), tool));
+            }
+        }
+        let exposed_of = |tool: &str| mcp_prefixed_tool_name(&config_name, tool);
+        let shared = |exposed: &str| {
+            natives
+                .iter()
+                .filter(|(name, _)| exposed_of(name) == exposed)
+                .count()
+        };
+        for (name, tool) in &natives {
+            let exposed = exposed_of(name);
+            if shared(&exposed) > 1 || self.owns(&exposed) {
                 continue;
             }
             let schema = json!({
@@ -1021,8 +1047,8 @@ impl McpClients {
             ),
         ];
         for (kind, key, description, parameters) in utilities {
-            let exposed = format!("{prefix}{key}");
-            if self.owns(&exposed) {
+            let exposed = exposed_of(key);
+            if shared(&exposed) > 0 || self.owns(&exposed) {
                 continue;
             }
             let schema = json!({
@@ -1075,7 +1101,12 @@ impl McpClients {
         params: Value,
         replay: bool,
     ) -> Result<Value, Failure> {
-        let limit = Duration::from_secs(self.servers[index].config.timeout_secs);
+        let limit = Duration::from_secs_f64(
+            self.servers[index]
+                .config
+                .timeout_secs
+                .clamp(0.001, MAX_TIMEOUT_SECS),
+        );
         if matches!(&self.servers[index].transport, Transport::Http(c) if c.down)
             && !self.reconnect(index).await
         {
@@ -1124,8 +1155,11 @@ impl McpClients {
                     .request_recovering(index, "tools/call", params, read_only)
                     .await
                 {
-                    Err(failure) => self.failure_text(index, failure, false),
-                    Ok(result) => tool_result(&result),
+                    Err(failure) => self.failure_text(index, failure),
+                    Ok(result) => {
+                        let server = self.servers[index].config.name.clone();
+                        Value::String(render_call_tool_result(&result, &server))
+                    }
                 }
             }
             Kind::ListResources => self.list_resources(index).await,
@@ -1139,7 +1173,7 @@ impl McpClients {
                     .request_recovering(index, "resources/read", params, true)
                     .await
                 {
-                    Err(failure) => self.failure_text(index, failure, true),
+                    Err(failure) => self.failure_text(index, failure),
                     Ok(result) => tool_text(&render_read_resource(&result)),
                 }
             }
@@ -1156,7 +1190,7 @@ impl McpClients {
                 .request_recovering(index, "resources/list", params, true)
                 .await
             {
-                Err(failure) => return self.failure_text(index, failure, true),
+                Err(failure) => return self.failure_text(index, failure),
                 Ok(page) => {
                     resources.extend(page["resources"].as_array().cloned().unwrap_or_default());
                     cursor = page["nextCursor"]
@@ -1172,9 +1206,8 @@ impl McpClients {
         tool_text(&render_resource_list(&resources))
     }
 
-    /// The error output of a failed request. A utility tool answers in the reference's JSON
-    /// text, a remote tool with an object.
-    fn failure_text(&self, index: usize, failure: Failure, as_text: bool) -> Value {
+    /// The error output of a failed request, as `tool_error` writes it.
+    fn failure_text(&self, index: usize, failure: Failure) -> Value {
         let error = match failure {
             Failure::Rpc(error) => json!({"error": error.call_failed()}),
             Failure::Down => json!({"error": format!(
@@ -1191,11 +1224,7 @@ impl McpClients {
                 "server": self.servers[index].config.name,
             }),
         };
-        if as_text {
-            tool_text(&error)
-        } else {
-            error
-        }
+        tool_text(&error)
     }
 
     /// Close stdin, give servers a moment to exit, then stop whatever remains.
@@ -1208,26 +1237,399 @@ impl McpClients {
     }
 }
 
-/// The output of a `tools/call` answer.
-fn tool_result(result: &Value) -> Value {
-    let mut parts = Vec::new();
-    for item in result["content"].as_array().into_iter().flatten() {
-        match item["type"].as_str() {
-            Some("text") => parts.push(item["text"].as_str().unwrap_or("").to_owned()),
-            Some(other) => parts.push(format!("[{other} content omitted]")),
-            None => {}
+/// A tool's text in `content` blocks of the answer: those with `text` set and not empty.
+fn text_blocks(result: &Value) -> Vec<&str> {
+    result["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|block| block["type"].as_str() == Some("text"))
+        .filter_map(|block| block["text"].as_str())
+        .filter(|text| !text.is_empty())
+        .collect()
+}
+
+/// `_render_call_tool_result(result, server, for_model=True)`: the JSON text a `tools/call`
+/// answer becomes for the model.
+fn render_call_tool_result(result: &Value, server: &str) -> String {
+    if result["isError"].as_bool() == Some(true) {
+        return error_result(result);
+    }
+    let (mut text, usable) = render_content_blocks(result, server);
+    truncate(&mut text, MAX_RESULT_BYTES);
+    let mut structured = result["structuredContent"]
+        .is_object()
+        .then(|| result["structuredContent"].clone());
+    let meta = strip_reserved_meta_keys(&result["_meta"]);
+    if let Some(value) = structured.clone().filter(|_| usable > 0) {
+        if text_blocks(result)
+            .iter()
+            .any(|text_block| text_is_value(text_block, &value))
+        {
+            structured = None;
+        } else if let Some(collapsed) = collapse_sdk_wrapped_copy(result, &value, usable) {
+            if let Some(list) = collapsed {
+                text = list;
+                truncate(&mut text, MAX_RESULT_BYTES);
+            }
+            structured = None;
         }
     }
-    let mut text = parts.join("\n");
-    if text.is_empty() && !result["structuredContent"].is_null() {
-        text = result["structuredContent"].to_string();
+    if structured.is_none() && meta.is_none() {
+        return py_json_dumps(&json!({"result": text}));
     }
-    truncate(&mut text, MAX_RESULT_BYTES);
-    if result["isError"].as_bool() == Some(true) {
-        json!({"error": text})
+    // Key order is part of the output: "result" leads when there is text, otherwise "_meta" precedes it.
+    let mut payload = Map::new();
+    if !text.is_empty() {
+        payload.insert("result".into(), json!(text));
+    }
+    if let Some(structured) = structured {
+        let key = if text.is_empty() {
+            "result"
+        } else {
+            "structuredContent"
+        };
+        payload.insert(key.into(), structured);
+    }
+    if let Some(meta) = meta {
+        payload.insert("_meta".into(), meta);
+    }
+    payload.entry("result").or_insert(json!(text));
+    py_json_dumps(&Value::Object(payload))
+}
+
+/// An `isError` answer: `tool_error(_sanitize_error(<capped text>))`.
+fn error_result(result: &Value) -> String {
+    let text: String = result["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|block| {
+            block["text"]
+                .as_str()
+                .filter(|text| !text.is_empty())
+                .or_else(|| {
+                    block["resource"]["text"]
+                        .as_str()
+                        .filter(|text| !text.is_empty())
+                })
+        })
+        .map(strip_unicode_tags)
+        .collect();
+    let text = if text.is_empty() {
+        "MCP tool returned an error".to_owned()
     } else {
-        json!({"result": text})
+        text
+    };
+    let text = truncate_head_tail(&text, HARD_RESULT_CAP_CHARS, "MCP RESULT");
+    let text = strip_unicode_tags(&CREDENTIALS.replace_all(&text, "[REDACTED]"));
+    py_json_dumps(&json!({"error": bound_error_text(&text)}))
+}
+
+/// `registry._bound_error_text`: an error body for the model stays within 2048 characters.
+fn bound_error_text(text: &str) -> String {
+    match text.char_indices().nth(MAX_TOOL_ERROR_CHARS) {
+        None => text.to_owned(),
+        Some((end, _)) => format!("{}… [truncated]", &text[..end]),
     }
+}
+
+/// `_render_content_blocks`: the text of the blocks and how many of them carry something real.
+/// Images and audio are not cached (the reference saves them to its gateway cache and answers
+/// with a `MEDIA:` path), so the model is told the block was left out.
+fn render_content_blocks(result: &Value, server: &str) -> (String, usize) {
+    let mut parts: Vec<String> = Vec::new();
+    let mut usable = 0;
+    for block in result["content"].as_array().into_iter().flatten() {
+        let kind = block["type"].as_str().unwrap_or("");
+        if let Some(text) = block["text"].as_str().filter(|text| !text.is_empty()) {
+            parts.push(strip_unicode_tags(text));
+            if !text.trim().is_empty() {
+                usable += 1;
+            }
+            continue;
+        }
+        let rendered = match kind {
+            "text" | "" => String::new(),
+            "image" | "audio" => format!("[{kind} content omitted]"),
+            "resource_link" => render_resource_link(block, server),
+            "resource" => render_embedded_resource(&block["resource"]),
+            other => dropped_block_notice(block, other),
+        };
+        if !rendered.is_empty() {
+            parts.push(rendered);
+            usable += 1;
+        }
+    }
+    (parts.join("\n"), usable)
+}
+
+/// `_render_mcp_resource_block` for a link: the uri exactly, and the tool that reads it.
+fn render_resource_link(block: &Value, server: &str) -> String {
+    let Some(uri) = block["uri"].as_str().filter(|uri| !uri.is_empty()) else {
+        return String::new();
+    };
+    let name = strip_unicode_tags(block["name"].as_str().unwrap_or(""));
+    let mime = strip_unicode_tags(block["mimeType"].as_str().unwrap_or(""));
+    let mut details = format!("uri={uri}");
+    if !name.is_empty() {
+        details.push_str(&format!(", name={name}"));
+    }
+    if !mime.is_empty() {
+        details.push_str(&format!(", mimeType={mime}"));
+    }
+    format!(
+        "[MCP resource link: {details} — fetch it with {}]",
+        mcp_prefixed_tool_name(server, "read_resource")
+    )
+}
+
+/// An embedded resource: its text, or what `render_read_resource` says of a blob.
+fn render_embedded_resource(resource: &Value) -> String {
+    if let Some(text) = resource["text"].as_str() {
+        return strip_unicode_tags(text);
+    }
+    if resource["blob"].is_string() {
+        let text = render_read_resource(&json!({"contents": [resource]}));
+        return text["result"].as_str().unwrap_or("").to_owned();
+    }
+    String::new()
+}
+
+/// `_render_mcp_dropped_block_notice`: an unsupported block is named, not silently lost.
+fn dropped_block_notice(block: &Value, kind: &str) -> String {
+    let mut details = vec![format!("type={}", strip_unicode_tags(kind))];
+    if let Some(mime) = block["mimeType"].as_str().filter(|mime| !mime.is_empty()) {
+        details.push(format!("mimeType={}", strip_unicode_tags(mime)));
+    }
+    let uri = block["uri"]
+        .as_str()
+        .or_else(|| block["resource"]["uri"].as_str())
+        .filter(|uri| !uri.is_empty());
+    if let Some(uri) = uri {
+        details.push(format!("uri={uri}"));
+    }
+    if let Some(size) = block["size"].as_i64().or(block["sizeInBytes"].as_i64()) {
+        details.push(format!("size={size}"));
+    }
+    if let Some(name) = block["name"].as_str().filter(|name| !name.is_empty()) {
+        details.push(format!("name={}", strip_unicode_tags(name)));
+    }
+    format!(
+        "[MCP content dropped: unsupported block ({})]",
+        details.join(", ")
+    )
+}
+
+/// `_collapse_sdk_wrapped_copy`: the Python SDK wraps a bare return value as `{"result": value}`
+/// next to a `content` block that carries it. `None`: nothing to collapse. `Some(None)`: the copy
+/// is in the text already. `Some(Some(text))`: a list whose items arrived as one block each is
+/// sent once, as JSON.
+fn collapse_sdk_wrapped_copy(
+    result: &Value,
+    structured: &Value,
+    usable: usize,
+) -> Option<Option<String>> {
+    let object = structured.as_object()?;
+    if object.len() != 1 {
+        return None;
+    }
+    let value = object.get("result")?;
+    let texts = text_blocks(result);
+    if texts.iter().any(|text| text_is_value(text, value)) {
+        return Some(None);
+    }
+    let items = value.as_array()?;
+    (texts.len() == items.len()
+        && items.len() == usable
+        && texts
+            .iter()
+            .zip(items)
+            .all(|(text, item)| text_is_value(text, item)))
+    .then(|| Some(py_json_dumps(value)))
+}
+
+/// `_text_is_value`: the text is the value itself (a string) or its JSON.
+fn text_is_value(text: &str, value: &Value) -> bool {
+    if value.as_str() == Some(text) {
+        return true;
+    }
+    serde_json::from_str::<Value>(text).is_ok_and(|parsed| type_stable_equal(&parsed, value))
+}
+
+/// `==` without Python's bool/int coercion, and with 1 and 1.0 apart (they are different types there).
+fn type_stable_equal(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Object(left), Value::Object(right)) => {
+            left.len() == right.len()
+                && left.iter().all(|(key, item)| {
+                    right
+                        .get(key)
+                        .is_some_and(|other| type_stable_equal(item, other))
+                })
+        }
+        (Value::Array(left), Value::Array(right)) => {
+            left.len() == right.len()
+                && left.iter().zip(right).all(|(a, b)| type_stable_equal(a, b))
+        }
+        (Value::Number(left), Value::Number(right)) => {
+            left.is_f64() == right.is_f64() && left == right
+        }
+        _ => left == right,
+    }
+}
+
+/// `_strip_reserved_meta_keys`: `_meta` without the keys of the protocol's own namespaces
+/// (`modelcontextprotocol` or `mcp` as a label that is not the last one before the slash).
+fn strip_reserved_meta_keys(meta: &Value) -> Option<Value> {
+    let kept: Map<String, Value> = meta
+        .as_object()?
+        .iter()
+        .filter(|(key, _)| !is_reserved_meta_key(key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    (!kept.is_empty()).then_some(Value::Object(kept))
+}
+
+fn is_reserved_meta_key(key: &str) -> bool {
+    let Some(slash) = key.find('/').filter(|slash| *slash > 0) else {
+        return false;
+    };
+    let labels: Vec<&str> = key[..slash].split('.').collect();
+    labels
+        .iter()
+        .enumerate()
+        .any(|(i, label)| matches!(*label, "modelcontextprotocol" | "mcp") && i + 1 < labels.len())
+}
+
+/// `truncate_head_tail`: 40 percent of the budget from the start, the rest from the end, a notice between.
+fn truncate_head_tail(text: &str, max_chars: usize, label: &str) -> String {
+    let total = text.chars().count();
+    if total <= max_chars {
+        return text.to_owned();
+    }
+    let head = (max_chars as f64 * 0.4) as usize;
+    let tail = max_chars - head;
+    let omitted = total - head - tail;
+    let start: String = text.chars().take(head).collect();
+    let end: String = text.chars().skip(total - tail).collect();
+    format!(
+        "{start}\n\n... [{label} TRUNCATED - {} chars omitted out of {} total] ...\n\n{end}",
+        grouped(omitted),
+        grouped(total)
+    )
+}
+
+/// Python's `{:,}`.
+fn grouped(number: usize) -> String {
+    let digits = number.to_string();
+    let mut out = String::new();
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
+static CREDENTIALS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(concat!(
+        r#"(?i)(?:ghp_[A-Za-z0-9_]{1,255}|sk-[A-Za-z0-9_-](?:\.?[A-Za-z0-9_-]){0,254}|Bearer\s+\S+"#,
+        r#"|(?:token|key|API_KEY|password|secret)=[^\s&,;"']{1,255})"#
+    ))
+    .expect("the credential pattern is valid")
+});
+
+/// `_MCP_HARD_RESULT_CAP_CHARS`: the text of one MCP result the reference keeps before it reports an error.
+const HARD_RESULT_CAP_CHARS: usize = 2_000_000;
+/// `registry._MAX_TOOL_ERROR_CHARS`.
+const MAX_TOOL_ERROR_CHARS: usize = 2048;
+
+/// `mcp_prefixed_tool_name`: `mcp__<server>__<tool>`, each part with everything outside
+/// `[A-Za-z0-9_]` replaced by `_`. A name over the providers' 64 characters is cut to 55 and
+/// ends with `_` and the first 8 hex digits of its SHA-256.
+pub fn mcp_prefixed_tool_name(server: &str, tool: &str) -> String {
+    let full = format!("mcp__{}__{}", sanitize(server), sanitize(tool));
+    if full.chars().count() <= 64 {
+        return full;
+    }
+    let digest = sha256(full.as_bytes());
+    let suffix: String = digest[..4]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let head: String = full.chars().take(64 - 9).collect();
+    format!("{head}_{suffix}")
+}
+
+/// SHA-256 (FIPS 180-4), for the hash suffix of a long name.
+fn sha256(data: &[u8]) -> [u8; 32] {
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+    let mut state: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    let mut message = data.to_vec();
+    message.push(0x80);
+    while message.len() % 64 != 56 {
+        message.push(0);
+    }
+    message.extend_from_slice(&((data.len() as u64) * 8).to_be_bytes());
+    for chunk in message.chunks(64) {
+        let mut w = [0u32; 64];
+        for (i, word) in chunk.chunks(4).enumerate() {
+            w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
+        }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = state;
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let choice = (e & f) ^ (!e & g);
+            let t1 = h
+                .wrapping_add(s1)
+                .wrapping_add(choice)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let majority = (a & b) ^ (a & c) ^ (b & c);
+            let t2 = s0.wrapping_add(majority);
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(t1);
+            d = c;
+            c = b;
+            b = a;
+            a = t1.wrapping_add(t2);
+        }
+        for (slot, value) in state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
+            *slot = slot.wrapping_add(value);
+        }
+    }
+    let mut out = [0u8; 32];
+    for (i, word) in state.iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
+    }
+    out
 }
 
 /// A payload as the reference writes it: `json.dumps(payload, ensure_ascii=False)`.
@@ -1439,6 +1841,90 @@ mod tests {
         assert_eq!(text(&output), text(recorded));
         assert!(
             output.contains("3 bytes, application/octet-stream) but document cache unavailable")
+        );
+    }
+
+    #[test]
+    fn call_results_match_the_reference_for_recorded_answers() {
+        let corpus = corpus();
+        let results = corpus["calls"]["results"].as_object().unwrap();
+        assert!(results.len() > 30);
+        for (case, entry) in results {
+            let output = render_call_tool_result(
+                &serde_json::from_str(entry["wire"].as_str().unwrap()).unwrap(),
+                "fx",
+            );
+            let recorded = entry["output"].as_str().unwrap();
+            if case == "resource_blob" {
+                // The reference saves the blob to its document cache; the port has none and says so.
+                assert_eq!(
+                    output,
+                    r#"{"result": "[MCP embedded resource received (3 bytes, x/y) but document cache unavailable in this process]"}"#
+                );
+                continue;
+            }
+            assert_eq!(output, recorded, "{case}");
+        }
+    }
+
+    #[test]
+    fn answers_to_a_call_are_written_with_python_separators() {
+        let block = json!({"content": [{"type": "text", "text": "x"}]});
+        assert_eq!(render_call_tool_result(&block, "s"), r#"{"result": "x"}"#);
+        // An image is left out and the model is told so (the reference's cache is not ported).
+        let image =
+            json!({"content": [{"type": "image", "data": "AAAA", "mimeType": "image/png"}]});
+        assert_eq!(
+            render_call_tool_result(&image, "s"),
+            r#"{"result": "[image content omitted]"}"#
+        );
+        // A block type nobody knows is named instead of vanishing.
+        let odd = json!({"content": [{"type": "hologram", "mimeType": "x/y", "name": "n"}]});
+        assert_eq!(
+            render_call_tool_result(&odd, "s"),
+            r#"{"result": "[MCP content dropped: unsupported block (type=hologram, mimeType=x/y, name=n)]"}"#
+        );
+    }
+
+    #[test]
+    fn tool_names_match_the_reference_for_recorded_servers_and_tools() {
+        let corpus = corpus();
+        let names = corpus["calls"]["names"].as_array().unwrap();
+        assert!(names
+            .iter()
+            .any(|name| name["name"].as_str().unwrap().len() == 64));
+        for entry in names {
+            assert_eq!(
+                mcp_prefixed_tool_name(
+                    entry["server"].as_str().unwrap(),
+                    entry["tool"].as_str().unwrap()
+                ),
+                entry["name"].as_str().unwrap(),
+                "{entry}"
+            );
+        }
+    }
+
+    #[test]
+    fn sha256_matches_the_known_values() {
+        let hex = |data: &[u8]| -> String {
+            sha256(data)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
+        };
+        assert_eq!(
+            hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        // Two blocks of input: the padding spills into a second block.
+        assert_eq!(
+            hex(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
         );
     }
 

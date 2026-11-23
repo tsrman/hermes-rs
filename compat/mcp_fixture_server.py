@@ -1,7 +1,8 @@
 """Minimal MCP stdio server used by compatibility and runtime tests.
 
 HERMES_MCP_LOG names a file that receives one JSON line for every `tools/call`, `resources/read`
-and `notifications/cancelled` the server gets (with its params). HERMES_MCP_RESOURCES=1 adds the
+and `notifications/cancelled` the server gets (with its params). HERMES_MCP_EXTRA=1 adds tools whose names collide after sanitising and tools that answer with an
+empty `isError`, `structuredContent` and `_meta`. HERMES_MCP_RESOURCES=1 adds the
 `resources` capability with `resources/list` and `resources/read`. The `slow` tool runs beside
 the request loop, so a cancellation reaches the server; a cancelled call is never answered.
 """
@@ -27,6 +28,18 @@ TOOLS = [
         {"name": "image", "description": "Return non-text content.", "inputSchema": {"type": "object"}},
     ],
 ]
+
+
+EXTRA = os.environ.get("HERMES_MCP_EXTRA") == "1"
+if EXTRA:
+    TOOLS[1] += [
+        {"name": "dup-x", "description": "Collides with dup_x.", "inputSchema": {"type": "object"}},
+        {"name": "dup_x", "description": "Collides with dup-x.", "inputSchema": {"type": "object"}},
+        {"name": "list.resources", "description": "Collides with the resource tool.", "inputSchema": {"type": "object"}},
+        {"name": "echo", "description": "Listed twice.", "inputSchema": {"type": "object"}},
+        {"name": "empty-error", "description": "isError without content.", "inputSchema": {"type": "object"}},
+        {"name": "rich", "description": "structuredContent and _meta.", "inputSchema": {"type": "object"}},
+    ]
 
 
 RESOURCES = [
@@ -73,6 +86,11 @@ def call(name, arguments):
     if name == "spawn-child":
         child = subprocess.Popen(["sleep", "300"])
         return {"content": [{"type": "text", "text": str(child.pid)}]}
+    if name == "empty-error":
+        return {"isError": True, "content": []}
+    if name == "rich":
+        return {"content": [{"type": "text", "text": "summary"}], "structuredContent": {"n": 1, "ok": True},
+                "_meta": {"com.example/k": "v", "modelcontextprotocol.io/r": 1}}
     if name == "image":
         return {"content": [{"type": "image", "data": "AAAA", "mimeType": "image/png"}]}
     return {"isError": True, "content": [{"type": "text", "text": "unknown tool"}]}

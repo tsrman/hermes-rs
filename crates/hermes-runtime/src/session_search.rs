@@ -1134,8 +1134,21 @@ pub(crate) fn py_json_dumps(value: &Value) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        Value::Number(number) if number.is_f64() => python_float(&number.to_string()),
         other => other.to_string(),
     }
+}
+
+/// Python writes an exponent with a sign and at least two digits (`1e+22`, `1e-07`); serde does not.
+fn python_float(text: &str) -> String {
+    let Some((mantissa, exponent)) = text.split_once('e') else {
+        return text.to_owned();
+    };
+    let (sign, digits) = match exponent.strip_prefix('-') {
+        Some(digits) => ('-', digits),
+        None => ('+', exponent.trim_start_matches('+')),
+    };
+    format!("{mantissa}e{sign}{digits:0>2}")
 }
 
 fn discovery_entry(lineage_root: &str, mut fields: Map<String, Value>) -> Value {

@@ -722,6 +722,26 @@ pub fn resolve_provider(name: &str) -> Option<(&'static str, bool)> {
     }
 }
 
+/// `timeouts.mcp.tool_call`, else 300 (`_resolve_tool_timeout` and `resolve_timeout`): a number or a
+/// numeric string, not a boolean; zero, a negative number and anything else invalid fall through to
+/// the default; the longest value is one year.
+fn mcp_tool_call_timeout(config: &serde_yaml::Value) -> f64 {
+    let raw = config
+        .get("timeouts")
+        .and_then(|timeouts| timeouts.get("mcp"))
+        .and_then(|mcp| mcp.get("tool_call"));
+    let value = match raw {
+        Some(serde_yaml::Value::Number(number)) => number.as_f64(),
+        Some(serde_yaml::Value::String(text)) => text.trim().parse::<f64>().ok(),
+        _ => None,
+    };
+    value
+        .filter(|value| !value.is_nan() && *value > 0.0)
+        .map_or(crate::mcp::DEFAULT_TOOL_TIMEOUT_SECS, |value| {
+            value.min(crate::mcp::MAX_TIMEOUT_SECS)
+        })
+}
+
 /// Servers from `mcp_servers`: stdio (`command`) or Streamable HTTP (`url`).
 fn mcp_servers(
     config: &serde_yaml::Value,
@@ -734,6 +754,7 @@ fn mcp_servers(
         return Vec::new();
     };
     let expand = |text: &str| expand_env(text, secrets);
+    let default_tool_timeout = mcp_tool_call_timeout(config);
     entries
         .iter()
         .filter_map(|(name, entry)| {
@@ -796,6 +817,13 @@ fn mcp_servers(
                         .collect()
                 })
                 .unwrap_or_default();
+            let tool_timeout = entry
+                .get("timeout")
+                .and_then(serde_yaml::Value::as_f64)
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map_or(default_tool_timeout, |value| {
+                    value.min(crate::mcp::MAX_TIMEOUT_SECS)
+                });
             let seconds = |key, default| {
                 entry
                     .get(key)
@@ -810,7 +838,7 @@ fn mcp_servers(
                 env,
                 url,
                 headers,
-                timeout_secs: seconds("timeout", 120),
+                timeout_secs: tool_timeout,
                 connect_timeout_secs: seconds("connect_timeout", 60),
                 // `tools.resources: false` hides the resource tools of a server that offers them.
                 resources: truthy(
@@ -946,7 +974,10 @@ mod mcp_tests {
         assert_eq!(server.args, ["--key=t0", "${UNSET_VAR_X}"]);
         assert_eq!(server.env["K"], "t0");
         assert_eq!(server.env["N"], "5");
-        assert_eq!((server.timeout_secs, server.connect_timeout_secs), (7, 60));
+        assert_eq!(
+            (server.timeout_secs, server.connect_timeout_secs),
+            (7.0, 60)
+        );
     }
 }
 
@@ -1571,5 +1602,36 @@ mod model_override_tests {
         assert_eq!(overrides.explicit_window("anthropic", "gpt"), None);
         assert_eq!(overrides.default_window("custom"), Some(60_000));
         assert_eq!(overrides.default_window("openai"), Some(50_000));
+    }
+}
+
+#[cfg(test)]
+mod mcp_timeout_tests {
+    use super::*;
+
+    /// The recorded `_resolve_tool_timeout` answers for each configuration of the reference.
+    #[test]
+    fn the_tool_timeout_matches_the_reference_for_recorded_configurations() {
+        let corpus: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/mcp_reference.json")).unwrap();
+        let cases = corpus["calls"]["timeouts"].as_array().unwrap();
+        assert!(cases.len() >= 15);
+        for case in cases {
+            let mut entry = serde_json::json!({"command": "run"});
+            for (key, value) in case["server"].as_object().unwrap() {
+                entry[key] = value.clone();
+            }
+            let mut config = serde_json::json!({"mcp_servers": {"s": entry}});
+            if !case["timeouts"].is_null() {
+                config["timeouts"] = case["timeouts"].clone();
+            }
+            let config: serde_yaml::Value = serde_yaml::to_value(&config).unwrap();
+            let servers = mcp_servers(&config, &HashMap::new());
+            assert_eq!(
+                servers[0].timeout_secs,
+                case["resolved"].as_f64().unwrap(),
+                "{case}"
+            );
+        }
     }
 }
