@@ -1,0 +1,378 @@
+{
+  "bool_cases": [
+    {
+      "value": null,
+      "expected": true
+    },
+    {
+      "value": "",
+      "expected": false
+    },
+    {
+      "value": "true",
+      "expected": true
+    },
+    {
+      "value": "TRUE",
+      "expected": true
+    },
+    {
+      "value": "True",
+      "expected": true
+    },
+    {
+      "value": "1",
+      "expected": true
+    },
+    {
+      "value": "yes",
+      "expected": true
+    },
+    {
+      "value": "YES",
+      "expected": true
+    },
+    {
+      "value": "Yes",
+      "expected": true
+    },
+    {
+      "value": "false",
+      "expected": false
+    },
+    {
+      "value": "FALSE",
+      "expected": false
+    },
+    {
+      "value": "0",
+      "expected": false
+    },
+    {
+      "value": "no",
+      "expected": false
+    },
+    {
+      "value": "NO",
+      "expected": false
+    },
+    {
+      "value": "off",
+      "expected": false
+    },
+    {
+      "value": "on",
+      "expected": false
+    },
+    {
+      "value": "2",
+      "expected": false
+    },
+    {
+      "value": "garbage",
+      "expected": false
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "export_overwrite_and_unset",
+      "persistent": true,
+      "steps": [
+        {
+          "command": "export DEMO_VAR=hello",
+          "output": "",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "echo \"v=$DEMO_VAR\"",
+          "output": "v=hello\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "export DEMO_VAR=world",
+          "output": "",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "echo \"v=$DEMO_VAR\"",
+          "output": "v=world\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "unset DEMO_VAR",
+          "output": "",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "echo \"v=${DEMO_VAR:-unset}\"",
+          "output": "v=unset\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        }
+      ]
+    },
+    {
+      "name": "special_chars_and_multiline",
+      "persistent": true,
+      "steps": [
+        {
+          "command": "export SPECIAL=\"a'b\\\"c \\$x \\`echo no\\`\" ",
+          "output": "",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "printf \"%s\\n\" \"$SPECIAL\"",
+          "output": "a'b\"c $x `echo no`\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "export MULTI=$'line1\\nline2\\nline3'",
+          "output": "",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "printf \"%s\\n\" \"$MULTI\"",
+          "output": "line1\nline2\nline3\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        }
+      ]
+    },
+    {
+      "name": "unexported_var_does_not_persist",
+      "persistent": true,
+      "steps": [
+        {
+          "command": "LOCAL_ONLY=local_val; echo \"same=$LOCAL_ONLY\"",
+          "output": "same=local_val\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "echo \"next=${LOCAL_ONLY:-gone}\"",
+          "output": "next=gone\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        }
+      ]
+    },
+    {
+      "name": "path_modification_persists",
+      "persistent": true,
+      "steps": [
+        {
+          "command": "export PATH=\"/tmp/hermes-custom-bin-test:$PATH\"",
+          "output": "",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "case \":$PATH:\" in *:/tmp/hermes-custom-bin-test:*) echo yes;; *) echo no;; esac",
+          "output": "yes\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        }
+      ]
+    },
+    {
+      "name": "nonzero_exit_preserves_exports_and_exit_code",
+      "persistent": true,
+      "steps": [
+        {
+          "command": "export AFTER_FAIL=kept; (exit 7)",
+          "output": "",
+          "returncode": 7,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "echo \"after=$AFTER_FAIL\"",
+          "output": "after=kept\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        }
+      ]
+    },
+    {
+      "name": "explicit_exit_skips_dump_keeps_prior_state",
+      "persistent": true,
+      "steps": [
+        {
+          "command": "export BEFORE_EXIT=before",
+          "output": "",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "export DURING_EXIT=during; exit 5",
+          "output": "",
+          "returncode": 5,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "echo \"before=$BEFORE_EXIT during=${DURING_EXIT:-gone}\"",
+          "output": "before=before during=gone\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        }
+      ]
+    },
+    {
+      "name": "set_eu_does_not_poison_next_command",
+      "persistent": true,
+      "steps": [
+        {
+          "command": "set -eu; export STRICT_OK=yes",
+          "output": "",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "echo \"strict=$STRICT_OK undef=${UNDEF_VAR}\"",
+          "output": "strict=yes undef=\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        }
+      ]
+    },
+    {
+      "name": "excluded_session_and_harness_vars",
+      "persistent": true,
+      "steps": [
+        {
+          "command": "export HERMES_SESSION_ID=leaked_sid HERMES_RPC_TOKEN=leaked_rpc HERMES_UI_SESSION_ID=ui1 HERMES_DELEGATED_CHILD_CONTEXT=1 HERMES_CRON_SESSION=1 HERMES_KERNEL_DIR=/tmp/k AI_AGENT=custom_agent HERMES_AGENT=custom_hermes NORMAL_VAR=kept_normal",
+          "output": "",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "echo \"sid=${HERMES_SESSION_ID:-none} rpc=${HERMES_RPC_TOKEN:-none} ui=${HERMES_UI_SESSION_ID:-none} child=${HERMES_DELEGATED_CHILD_CONTEXT:-none} cron=${HERMES_CRON_SESSION:-none} kdir=${HERMES_KERNEL_DIR:-none} ai=${AI_AGENT:-none} ha=${HERMES_AGENT:-none} norm=${NORMAL_VAR:-none}\"",
+          "output": "sid=none rpc=none ui=none child=none cron=none kdir=none ai=hermes-agent ha=true norm=kept_normal\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        }
+      ]
+    },
+    {
+      "name": "secret_shaped_export_persists_in_session",
+      "persistent": true,
+      "steps": [
+        {
+          "command": "export MY_CUSTOM_TOKEN=tok_value_998877",
+          "output": "",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "echo \"len=${#MY_CUSTOM_TOKEN} prefix=${MY_CUSTOM_TOKEN:0:4}\"",
+          "output": "len=16 prefix=tok_\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        }
+      ]
+    },
+    {
+      "name": "persistent_false_drops_exports_keeps_cwd",
+      "persistent": false,
+      "steps": [
+        {
+          "command": "mkdir -p sub && cd sub && export NO_PERSIST=nope && pwd",
+          "output": "<ROOT>/sub\n",
+          "returncode": 0,
+          "cwd": "<ROOT>/sub"
+        },
+        {
+          "command": "echo \"var=${NO_PERSIST:-gone}\"; pwd",
+          "output": "var=gone\n<ROOT>/sub\n",
+          "returncode": 0,
+          "cwd": "<ROOT>/sub"
+        }
+      ]
+    },
+    {
+      "name": "persistent_true_with_cd",
+      "persistent": true,
+      "steps": [
+        {
+          "command": "mkdir -p sub && cd sub && export IN_SUB=yes",
+          "output": "",
+          "returncode": 0,
+          "cwd": "<ROOT>/sub"
+        },
+        {
+          "command": "echo \"var=$IN_SUB\"; pwd",
+          "output": "var=yes\n<ROOT>/sub\n",
+          "returncode": 0,
+          "cwd": "<ROOT>/sub"
+        }
+      ]
+    },
+    {
+      "name": "heredoc_and_no_trailing_newline",
+      "persistent": true,
+      "steps": [
+        {
+          "command": "printf 'no-newline'",
+          "output": "no-newline",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "cat <<'EOF'\nhello from heredoc\nEOF\nexport AFTER_HD=ok",
+          "output": "hello from heredoc\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "echo \"hd=$AFTER_HD\"",
+          "output": "hd=ok\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        }
+      ]
+    },
+    {
+      "name": "function_defined_in_command_does_not_persist",
+      "persistent": true,
+      "steps": [
+        {
+          "command": "my_tmp_fn() { echo hi; }; my_tmp_fn",
+          "output": "hi\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "type my_tmp_fn >/dev/null 2>&1 && echo exists || echo missing",
+          "output": "missing\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        }
+      ]
+    },
+    {
+      "name": "exported_function_does_not_persist",
+      "persistent": true,
+      "steps": [
+        {
+          "command": "my_exp_fn() { echo hi-exp; }; export -f my_exp_fn; my_exp_fn",
+          "output": "hi-exp\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        },
+        {
+          "command": "type my_exp_fn >/dev/null 2>&1 && echo exists || echo missing",
+          "output": "missing\n",
+          "returncode": 0,
+          "cwd": "<ROOT>"
+        }
+      ]
+    }
+  ]
+}

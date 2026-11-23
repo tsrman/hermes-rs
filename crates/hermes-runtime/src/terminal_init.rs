@@ -91,7 +91,7 @@ pub(crate) fn resolved_files(
         .collect()
 }
 
-fn find_bash() -> Option<PathBuf> {
+pub(crate) fn find_bash() -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|dir| dir.join("bash"))

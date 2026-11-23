@@ -79,13 +79,28 @@ impl OutputLimits {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+fn default_local_persistent() -> bool {
+    true
+}
+
+/// Match the reference's `_tenv_bool("TERMINAL_LOCAL_PERSISTENT", "true")`:
+/// unset defaults to `true`; when set, only `"true"`, `"1"`, or `"yes"` (ASCII case-insensitive)
+/// enable persistence.
+pub fn parse_local_persistent(raw: Option<&str>) -> bool {
+    match raw {
+        None => true,
+        Some(value) => matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "yes"),
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TerminalSettings {
     #[serde(default)]
     pub output: OutputLimits,
     /// `terminal.timeout` (or `TERMINAL_TIMEOUT`): the foreground timeout when a call gives none.
     #[serde(default)]
     pub default_timeout: Option<u32>,
+    #[serde(default)]
     pub env_passthrough: Vec<String>,
     /// `code_execution.timeout`: seconds one `execute_code` call may run.
     #[serde(default)]
@@ -102,6 +117,26 @@ pub struct TerminalSettings {
     /// `terminal.auto_source_bashrc: false` (the reference's default is true).
     #[serde(default)]
     pub no_auto_source_bashrc: bool,
+    /// `TERMINAL_LOCAL_PERSISTENT` (default `true`): persist exported shell variables across
+    /// commands in the same conversation/session.
+    #[serde(default = "default_local_persistent")]
+    pub local_persistent: bool,
+}
+
+impl Default for TerminalSettings {
+    fn default() -> Self {
+        Self {
+            output: OutputLimits::default(),
+            default_timeout: None,
+            env_passthrough: Vec::new(),
+            code_timeout: None,
+            code_max_tool_calls: None,
+            scratch: None,
+            shell_init_files: Vec::new(),
+            no_auto_source_bashrc: false,
+            local_persistent: true,
+        }
+    }
 }
 
 const DEFAULT_ENV: [&str; 22] = [
@@ -186,6 +221,9 @@ impl TerminalSettings {
             no_auto_source_bashrc: !config["terminal"]
                 .get("auto_source_bashrc")
                 .is_none_or(crate::terminal_init::py_truthy),
+            local_persistent: parse_local_persistent(
+                std::env::var("TERMINAL_LOCAL_PERSISTENT").ok().as_deref(),
+            ),
         }
     }
 
@@ -245,13 +283,34 @@ impl TerminalSettings {
 static WORKING_DIRECTORIES: LazyLock<Mutex<HashMap<String, PathBuf>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Persisted bash `export -p` snapshot per conversation/session (stored purely in memory so
+/// exported credentials never touch disk).
+static SESSION_SNAPSHOTS: LazyLock<Mutex<HashMap<String, Vec<u8>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 fn tracked_directory(session: &str) -> Option<PathBuf> {
     WORKING_DIRECTORIES.lock().ok()?.get(session).cloned()
 }
 
-/// Forget where a finished conversation (a subagent) left its working directory.
-pub(crate) fn forget_session(session: &str) {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn session_snapshot(session: &str) -> Option<Vec<u8>> {
+    SESSION_SNAPSHOTS.lock().ok()?.get(session).cloned()
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn store_session_snapshot(session: &str, snapshot: Vec<u8>) {
+    if let Ok(mut map) = SESSION_SNAPSHOTS.lock() {
+        map.insert(session.to_owned(), snapshot);
+    }
+}
+
+/// Forget where a finished conversation (a subagent or reset REPL) left its working directory
+/// and persisted shell environment.
+pub fn forget_session(session: &str) {
     track_directory(session, None);
+    if let Ok(mut map) = SESSION_SNAPSHOTS.lock() {
+        map.remove(session);
+    }
 }
 
 /// Where a conversation's commands run now: the directory they last ended in, if it is still
@@ -339,7 +398,8 @@ pub(crate) fn schema(background: bool) -> Value {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod shell {
     use std::fs::File;
-    use std::io;
+    use std::io::{self, Write};
+    use std::os::fd::{AsRawFd, OwnedFd, RawFd};
     use std::os::unix::fs::MetadataExt;
     use std::process::{ExitStatus, Stdio};
     use std::time::Duration;
@@ -358,6 +418,14 @@ mod shell {
     /// Output kept for the model: the start (what the command announced) and the end (where
     /// errors and results are), with the middle omitted.
     const CWD_MARKER: &str = "__HERMES_CWD__";
+    /// Private high file descriptors used to pass the persisted bash `export -p` snapshot into and
+    /// out of the child process purely in memory (never touching disk). Closed before the user's
+    /// command runs via `197<&- 198>&-`.
+    const RESTORE_FD: libc::c_int = 197;
+    const DUMP_FD: libc::c_int = 198;
+    /// Maximum size of a captured shell environment snapshot (16 MiB, matching the reference's
+    /// `_MAX_HANDOFF_BYTES`).
+    const MAX_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -462,8 +530,22 @@ mod shell {
             return Err("The working directory changed while approval was pending".into());
         }
         if let Some(owner) = owner {
-            let mut child = Command::new("/bin/sh");
-            configure(&mut child, &args.command, directory, settings, false);
+            let prior = settings
+                .local_persistent
+                .then(|| session_snapshot(session))
+                .flatten();
+            let restore_read = match prior {
+                Some(bytes) => Some(pipe_with_bytes(bytes).map_err(|error| error.to_string())?),
+                None => None,
+            };
+            let (child, _) = build_command(
+                &args.command,
+                directory,
+                settings,
+                false,
+                restore_read,
+                None,
+            );
             return crate::process::spawn(child, &args.command, target, owner);
         }
         let mut result = run(
@@ -471,6 +553,7 @@ mod shell {
             directory,
             Duration::from_secs(u64::from(seconds)),
             settings,
+            session,
         )
         .await?;
         // Remember where the command ended, when that is still inside the workspace.
@@ -509,23 +592,140 @@ mod shell {
         Ok((metadata.dev(), metadata.ino()))
     }
 
-    /// The sandbox every command starts in: a minimal environment, its own process group, and the
-    /// approved directory as the working directory.
-    fn configure(
-        child: &mut Command,
+    fn pipe_with_bytes(data: Vec<u8>) -> io::Result<OwnedFd> {
+        let (reader, mut writer) = std::io::pipe()?;
+        if data.len() <= 4096 {
+            let _ = writer.write_all(&data);
+            drop(writer);
+        } else {
+            std::thread::spawn(move || {
+                let _ = writer.write_all(&data);
+            });
+        }
+        Ok(OwnedFd::from(reader))
+    }
+
+    /// Install `restore` on `RESTORE_FD` and `dump` on `DUMP_FD` inside `pre_exec`, avoiding
+    /// fd-number collisions and clearing `FD_CLOEXEC` only on the target descriptors.
+    unsafe fn install_child_fds(restore: Option<RawFd>, dump: Option<RawFd>) -> io::Result<()> {
+        let mut restore = restore;
+        if let (Some(r), Some(_)) = (restore, dump) {
+            if r == DUMP_FD {
+                let moved = libc::dup(r);
+                if moved < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let _ = libc::fcntl(moved, libc::F_SETFD, libc::FD_CLOEXEC);
+                restore = Some(moved);
+            }
+        }
+        if let Some(d) = dump {
+            if d == DUMP_FD {
+                if libc::fcntl(d, libc::F_SETFD, 0) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            } else if libc::dup2(d, DUMP_FD) < 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        if let Some(r) = restore {
+            if r == RESTORE_FD {
+                if libc::fcntl(r, libc::F_SETFD, 0) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            } else if libc::dup2(r, RESTORE_FD) < 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(())
+    }
+
+    fn bash_wrapper_script(
+        command: &str,
+        has_restore: bool,
+        capture_snapshot: bool,
+        report_directory: bool,
+    ) -> String {
+        let escaped = command.replace('\'', "'\\''");
+        let mut parts = Vec::new();
+        if has_restore {
+            parts.push(format!(
+                "IFS= builtin read -r -d '' __hermes_snap <&{RESTORE_FD} || :"
+            ));
+            parts.push("builtin eval \"${__hermes_snap-}\" >/dev/null 2>&1 || true".to_owned());
+            parts.push("builtin unset __hermes_snap".to_owned());
+        }
+        parts.push(
+            "export AI_AGENT=\"${AI_AGENT:-hermes-agent}\" HERMES_AGENT=\"${HERMES_AGENT:-true}\""
+                .to_owned(),
+        );
+        parts.push("export GIT_PAGER=\"${GIT_PAGER:-cat}\" PAGER=\"${PAGER:-cat}\"".to_owned());
+        let mut closes = String::new();
+        if has_restore {
+            closes.push_str(&format!(" {RESTORE_FD}<&-"));
+        }
+        if capture_snapshot {
+            closes.push_str(&format!(" {DUMP_FD}>&-"));
+        }
+        parts.push(format!("eval '{escaped}'{closes}"));
+        parts.push("__hermes_ec=$?".to_owned());
+        parts.push("builtin set +e; builtin set +u".to_owned());
+        if capture_snapshot {
+            // Unset per-session/harness/path-state vars in a subshell before `export -p` (matching
+            // `base_session_env._export_dump_excluding_session_vars`) and append a NUL byte so the
+            // parent only commits complete dumps (never partial output or an early `exit N`).
+            parts.push(format!(
+                "{{ ( builtin unset ${{!HERMES_SESSION_*}} ${{!HERMES_CRON_AUTO_DELIVER_*}} \
+                 AI_AGENT HERMES_AGENT HERMES_DELEGATED_CHILD_CONTEXT HERMES_CRON_SESSION \
+                 ${{!HERMES_RPC_*}} HERMES_KERNEL_DIR HERMES_UI_SESSION_ID \
+                 PWD OLDPWD SHLVL _ 2>/dev/null; \
+                 builtin export -n SHELLOPTS BASHOPTS 2>/dev/null; \
+                 builtin export -p; builtin printf '\\0'; ) >&{DUMP_FD} 2>/dev/null || true; }}"
+            ));
+        }
+        if report_directory {
+            parts.push(format!(
+                "builtin printf '\\n{CWD_MARKER}%s\\n' \"$(pwd -P)\""
+            ));
+        }
+        parts.push("exit $__hermes_ec".to_owned());
+        parts.join("\n")
+    }
+
+    /// Build the child command: bash with in-memory snapshot pipes when available, else `/bin/sh`.
+    /// Returns `(command, using_bash_snapshot)`.
+    fn build_command(
         command: &str,
         directory: File,
         settings: &TerminalSettings,
         report_directory: bool,
-    ) {
-        // The trap reports the final directory even after `exit`, on a line of its own.
-        let script = if report_directory {
-            format!(
-                "trap 'status=$?; printf \"\\n{CWD_MARKER}%s\\n\" \"$(pwd -P)\"; exit $status' EXIT\n{command}"
-            )
-        } else {
-            command.to_owned()
+        restore_read: Option<OwnedFd>,
+        dump_write: Option<OwnedFd>,
+    ) -> (Command, bool) {
+        let bash = crate::terminal_init::find_bash();
+        let using_bash = bash.is_some();
+        let (program, script, restore_fd, dump_fd) = match bash {
+            Some(path) => {
+                let script = bash_wrapper_script(
+                    command,
+                    restore_read.is_some(),
+                    dump_write.is_some(),
+                    report_directory,
+                );
+                (path, script, restore_read, dump_write)
+            }
+            None => {
+                let script = if report_directory {
+                    format!(
+                        "trap 'status=$?; printf \"\\n{CWD_MARKER}%s\\n\" \"$(pwd -P)\"; exit $status' EXIT\n{command}"
+                    )
+                } else {
+                    command.to_owned()
+                };
+                (PathBuf::from("/bin/sh"), script, None, None)
+            }
         };
+        let mut child = Command::new(program);
         child
             .args(["-c", &script])
             .env_clear()
@@ -535,9 +735,34 @@ mod shell {
             .stderr(Stdio::piped())
             .process_group(0)
             .kill_on_drop(true);
-        // SAFETY: fchdir is async-signal-safe and the closure owns the open
-        // descriptor, so the child enters the approved directory before exec.
-        unsafe { child.pre_exec(move || fchdir(&directory).map_err(io::Error::from)) };
+        // SAFETY: fchdir, dup, dup2, and fcntl are async-signal-safe; the closure owns the open
+        // descriptors so the child enters the approved directory and inherits the snapshot pipes
+        // before exec.
+        unsafe {
+            child.pre_exec(move || {
+                fchdir(&directory).map_err(io::Error::from)?;
+                install_child_fds(
+                    restore_fd.as_ref().map(AsRawFd::as_raw_fd),
+                    dump_fd.as_ref().map(AsRawFd::as_raw_fd),
+                )
+            })
+        };
+        (child, using_bash)
+    }
+
+    async fn read_snapshot(mut reader: tokio::net::unix::pipe::Receiver) -> io::Result<Vec<u8>> {
+        let mut out = Vec::new();
+        let mut buf = [0u8; 8192];
+        loop {
+            let n = reader.read(&mut buf).await?;
+            if n == 0 {
+                return Ok(out);
+            }
+            if out.len() < MAX_SNAPSHOT_BYTES {
+                let take = n.min(MAX_SNAPSHOT_BYTES - out.len());
+                out.extend_from_slice(&buf[..take]);
+            }
+        }
     }
 
     async fn run(
@@ -545,12 +770,29 @@ mod shell {
         directory: File,
         duration: Duration,
         settings: &TerminalSettings,
+        session: &str,
     ) -> Result<Value, String> {
         // One pipe carries both streams, so output keeps the order the command wrote it in.
         let (reader, writer) = std::io::pipe().map_err(|error| error.to_string())?;
         let errors = writer.try_clone().map_err(|error| error.to_string())?;
-        let mut child = Command::new("/bin/sh");
-        configure(&mut child, command, directory, settings, true);
+        let restore_read = if settings.local_persistent {
+            match session_snapshot(session) {
+                Some(bytes) => Some(pipe_with_bytes(bytes).map_err(|error| error.to_string())?),
+                None => None,
+            }
+        } else {
+            None
+        };
+        let (snap_rx, dump_write) = if settings.local_persistent {
+            let (s_read, s_write) = std::io::pipe().map_err(|error| error.to_string())?;
+            let rx = tokio::net::unix::pipe::Receiver::from_file(File::from(OwnedFd::from(s_read)))
+                .map_err(|error| error.to_string())?;
+            (Some(rx), Some(OwnedFd::from(s_write)))
+        } else {
+            (None, None)
+        };
+        let (mut child, using_bash) =
+            build_command(command, directory, settings, true, restore_read, dump_write);
         child
             .stdout(Stdio::from(writer))
             .stderr(Stdio::from(errors));
@@ -566,17 +808,30 @@ mod shell {
             child,
             pid: Some(pid),
         };
-        let receiver = tokio::net::unix::pipe::Receiver::from_file(File::from(
-            std::os::fd::OwnedFd::from(reader),
-        ))
-        .map_err(|error| error.to_string())?;
+        let receiver =
+            tokio::net::unix::pipe::Receiver::from_file(File::from(OwnedFd::from(reader)))
+                .map_err(|error| error.to_string())?;
         let mut kept = Kept::with_limit(settings.output.max_bytes);
         let result = timeout(duration, async {
-            tokio::try_join!(group.wait(), capture(receiver, &mut kept))
+            let snap_fut = async {
+                match snap_rx {
+                    Some(rx) if using_bash => read_snapshot(rx).await.map(Some),
+                    _ => Ok(None),
+                }
+            };
+            tokio::try_join!(group.wait(), capture(receiver, &mut kept), snap_fut)
         })
         .await;
         match result {
-            Ok(Ok((status, ()))) => {
+            Ok(Ok((status, (), captured_snapshot))) => {
+                if let Some(mut snap) = captured_snapshot {
+                    // Only commit dumps closed by the trailing NUL sentinel (an early `exit N`
+                    // skips the dump and preserves the prior session snapshot).
+                    if snap.last() == Some(&0) {
+                        snap.pop();
+                        store_session_snapshot(session, snap);
+                    }
+                }
                 let ended = kept.take_directory();
                 let text = kept.render();
                 let text = redact_terminal_output(&text, Some(command), &[]);
@@ -1060,5 +1315,237 @@ mod tests {
             "{}",
             &text[text.len() - 40..]
         );
+    }
+
+    async fn run_with_settings(
+        root: &std::path::Path,
+        arguments: Value,
+        background: Option<&str>,
+        settings: &TerminalSettings,
+        session: &str,
+    ) -> Value {
+        let workspace = FileWorkspace::new(root, None);
+        let mut approve =
+            move |_request: ApprovalRequest| async move { ApprovalDecision::Approved };
+        execute(
+            &workspace,
+            &arguments.to_string(),
+            Some(5),
+            background,
+            settings,
+            session,
+            &mut approve,
+        )
+        .await
+    }
+
+    #[derive(serde::Deserialize)]
+    struct BoolCase {
+        value: Option<String>,
+        expected: bool,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct PersistentStep {
+        command: String,
+        output: String,
+        returncode: i64,
+        cwd: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct PersistentScenario {
+        name: String,
+        persistent: bool,
+        steps: Vec<PersistentStep>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct PersistentCorpus {
+        bool_cases: Vec<BoolCase>,
+        scenarios: Vec<PersistentScenario>,
+    }
+
+    #[test]
+    fn terminal_local_persistent_bool_parsing_matches_reference() {
+        let corpus: PersistentCorpus = serde_json::from_str(include_str!(
+            "../tests/fixtures/local_persistent_cases.json"
+        ))
+        .unwrap();
+        assert!(!corpus.bool_cases.is_empty());
+        for case in corpus.bool_cases {
+            assert_eq!(
+                parse_local_persistent(case.value.as_deref()),
+                case.expected,
+                "value={:?}",
+                case.value
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn local_persistent_shell_matches_reference_corpus() {
+        let corpus: PersistentCorpus = serde_json::from_str(include_str!(
+            "../tests/fixtures/local_persistent_cases.json"
+        ))
+        .unwrap();
+        assert!(!corpus.scenarios.is_empty());
+        for scenario in corpus.scenarios {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path().canonicalize().unwrap();
+            let root_str = root.display().to_string();
+            let session = format!("persistent-corpus-{}-{}", scenario.name, root_str);
+            let settings = TerminalSettings {
+                local_persistent: scenario.persistent,
+                no_auto_source_bashrc: true,
+                ..TerminalSettings::default()
+            };
+            for (idx, step) in scenario.steps.iter().enumerate() {
+                let res = run_with_settings(
+                    directory.path(),
+                    json!({"command": step.command}),
+                    None,
+                    &settings,
+                    &session,
+                )
+                .await;
+                let got_output = res["output"]
+                    .as_str()
+                    .unwrap_or("")
+                    .replace(&root_str, "<ROOT>");
+                let got_code = res["exit_code"].as_i64().unwrap_or(-1);
+                let got_cwd = res
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| session_directory(&session, &root).display().to_string())
+                    .replace(&root_str, "<ROOT>");
+                assert_eq!(
+                    got_code, step.returncode,
+                    "scenario={} step={} cmd={:?} res={res}",
+                    scenario.name, idx, step.command
+                );
+                assert_eq!(
+                    got_output, step.output,
+                    "scenario={} step={} cmd={:?} res={res}",
+                    scenario.name, idx, step.command
+                );
+                assert_eq!(
+                    got_cwd, step.cwd,
+                    "scenario={} step={} cmd={:?} res={res}",
+                    scenario.name, idx, step.command
+                );
+            }
+            forget_session(&session);
+        }
+    }
+
+    #[tokio::test]
+    async fn persistent_state_isolates_sessions_works_with_background_and_leaves_no_temp_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(directory.path().join("sub")).unwrap();
+        let settings = TerminalSettings {
+            scratch: Some(scratch.path().to_path_buf()),
+            local_persistent: true,
+            no_auto_source_bashrc: true,
+            ..TerminalSettings::default()
+        };
+        let s1 = format!("iso-a-{}", directory.path().display());
+        let s2 = format!("iso-b-{}", directory.path().display());
+
+        // Large export (> 4 KiB) exercises the threaded restore pipe path too.
+        let big = "Z".repeat(6000);
+        let set = run_with_settings(
+            directory.path(),
+            json!({"command": format!("export SHARED_VAL=from_s1 BIG_VAL={big}")}),
+            None,
+            &settings,
+            &s1,
+        )
+        .await;
+        assert_eq!(set["exit_code"], 0);
+
+        // Same session sees both exports, even with explicit workdir override, and PWD matches workdir.
+        let check_sub = run_with_settings(
+            directory.path(),
+            json!({"command": "echo \"$SHARED_VAL|${#BIG_VAL}|$(basename \"$PWD\")\"", "workdir": "sub"}),
+            None,
+            &settings,
+            &s1,
+        )
+        .await;
+        assert_eq!(check_sub["output"], "from_s1|6000|sub\n");
+
+        // Another session does NOT see s1's exports.
+        let other = run_with_settings(
+            directory.path(),
+            json!({"command": "echo \"${SHARED_VAL:-none}\""}),
+            None,
+            &settings,
+            &s2,
+        )
+        .await;
+        assert_eq!(other["output"], "none\n");
+
+        // Background process inherits s1's persisted environment.
+        let bg = run_with_settings(
+            directory.path(),
+            json!({"command": "echo \"bg=$SHARED_VAL\"", "background": true}),
+            Some(&s1),
+            &settings,
+            &s1,
+        )
+        .await;
+        let bg_id = bg["session_id"].as_str().unwrap();
+        let waited = crate::process::call(
+            &s1,
+            &json!({"action": "wait", "session_id": bg_id, "timeout": 10}).to_string(),
+        )
+        .await;
+        assert_eq!(waited["output"], "bg=from_s1\n");
+
+        // `set -e` + a readonly excluded var must not abort the dump subshell before `export -p`.
+        let set_e_ro = run_with_settings(
+            directory.path(),
+            json!({"command": "set -e; export AFTER_RO=survived; readonly HERMES_SESSION_RO=1"}),
+            None,
+            &settings,
+            &s1,
+        )
+        .await;
+        assert_eq!(set_e_ro["exit_code"], 0);
+        let check_ro = run_with_settings(
+            directory.path(),
+            json!({"command": "echo \"$AFTER_RO|${HERMES_SESSION_RO:-none}\""}),
+            None,
+            &settings,
+            &s1,
+        )
+        .await;
+        assert_eq!(check_ro["output"], "survived|none\n");
+
+        // `forget_session` clears persisted exports.
+        forget_session(&s1);
+        let after_forget = run_with_settings(
+            directory.path(),
+            json!({"command": "echo \"${SHARED_VAL:-cleared}\""}),
+            None,
+            &settings,
+            &s1,
+        )
+        .await;
+        assert_eq!(after_forget["output"], "cleared\n");
+
+        // Zero snapshot files written into scratch/TMPDIR.
+        let leftover: Vec<_> = std::fs::read_dir(scratch.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert!(
+            leftover.is_empty(),
+            "unexpected scratch files: {leftover:?}"
+        );
+        forget_session(&s2);
     }
 }

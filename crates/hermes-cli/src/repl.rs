@@ -123,6 +123,7 @@ pub async fn run(home: Option<&Path>, request: ChatRequest) -> Result<u8, String
                     session = None;
                     unsaved = None;
                     guard.lock().unwrap().reset();
+                    hermes_runtime::terminal::forget_session(&scope);
                 }
                 "model" if argument.is_empty() => {
                     println!("{}", request.model().unwrap_or("(not set)"));
@@ -176,6 +177,7 @@ pub async fn run(home: Option<&Path>, request: ChatRequest) -> Result<u8, String
                     session = Some(argument.to_owned());
                     unsaved = None;
                     guard.lock().unwrap().reset();
+                    hermes_runtime::terminal::forget_session(&scope);
                     println!("The next turn continues session {argument}");
                 }
                 "retry" => match unsaved.take() {

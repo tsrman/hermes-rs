@@ -198,6 +198,41 @@ class ReplToolTest(ReplBase):
         result, _ = self.last_tool_result()
         self.assertEqual(result["output"].strip(), str(self.root / "sub"))
 
+    def test_exported_env_persists_between_turns_and_resets_on_new(self):
+        process, _ = self.start("--yolo", tty=False)
+        cmd = lambda c: json.dumps({"path": "x", "content": "", "tool": "terminal", "arguments": {"command": c}})
+        script = "\n".join([
+            cmd("export REPL_PERSIST_VAR=hello-world"),
+            cmd('echo "seen=$REPL_PERSIST_VAR"'),
+            "/new",
+            cmd('echo "after_new=${REPL_PERSIST_VAR:-gone}"'),
+        ]) + "\n"
+        _, err = process.communicate(script, timeout=30)
+        self.assertEqual(process.returncode, 0, err)
+        tool_outputs = [
+            json.loads(m["content"])["output"].strip()
+            for r in self.requests()
+            for m in r["messages"]
+            if m.get("role") == "tool"
+        ]
+        # Each turn sends the whole session history; take the newest tool output from turn 2 and turn 3.
+        self.assertIn("seen=hello-world", tool_outputs)
+        self.assertEqual(tool_outputs[-1], "after_new=gone")
+
+    def test_terminal_local_persistent_false_drops_exports_but_keeps_cwd(self):
+        (self.root / "sub").mkdir()
+        self.env = {**self.env, "TERMINAL_LOCAL_PERSISTENT": "false"}
+        process, _ = self.start("--yolo", tty=False)
+        cmd = lambda c: json.dumps({"path": "x", "content": "", "tool": "terminal", "arguments": {"command": c}})
+        script = "\n".join([
+            cmd("cd sub && export EPHEMERAL_VAR=nope"),
+            cmd('echo "var=${EPHEMERAL_VAR:-gone}|$(pwd)"'),
+        ]) + "\n"
+        _, err = process.communicate(script, timeout=30)
+        self.assertEqual(process.returncode, 0, err)
+        result, _ = self.last_tool_result()
+        self.assertEqual(result["output"].strip(), f"var=gone|{self.root / 'sub'}")
+
 
 @unittest.skipUnless(sys.platform == "linux", "requires Linux terminals")
 class ReplInterruptTest(ReplBase):
