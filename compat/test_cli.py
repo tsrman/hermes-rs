@@ -190,14 +190,76 @@ class CliTest(unittest.TestCase):
 
     def responses_body(self, agent):
         # The server only records /v1/responses; the run itself ends in an error we do not look at.
+        with urlopen(self.base + "/requests", timeout=5) as response:
+            before = len(json.load(response))
         config = "  api_mode: codex_responses\n" + agent
         _, recorded = self.chat_with_profile(extra_config=config)
-        self.assertEqual(len(recorded), 1)
-        return recorded[0]
+        self.assertEqual(len(recorded), before + 1)
+        return recorded[-1]
 
     def test_text_verbosity_is_sent_on_the_responses_route(self):
         body = self.responses_body("agent:\n  text_verbosity: HIGH\n")
         self.assertEqual(body["text"], {"verbosity": "high"})
+        self.assertEqual(body["reasoning"], {"effort": "medium", "summary": "auto"})
+        self.assertEqual(body["include"], ["reasoning.encrypted_content"])
+        self.assertRegex(body["prompt_cache_key"], r"^pck_[0-9a-f]{24}$")
+
+    def test_responses_body_carries_reasoning_include_and_prompt_cache_key(self):
+        # Default Responses body carries reasoning, include and a content-addressed prompt_cache_key.
+        default_body = self.responses_body("")
+        self.assertEqual(default_body["reasoning"], {"effort": "medium", "summary": "auto"})
+        self.assertEqual(default_body["include"], ["reasoning.encrypted_content"])
+        self.assertRegex(default_body["prompt_cache_key"], r"^pck_[0-9a-f]{24}$")
+
+        # Configured effort reaches reasoning.effort; ultra clamps to max on custom Responses.
+        high_body = self.responses_body("agent:\n  reasoning_effort: high\n")
+        self.assertEqual(high_body["reasoning"], {"effort": "high", "summary": "auto"})
+        self.assertEqual(high_body["include"], ["reasoning.encrypted_content"])
+
+        # Disabled reasoning sends effort: none and empty include.
+        off_body = self.responses_body("agent:\n  reasoning_effort: none\n")
+        self.assertEqual(off_body["reasoning"], {"effort": "none"})
+        self.assertEqual(off_body["include"], [])
+
+        # Endpoint extra_body overrides prompt_cache_key and bounds keys over 64 chars.
+        override = (
+            f"providers:\n  p:\n    base_url: {self.base}/v1\n    model: primary\n"
+            "    extra_body:\n      prompt_cache_key: custom-key-1\n"
+        )
+        override_body = self.responses_body(override)
+        self.assertEqual(override_body["prompt_cache_key"], "custom-key-1")
+
+        # xAI Responses route omits text.verbosity and reasoning.summary, and omits prompt_cache_key without a session.
+        with urlopen(self.base + "/requests", timeout=5) as response:
+            before_xai = len(json.load(response))
+        xai_home = self.workdir / "hermes-xai"
+        xai_home.mkdir()
+        (xai_home / "config.yaml").write_text(
+            f"model:\n  default: grok-4.6\n  provider: xai\n  base_url: {self.base}/v1\n"
+            "agent:\n  reasoning_effort: xhigh\n  text_verbosity: high\n",
+            encoding="utf-8",
+        )
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HERMES_HOME": str(xai_home),
+            "HERMES_API_KEY": "xai-fixture",
+        }
+        subprocess.run(
+            [str(BINARY), "chat", "-q", "test"],
+            cwd=self.workdir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
+        with urlopen(self.base + "/requests", timeout=5) as response:
+            recorded_xai = json.load(response)
+        self.assertEqual(len(recorded_xai), before_xai + 1)
+        xai_body = recorded_xai[-1]
+        self.assertEqual(xai_body["reasoning"], {"effort": "xhigh"})
+        self.assertEqual(xai_body["include"], ["reasoning.encrypted_content"])
+        self.assertNotIn("text", xai_body)
+        self.assertNotIn("prompt_cache_key", xai_body)
 
     def test_an_unknown_text_verbosity_sends_nothing(self):
         self.assertNotIn("text", self.responses_body("agent:\n  text_verbosity: bogus\n"))

@@ -125,6 +125,7 @@ fn side_route(
         base_url,
         api_key,
         extras,
+        reasoning: Default::default(),
         timeout_secs: aux.timeout_secs,
     }))
 }
@@ -298,11 +299,22 @@ struct Route {
     #[serde(default)]
     extras: hermes_runtime::providers::Extras,
     #[serde(default)]
+    reasoning: hermes_runtime::reasoning::ReasoningSettings,
+    #[serde(default)]
     timeout_secs: Option<u64>,
 }
 
 impl Route {
     fn open(&self, model: String, attempts: u32) -> Result<ModelRoute, String> {
+        self.open_with_session(model, attempts, None)
+    }
+
+    fn open_with_session(
+        &self,
+        model: String,
+        attempts: u32,
+        session_id: Option<&str>,
+    ) -> Result<ModelRoute, String> {
         let provider_name = match self.provider.as_str() {
             "custom" => "custom",
             "openai" => "openai",
@@ -322,10 +334,21 @@ impl Route {
                     .with_max_attempts(attempts),
             )
         } else if self.responses {
+            let mut extras = self.extras.clone();
+            let mut body = self
+                .reasoning
+                .responses_fields(&model, provider_name, &self.base_url);
+            hermes_runtime::providers::merge_body_maps(&mut body, &extras.body);
+            extras.body = body;
             Provider::Responses(
                 ResponsesProvider::new(&self.base_url, &self.api_key, timeout)
                     .map_err(setup)?
-                    .with_extras(self.extras.clone())
+                    .with_xai(hermes_runtime::reasoning::is_xai_responses(
+                        provider_name,
+                        &self.base_url,
+                    ))
+                    .with_session_id(session_id.map(str::to_owned))
+                    .with_extras(extras)
                     .with_max_attempts(attempts),
             )
         } else {
@@ -437,16 +460,6 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
     if let Some(profile) = hermes_runtime::providers::profiles::lookup(settings.provider) {
         extras.body = profile.default_body();
     }
-    // `agent.text_verbosity` is a Responses field; the reference's xAI route rejects it.
-    if settings.responses
-        && !hermes_runtime::reasoning::is_xai_responses(settings.provider, &base_url)
-    {
-        if let Some(verbosity) = settings.reasoning.verbosity() {
-            extras
-                .body
-                .insert("text".into(), serde_json::json!({"verbosity": verbosity}));
-        }
-    }
     if let Some(model) = args.model.as_deref().or(settings.model.as_deref()) {
         if settings.provider == "custom" || settings.named_custom {
             // The reference's `custom` profile asks for `reasoning_effort` (medium unless
@@ -549,6 +562,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
             provider: settings.provider.into(),
             responses: settings.responses,
             extras,
+            reasoning: settings.reasoning.clone(),
             timeout_secs: None,
             base_url,
             api_key,
@@ -563,6 +577,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
                 base_url: config.base_url,
                 api_key: config.api_key.unwrap_or_default(),
                 extras: Default::default(),
+                reasoning: settings.reasoning.clone(),
                 timeout_secs: None,
             })
             .collect(),
@@ -626,7 +641,14 @@ where
     let mut history = writer
         .as_mut()
         .map_or_else(Default::default, SessionWriter::take_history);
-    let primary = request.primary.open(model.clone(), request.attempts)?;
+    let cache_scope = writer
+        .as_ref()
+        .and_then(SessionWriter::session_id)
+        .or(request.state_scope.as_deref());
+    let primary =
+        request
+            .primary
+            .open_with_session(model.clone(), request.attempts, cache_scope)?;
     let summarizer = match &request.summary {
         Some(route) => Some(route.open(route.model.clone().unwrap_or(model), request.attempts)?),
         None => None,
@@ -693,7 +715,11 @@ where
     let fallbacks = request
         .fallbacks
         .iter()
-        .filter_map(|route| route.open(route.model.clone()?, request.attempts).ok())
+        .filter_map(|route| {
+            route
+                .open_with_session(route.model.clone()?, request.attempts, cache_scope)
+                .ok()
+        })
         .collect::<Vec<_>>();
     let mut receiving = true;
     let outcome = {
@@ -1012,7 +1038,11 @@ pub async fn compress_session(
         .filter(|value| !value.is_empty())
         .ok_or("model name is required")?;
     let mut history = writer.take_history();
-    let primary = request.primary.open(model.clone(), request.attempts)?;
+    let cache_scope = writer.session_id().or(request.state_scope.as_deref());
+    let primary =
+        request
+            .primary
+            .open_with_session(model.clone(), request.attempts, cache_scope)?;
     let summarizer = match &request.summary {
         Some(route) => Some(route.open(route.model.clone().unwrap_or(model), request.attempts)?),
         None => None,

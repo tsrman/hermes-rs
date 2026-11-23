@@ -1,0 +1,855 @@
+{
+  "sample_tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "zeta_tool",
+        "description": "Second alphabetically",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "b": {
+              "type": "string"
+            },
+            "a": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "alpha_tool",
+        "description": "First alphabetically",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "reasoning_cases": [
+    {
+      "label": "default_custom_legacy",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "fixture",
+      "agent": "{}",
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "custom_effort_minimal",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "fixture",
+      "agent": "{reasoning_effort: minimal}",
+      "reasoning": {
+        "effort": "minimal",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "custom_effort_low",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "fixture",
+      "agent": "{reasoning_effort: low}",
+      "reasoning": {
+        "effort": "low",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "custom_effort_medium",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "fixture",
+      "agent": "{reasoning_effort: medium}",
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "custom_effort_high",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "fixture",
+      "agent": "{reasoning_effort: high}",
+      "reasoning": {
+        "effort": "high",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "custom_effort_xhigh",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "fixture",
+      "agent": "{reasoning_effort: xhigh}",
+      "reasoning": {
+        "effort": "xhigh",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "custom_effort_max_clamps_xhigh",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "fixture",
+      "agent": "{reasoning_effort: max}",
+      "reasoning": {
+        "effort": "max",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "custom_effort_ultra_clamps_xhigh",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "fixture",
+      "agent": "{reasoning_effort: ultra}",
+      "reasoning": {
+        "effort": "max",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "custom_effort_none",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "fixture",
+      "agent": "{reasoning_effort: none}",
+      "reasoning": {
+        "effort": "none"
+      },
+      "include": [],
+      "text": null
+    },
+    {
+      "label": "custom_effort_false",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "fixture",
+      "agent": "{reasoning_effort: false}",
+      "reasoning": {
+        "effort": "none"
+      },
+      "include": [],
+      "text": null
+    },
+    {
+      "label": "custom_effort_disabled_map",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "fixture",
+      "agent": "{reasoning_effort: {enabled: false}}",
+      "reasoning": {
+        "effort": "none"
+      },
+      "include": [],
+      "text": null
+    },
+    {
+      "label": "custom_override_beats_global",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "gpt-5.2-codex",
+      "agent": "{reasoning_effort: high, reasoning_overrides: {gpt-5.2-codex: low}}",
+      "reasoning": {
+        "effort": "low",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "openai_legacy_minimal_clamps_low",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-5.2-codex",
+      "agent": "{reasoning_effort: minimal}",
+      "reasoning": {
+        "effort": "low",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "openai_legacy_max_clamps_xhigh",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-5.2-codex",
+      "agent": "{reasoning_effort: max}",
+      "reasoning": {
+        "effort": "xhigh",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "openai_legacy_ultra_clamps_xhigh",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-5.2-codex",
+      "agent": "{reasoning_effort: ultra}",
+      "reasoning": {
+        "effort": "xhigh",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "openai_legacy_none",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-5.2-codex",
+      "agent": "{reasoning_effort: none}",
+      "reasoning": {
+        "effort": "none"
+      },
+      "include": [],
+      "text": null
+    },
+    {
+      "label": "gpt56_effort_max",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "gpt-5.6",
+      "agent": "{reasoning_effort: max}",
+      "reasoning": {
+        "effort": "max",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "gpt56_effort_ultra_clamps_max",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "gpt-5.6",
+      "agent": "{reasoning_effort: ultra}",
+      "reasoning": {
+        "effort": "max",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "gpt56_effort_none",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "gpt-5.6",
+      "agent": "{reasoning_effort: none}",
+      "reasoning": {
+        "effort": "none"
+      },
+      "include": [],
+      "text": null
+    },
+    {
+      "label": "gpt6_sol_effort_max",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "gpt-6-sol-pro",
+      "agent": "{reasoning_effort: max}",
+      "reasoning": {
+        "effort": "max",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "daybreak_effort_max",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "gpt-daybreak-blue-latest",
+      "agent": "{reasoning_effort: max}",
+      "reasoning": {
+        "effort": "max",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "gpt61_sol_disable_unprojectable",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-6.1-sol",
+      "agent": "{reasoning_effort: none}",
+      "reasoning": null,
+      "include": [],
+      "text": null
+    },
+    {
+      "label": "gpt61_sol_high_all_turns",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-6.1-sol",
+      "agent": "{reasoning_effort: high}",
+      "reasoning": {
+        "effort": "high",
+        "summary": "auto",
+        "context": "all_turns"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "gpt6_astra_openai_minimal_clamps_low",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-6-astra",
+      "agent": "{reasoning_effort: minimal}",
+      "reasoning": {
+        "effort": "low",
+        "summary": "auto",
+        "context": "all_turns"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "gpt6_astra_openai_disable_unprojectable",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-6-astra",
+      "agent": "{reasoning_effort: false}",
+      "reasoning": null,
+      "include": [],
+      "text": null
+    },
+    {
+      "label": "gpt6_astra_custom_relay_uses_legacy",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "gpt-6-astra",
+      "agent": "{reasoning_effort: max}",
+      "reasoning": {
+        "effort": "max",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "gpt62_astra_openai_max",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-6.2-astra",
+      "agent": "{reasoning_effort: ultra}",
+      "reasoning": {
+        "effort": "max",
+        "summary": "auto",
+        "context": "all_turns"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "openai_gpt54_all_turns",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-5.4",
+      "agent": "{}",
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto",
+        "context": "all_turns"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "openai_gpt54_mini_all_turns",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-5.4-mini",
+      "agent": "{reasoning_effort: high}",
+      "reasoning": {
+        "effort": "high",
+        "summary": "auto",
+        "context": "all_turns"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "openai_gpt55_all_turns",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-5.5",
+      "agent": "{}",
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto",
+        "context": "all_turns"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "openai_gpt52_no_all_turns",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-5.2",
+      "agent": "{}",
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "openai_o3_no_all_turns",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "o3",
+      "agent": "{}",
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "custom_gpt54_no_all_turns",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "gpt-5.4",
+      "agent": "{}",
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "openai_gpt4o_rejects_reasoning",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-4o",
+      "agent": "{}",
+      "reasoning": null,
+      "include": [],
+      "text": null
+    },
+    {
+      "label": "openai_gpt41_rejects_reasoning",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-4.1",
+      "agent": "{reasoning_effort: high}",
+      "reasoning": null,
+      "include": [],
+      "text": null
+    },
+    {
+      "label": "openai_gpt35_rejects_reasoning",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-3.5-turbo",
+      "agent": "{}",
+      "reasoning": null,
+      "include": [],
+      "text": null
+    },
+    {
+      "label": "openai_chatgpt_rejects_reasoning",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "chatgpt-4o-latest",
+      "agent": "{}",
+      "reasoning": null,
+      "include": [],
+      "text": null
+    },
+    {
+      "label": "openai_ft_gpt4o_rejects_reasoning",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "ft:gpt-4o:org::123",
+      "agent": "{}",
+      "reasoning": null,
+      "include": [],
+      "text": null
+    },
+    {
+      "label": "custom_relay_gpt4o_keeps_reasoning",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "gpt-4o",
+      "agent": "{}",
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "xai_grok4_unlisted_no_reasoning",
+      "provider": "xai",
+      "base_url": "https://api.x.ai/v1",
+      "model": "grok-4",
+      "agent": "{}",
+      "reasoning": null,
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "xai_grok3_mini_medium",
+      "provider": "xai",
+      "base_url": "https://api.x.ai/v1",
+      "model": "grok-3-mini",
+      "agent": "{}",
+      "reasoning": {
+        "effort": "medium"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "xai_grok43_xhigh_clamps_high",
+      "provider": "xai",
+      "base_url": "https://api.x.ai/v1",
+      "model": "grok-4.3",
+      "agent": "{reasoning_effort: xhigh}",
+      "reasoning": {
+        "effort": "high"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "xai_grok46_xhigh_kept",
+      "provider": "xai",
+      "base_url": "https://api.x.ai/v1",
+      "model": "grok-4.6",
+      "agent": "{reasoning_effort: xhigh}",
+      "reasoning": {
+        "effort": "xhigh"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "xai_grok46_ultra_clamps_xhigh",
+      "provider": "xai",
+      "base_url": "https://api.x.ai/v1",
+      "model": "grok-4.6-fast",
+      "agent": "{reasoning_effort: ultra}",
+      "reasoning": {
+        "effort": "xhigh"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "xai_grok46_disabled_omits_all",
+      "provider": "xai",
+      "base_url": "https://api.x.ai/v1",
+      "model": "grok-4.6",
+      "agent": "{reasoning_effort: none}",
+      "reasoning": null,
+      "include": null,
+      "text": null
+    },
+    {
+      "label": "xai_text_verbosity_omitted",
+      "provider": "xai",
+      "base_url": "https://api.x.ai/v1",
+      "model": "grok-4.6",
+      "agent": "{text_verbosity: high}",
+      "reasoning": {
+        "effort": "medium"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "custom_xai_host_detected",
+      "provider": "custom",
+      "base_url": "https://api.x.ai/v1",
+      "model": "grok-4.6",
+      "agent": "{text_verbosity: high, reasoning_effort: high}",
+      "reasoning": {
+        "effort": "high"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": null
+    },
+    {
+      "label": "verbosity_high",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "model": "fixture",
+      "agent": "{text_verbosity: HIGH}",
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": {
+        "verbosity": "high"
+      }
+    },
+    {
+      "label": "verbosity_low",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-5.4",
+      "agent": "{text_verbosity: low}",
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto",
+        "context": "all_turns"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "text": {
+        "verbosity": "low"
+      }
+    }
+  ],
+  "cache_key_cases": [
+    {
+      "label": "no_session_with_tools",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "instructions": "You are Hermes.",
+      "with_tools": true,
+      "session_id": null,
+      "override_key": null,
+      "prompt_cache_key": "pck_14b0fcd4b6307d648e43e158",
+      "x_grok_conv_id": null
+    },
+    {
+      "label": "no_session_no_tools",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "instructions": "You are Hermes.",
+      "with_tools": false,
+      "session_id": null,
+      "override_key": null,
+      "prompt_cache_key": "pck_0afbbbdffff5c6ee8a68002e",
+      "x_grok_conv_id": null
+    },
+    {
+      "label": "with_session_and_tools",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "instructions": "You are Hermes.",
+      "with_tools": true,
+      "session_id": "sess-abc-123",
+      "override_key": null,
+      "prompt_cache_key": "pck_7b4dc6b0ba8ee9f7bc9e74fe",
+      "x_grok_conv_id": null
+    },
+    {
+      "label": "with_session_no_tools",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "instructions": "You are Hermes.",
+      "with_tools": false,
+      "session_id": "sess-abc-123",
+      "override_key": null,
+      "prompt_cache_key": "pck_3e26556fa1c02fce33345f86",
+      "x_grok_conv_id": null
+    },
+    {
+      "label": "cron_fire_1",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "instructions": "You are Hermes.",
+      "with_tools": true,
+      "session_id": "cron_job42_20261123_090000",
+      "override_key": null,
+      "prompt_cache_key": "pck_ccbaa3c0dd27bec8d6ee0209",
+      "x_grok_conv_id": null
+    },
+    {
+      "label": "cron_fire_2_same_key",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "instructions": "You are Hermes.",
+      "with_tools": true,
+      "session_id": "cron_job42_20261123_183045",
+      "override_key": null,
+      "prompt_cache_key": "pck_ccbaa3c0dd27bec8d6ee0209",
+      "x_grok_conv_id": null
+    },
+    {
+      "label": "override_short_kept",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "instructions": "You are Hermes.",
+      "with_tools": false,
+      "session_id": "sess-1",
+      "override_key": "custom-key-42",
+      "prompt_cache_key": "custom-key-42",
+      "x_grok_conv_id": null
+    },
+    {
+      "label": "override_long_hashed",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "instructions": "You are Hermes.",
+      "with_tools": false,
+      "session_id": "sess-1",
+      "override_key": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      "prompt_cache_key": "pck_66edbde83cc90c1a080ec3e5",
+      "x_grok_conv_id": null
+    },
+    {
+      "label": "override_blank_dropped",
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:9/v1",
+      "instructions": "You are Hermes.",
+      "with_tools": false,
+      "session_id": "sess-1",
+      "override_key": "   ",
+      "prompt_cache_key": null,
+      "x_grok_conv_id": null
+    },
+    {
+      "label": "xai_with_session",
+      "provider": "xai",
+      "base_url": "https://api.x.ai/v1",
+      "instructions": "You are Hermes.",
+      "with_tools": true,
+      "session_id": "sess-xai-1",
+      "override_key": null,
+      "prompt_cache_key": "pck_d9c7de6924313689eff45b31",
+      "x_grok_conv_id": "sess-xai-1"
+    },
+    {
+      "label": "xai_without_session",
+      "provider": "xai",
+      "base_url": "https://api.x.ai/v1",
+      "instructions": "You are Hermes.",
+      "with_tools": true,
+      "session_id": null,
+      "override_key": null,
+      "prompt_cache_key": null,
+      "x_grok_conv_id": null
+    },
+    {
+      "label": "xai_cron_session",
+      "provider": "xai",
+      "base_url": "https://api.x.ai/v1",
+      "instructions": "You are Hermes.",
+      "with_tools": false,
+      "session_id": "cron_xjob_20261123_010203",
+      "override_key": null,
+      "prompt_cache_key": "pck_d77993a11e583a13a51885de",
+      "x_grok_conv_id": "cron_xjob"
+    }
+  ]
+}

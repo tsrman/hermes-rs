@@ -105,6 +105,10 @@ async fn streams_text_and_sends_responses_request() {
     assert_eq!(body["input"], json!([{"role": "user", "content": "hello"}]));
     assert_eq!(body["tools"][0]["type"], "function");
     assert_eq!(body["tools"][0]["name"], "read_file");
+    assert_eq!(body["tools"][0]["strict"], false);
+    assert!(body["prompt_cache_key"]
+        .as_str()
+        .is_some_and(|key| key.starts_with("pck_") && key.len() == 28));
 }
 
 #[tokio::test]
