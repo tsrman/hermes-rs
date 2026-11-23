@@ -212,6 +212,10 @@ class Handler(BaseHTTPRequestHandler):
             function = {"name": "web_search", "arguments": '{"query":"hermes agent","limit":2}'}
             wants_tool = not any(message.get("role") == "tool" for message in messages)
             call_id = "web-call"
+        elif scenario == "web_extract":
+            function = {"name": "web_extract", "arguments": '{"urls":["http://1.1.1.2/blocked","http://1.1.1.1/ok"]}'}
+            wants_tool = not any(message.get("role") == "tool" for message in messages)
+            call_id = "web-extract-call"
         elif scenario == "mcp":
             function = {"name": "mcp__fixture__echo", "arguments": '{"text":"from mcp"}'}
             wants_tool = not any(message.get("role") == "tool" for message in messages)
@@ -381,7 +385,7 @@ def main():
         "text", "tool", "partial_tool", "stall", "tool_retry", "tool_rate_limit",
         "fallback_after_tool", "fallback_auth", "partial_text", "disconnect_once",
         "iteration_limit", "iteration_summary_tool", "partial_after_tool", "stall_on_resume", "burst", "skill",
-        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "overflow_midturn", "pressure_midturn", "mcp", "mcp_resources", "mcp_media_and_spillover", "mcp_sse_prompts", "mcp_old_name", "mcp_slow", "web", "memory", "cron_failure", "todo", "delegate", "code", "reply_secrets", "pressure_long", "pressure_summary_fail", "pressure_summary_grow", "stall_identical_calls", "stall_continue_intent", "stall_degenerate_final",
+        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "overflow_midturn", "pressure_midturn", "mcp", "mcp_resources", "mcp_media_and_spillover", "mcp_sse_prompts", "mcp_old_name", "mcp_slow", "web", "web_extract", "memory", "cron_failure", "todo", "delegate", "code", "reply_secrets", "pressure_long", "pressure_summary_fail", "pressure_summary_grow", "stall_identical_calls", "stall_continue_intent", "stall_degenerate_final",
     ), default="text")
     args = parser.parse_args()
     if bool(args.tls_cert) != bool(args.tls_key):

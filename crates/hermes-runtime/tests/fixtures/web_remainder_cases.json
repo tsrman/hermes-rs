@@ -1,0 +1,414 @@
+{
+  "website_policy": {
+    "normalize_cases": [
+      {
+        "input": "Example.COM",
+        "expected": "example.com"
+      },
+      {
+        "input": "www.Example.COM",
+        "expected": "example.com"
+      },
+      {
+        "input": "https://www.Example.COM/path/to/page?x=1",
+        "expected": "example.com"
+      },
+      {
+        "input": "http://Sub.Site.ORG./foo",
+        "expected": "sub.site.org"
+      },
+      {
+        "input": "*.tracker.net",
+        "expected": "*.tracker.net"
+      },
+      {
+        "input": "example.com/some/path",
+        "expected": "example.com"
+      },
+      {
+        "input": "   ",
+        "expected": null
+      },
+      {
+        "input": "# comment.example.com",
+        "expected": null
+      },
+      {
+        "input": "www.",
+        "expected": "www"
+      },
+      {
+        "input": "https://www.sub.domain.test:8443/a",
+        "expected": "sub.domain.test:8443"
+      }
+    ],
+    "extract_host_cases": [
+      {
+        "url": "https://Example.COM:8443/path",
+        "expected": "example.com"
+      },
+      {
+        "url": "http://sub.site.org./foo",
+        "expected": "sub.site.org"
+      },
+      {
+        "url": "example.com/a/b",
+        "expected": "example.com"
+      },
+      {
+        "url": "//cdn.example.com/x",
+        "expected": "cdn.example.com"
+      },
+      {
+        "url": "https://[::1]:8080/a",
+        "expected": "::1"
+      },
+      {
+        "url": "https://www.Example.org/",
+        "expected": "www.example.org"
+      },
+      {
+        "url": "",
+        "expected": ""
+      },
+      {
+        "url": "not a url",
+        "expected": "not a url"
+      }
+    ],
+    "match_cases": [
+      {
+        "host": "example.com",
+        "pattern": "example.com",
+        "expected": true
+      },
+      {
+        "host": "sub.example.com",
+        "pattern": "example.com",
+        "expected": true
+      },
+      {
+        "host": "deep.sub.example.com",
+        "pattern": "example.com",
+        "expected": true
+      },
+      {
+        "host": "notexample.com",
+        "pattern": "example.com",
+        "expected": false
+      },
+      {
+        "host": "example.com.evil.org",
+        "pattern": "example.com",
+        "expected": false
+      },
+      {
+        "host": "a.tracker.net",
+        "pattern": "*.tracker.net",
+        "expected": true
+      },
+      {
+        "host": "a.b.tracker.net",
+        "pattern": "*.tracker.net",
+        "expected": true
+      },
+      {
+        "host": "tracker.net",
+        "pattern": "*.tracker.net",
+        "expected": false
+      },
+      {
+        "host": "other.net",
+        "pattern": "*.tracker.net",
+        "expected": false
+      },
+      {
+        "host": "",
+        "pattern": "example.com",
+        "expected": false
+      },
+      {
+        "host": "example.com",
+        "pattern": "",
+        "expected": false
+      }
+    ],
+    "check_cases": [
+      {
+        "url": "https://example.com/page",
+        "expected": {
+          "url": "https://example.com/page",
+          "host": "example.com",
+          "rule": "example.com",
+          "source": "config",
+          "message": "Blocked by website policy: 'example.com' matched rule 'example.com' from config"
+        }
+      },
+      {
+        "url": "https://sub.example.com/page",
+        "expected": {
+          "url": "https://sub.example.com/page",
+          "host": "sub.example.com",
+          "rule": "example.com",
+          "source": "config",
+          "message": "Blocked by website policy: 'sub.example.com' matched rule 'example.com' from config"
+        }
+      },
+      {
+        "url": "https://blocked.io/a",
+        "expected": {
+          "url": "https://blocked.io/a",
+          "host": "blocked.io",
+          "rule": "blocked.io",
+          "source": "config",
+          "message": "Blocked by website policy: 'blocked.io' matched rule 'blocked.io' from config"
+        }
+      },
+      {
+        "url": "https://www.blocked.io/a",
+        "expected": {
+          "url": "https://www.blocked.io/a",
+          "host": "www.blocked.io",
+          "rule": "blocked.io",
+          "source": "config",
+          "message": "Blocked by website policy: 'www.blocked.io' matched rule 'blocked.io' from config"
+        }
+      },
+      {
+        "url": "https://shared-bad.org/x",
+        "expected": {
+          "url": "https://shared-bad.org/x",
+          "host": "shared-bad.org",
+          "rule": "shared-bad.org",
+          "source": "<HOME>/shared_blocklist.txt",
+          "message": "Blocked by website policy: 'shared-bad.org' matched rule 'shared-bad.org' from <HOME>/shared_blocklist.txt"
+        }
+      },
+      {
+        "url": "https://banner.ads.test/img.png",
+        "expected": {
+          "url": "https://banner.ads.test/img.png",
+          "host": "banner.ads.test",
+          "rule": "*.ads.test",
+          "source": "<HOME>/shared_blocklist.txt",
+          "message": "Blocked by website policy: 'banner.ads.test' matched rule '*.ads.test' from <HOME>/shared_blocklist.txt"
+        }
+      },
+      {
+        "url": "https://ads.test/",
+        "expected": null
+      },
+      {
+        "url": "https://allowed.org/docs",
+        "expected": null
+      },
+      {
+        "url": "https://notexample.com/",
+        "expected": null
+      }
+    ],
+    "disabled_result": null,
+    "default_enabled_result": null
+  },
+  "keyless_mcp": {
+    "mcp_body_cases": [
+      {
+        "label": "plain_json",
+        "body": "{\"jsonrpc\": \"2.0\", \"id\": 1, \"result\": {\"content\": [{\"type\": \"text\", \"text\": \"hello world\"}]}}",
+        "ok": true,
+        "value": "hello world"
+      },
+      {
+        "label": "sse_json",
+        "body": "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"sse ok\"}]}}\n\n",
+        "ok": true,
+        "value": "sse ok"
+      },
+      {
+        "label": "sse_u2028_preserved",
+        "body": "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"a b\"}]}}\r\n\r\n",
+        "ok": true,
+        "value": "a b"
+      },
+      {
+        "label": "jsonrpc_error",
+        "body": "{\"jsonrpc\": \"2.0\", \"id\": 1, \"error\": {\"code\": -32000, \"message\": \"rate limit hit\"}}",
+        "ok": false,
+        "error": "rate limit hit"
+      },
+      {
+        "label": "is_error_true",
+        "body": "{\"jsonrpc\": \"2.0\", \"id\": 1, \"result\": {\"isError\": true, \"content\": [{\"type\": \"text\", \"text\": \"Too many requests\"}]}}",
+        "ok": false,
+        "error": "Too many requests"
+      },
+      {
+        "label": "is_error_empty",
+        "body": "{\"jsonrpc\": \"2.0\", \"id\": 1, \"result\": {\"isError\": true, \"content\": []}}",
+        "ok": false,
+        "error": "MCP tool call failed"
+      },
+      {
+        "label": "empty_content",
+        "body": "{\"jsonrpc\": \"2.0\", \"id\": 1, \"result\": {\"content\": []}}",
+        "ok": false,
+        "error": "MCP response contained no text content"
+      },
+      {
+        "label": "unrecognized",
+        "body": "<html>502 Bad Gateway</html>",
+        "ok": false,
+        "error": "Unrecognized MCP response shape"
+      }
+    ],
+    "exa_parse_cases": [
+      {
+        "limit": 2,
+        "text": "Title: Rust Programming Language\nURL: https://www.rust-lang.org/\nPublished: 2026-01-01\nHighlights:\nA language empowering everyone\nto build reliable and efficient software.\nAuthor: Rust Team\n\n---\nTitle: Missing URL Block\nHighlights:\nShould be skipped\n\n---\nTitle: Cargo Book\nURL: https://doc.rust-lang.org/cargo/\nHighlights:\nThe Rust package manager\n\n---\nTitle: Third Hit\nURL: https://example.org/3\nHighlights:\nTrimmed by limit\n",
+        "expected": [
+          {
+            "url": "https://www.rust-lang.org/",
+            "title": "Rust Programming Language",
+            "description": "A language empowering everyone to build reliable and efficient software.",
+            "position": 1
+          },
+          {
+            "url": "https://doc.rust-lang.org/cargo/",
+            "title": "Cargo Book",
+            "description": "The Rust package manager",
+            "position": 2
+          }
+        ]
+      },
+      {
+        "limit": 5,
+        "text": "Title: Rust Programming Language\nURL: https://www.rust-lang.org/\nPublished: 2026-01-01\nHighlights:\nA language empowering everyone\nto build reliable and efficient software.\nAuthor: Rust Team\n\n---\nTitle: Missing URL Block\nHighlights:\nShould be skipped\n\n---\nTitle: Cargo Book\nURL: https://doc.rust-lang.org/cargo/\nHighlights:\nThe Rust package manager\n\n---\nTitle: Third Hit\nURL: https://example.org/3\nHighlights:\nTrimmed by limit\n",
+        "expected": [
+          {
+            "url": "https://www.rust-lang.org/",
+            "title": "Rust Programming Language",
+            "description": "A language empowering everyone to build reliable and efficient software.",
+            "position": 1
+          },
+          {
+            "url": "https://doc.rust-lang.org/cargo/",
+            "title": "Cargo Book",
+            "description": "The Rust package manager",
+            "position": 2
+          },
+          {
+            "url": "https://example.org/3",
+            "title": "Third Hit",
+            "description": "Trimmed by limit",
+            "position": 3
+          }
+        ]
+      }
+    ],
+    "failover_cases": [
+      {
+        "message": "Keyless Exa search failed: HTTP 429: Too Many Requests",
+        "rate_limitish": true,
+        "search_failover_eligible": true
+      },
+      {
+        "message": "Rate limit exceeded for anonymous user",
+        "rate_limitish": true,
+        "search_failover_eligible": true
+      },
+      {
+        "message": "Keyless Parallel search failed: HTTP 403: Forbidden",
+        "rate_limitish": false,
+        "search_failover_eligible": true
+      },
+      {
+        "message": "Keyless Keenable search failed: HTTP 503: Service Unavailable",
+        "rate_limitish": false,
+        "search_failover_eligible": true
+      },
+      {
+        "message": "Keyless Exa search failed: HTTP 401: Unauthorized",
+        "rate_limitish": false,
+        "search_failover_eligible": true
+      },
+      {
+        "message": "Keyless Exa search failed: HTTP 402: Payment Required",
+        "rate_limitish": false,
+        "search_failover_eligible": true
+      },
+      {
+        "message": "Keyless Exa search failed: HTTP 400: invalid query 'http 503'",
+        "rate_limitish": false,
+        "search_failover_eligible": false
+      },
+      {
+        "message": "Keyless Exa search failed: HTTP 404: Not Found",
+        "rate_limitish": false,
+        "search_failover_eligible": false
+      },
+      {
+        "message": "invalid query syntax",
+        "rate_limitish": false,
+        "search_failover_eligible": false
+      },
+      {
+        "message": "slow down please",
+        "rate_limitish": true,
+        "search_failover_eligible": true
+      },
+      {
+        "message": "quota exceeded",
+        "rate_limitish": true,
+        "search_failover_eligible": true
+      }
+    ],
+    "failover_success": {
+      "success": true,
+      "data": {
+        "web": [
+          {
+            "url": "https://p.test",
+            "title": "P",
+            "description": "d",
+            "position": 1
+          }
+        ],
+        "served_by": "parallel"
+      }
+    },
+    "failover_exhausted": {
+      "success": false,
+      "error": "Keyless Keenable search failed: HTTP 429 (all keyless vendors unavailable: exa, parallel, firecrawl, keenable)"
+    },
+    "extract_origin_429_no_failover": [
+      {
+        "url": "https://example.com",
+        "title": "",
+        "content": "",
+        "error": "HTTP 429 from origin"
+      }
+    ],
+    "all_paid_search": {
+      "success": false,
+      "error": "All keyless web providers are pinned to paid tiers."
+    },
+    "all_paid_extract": [
+      {
+        "url": "https://example.com",
+        "title": "",
+        "content": "",
+        "error": "All keyless web providers are pinned to paid tiers."
+      }
+    ],
+    "fail_msg_exa_search": "Keyless Exa search failed: HTTP 429. Set EXA_API_KEY (https://exa.ai) or another web backend via `hermes tools` for reliable service.",
+    "fail_msg_firecrawl_extract": "Keyless Firecrawl extract failed: HTTP 429. Set FIRECRAWL_API_KEY (https://firecrawl.dev) for reliable service."
+  },
+  "providers": {
+    "openai_native_search_error": {
+      "success": false,
+      "error": "openai-native declares OpenAI's server-side web_search tool; it cannot run as a client-side search and requires the Codex Responses transport (provider openai-codex). For client-side search use firecrawl (default) or another backend."
+    },
+    "openai_native_display_name": "OpenAI Native Web Search (Codex Responses)",
+    "ddgs_display_name": "DuckDuckGo (ddgs)"
+  }
+}

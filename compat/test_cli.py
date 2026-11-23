@@ -57,6 +57,7 @@ class CliTest(unittest.TestCase):
             "test_todo_list_is_hidden_by_default_and_survives_a_resume": "todo",
             "test_memory_tool_writes_the_store_without_changing_the_prompt_snapshot": "memory",
             "test_web_search_uses_the_configured_backend_and_hides_tools_without_one": "web",
+            "test_web_extract_website_policy_blocks_domains_from_config_and_shared_file": "web_extract",
             "test_mcp_streamable_http_tool_uses_profile_secrets": "mcp",
             "test_mcp_resources_are_listed_and_read_for_the_model": "mcp_resources",
             "test_mcp_media_cache_and_spillover_are_readable_via_read_file": "mcp_media_and_spillover",
@@ -922,6 +923,56 @@ class CliTest(unittest.TestCase):
         rows = json.loads(tool_message["content"])["data"]["web"]
         self.assertEqual([row["title"] for row in rows], ["Hermes", "Other"])
         self.assertEqual(tool_message["content"][:2], "{\n")
+
+    def test_web_extract_website_policy_blocks_domains_from_config_and_shared_file(self):
+        seen_urls = []
+
+        class Tavily(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length))
+                seen_urls.extend(payload.get("urls") or [])
+                body = json.dumps({
+                    "results": [{"url": u, "title": "OK", "raw_content": "allowed body"} for u in payload.get("urls") or []]
+                }).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        tavily = HTTPServer(("127.0.0.1", 0), Tavily)
+        thread = threading.Thread(target=tavily.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(tavily.server_close)
+        self.addCleanup(tavily.shutdown)
+
+        home = self.workdir / "hermes"
+        home.mkdir(exist_ok=True)
+        (home / "blocked.txt").write_text("# Shared blocklist\n1.1.1.2\n", encoding="utf-8")
+        config = (
+            "web:\n  backend: tavily\n"
+            "security:\n  website_blocklist:\n    enabled: true\n"
+            "    shared_files: [blocked.txt]\n"
+        )
+        dotenv = f"TAVILY_BASE_URL=http://127.0.0.1:{tavily.server_port}\n"
+        result, recorded = self.chat_with_profile(extra_config=config, dotenv=dotenv)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(seen_urls, ["http://1.1.1.1/ok"])
+        payload = json.loads(recorded[-1]["messages"][-1]["content"])
+        self.assertEqual(len(payload["results"]), 2)
+        self.assertIn("Blocked by website policy: '1.1.1.2'", payload["results"][0]["error"])
+        self.assertEqual(payload["results"][0]["blocked_by_policy"]["rule"], "1.1.1.2")
+        self.assertEqual(payload["results"][1]["content"], "allowed body")
+
+    def test_openai_native_swaps_web_search_builtin_on_responses(self):
+        body = self.responses_body("web:\n  search_backend: openai-native\n")
+        tools = body["tools"]
+        self.assertIn({"type": "web_search"}, tools)
+        self.assertFalse(any(t.get("name") == "web_search" for t in tools))
 
     def test_memory_tool_writes_the_store_without_changing_the_prompt_snapshot(self):
         memories = self.workdir / "hermes" / "memories"

@@ -16,8 +16,6 @@ const EXA_KEY_MISSING: &str =
     "EXA_API_KEY environment variable not set. Get your API key at https://exa.ai";
 const PARALLEL_KEY_MISSING: &str =
     "PARALLEL_API_KEY environment variable not set. Get your API key at https://parallel.ai";
-const KEYLESS: &str =
-    "The keyless free tier of this backend is not available in the Rust CLI; set the API key.";
 
 /// A result row with the URL first (the wire shape of Exa and Parallel results).
 fn hit(url: &str, title: &str, description: &str, position: usize) -> Value {
@@ -33,7 +31,7 @@ fn document(url: &str, title: &str, content: &str) -> Value {
 }
 
 /// `HTTP <status> from origin[: reason]` when the target page answered with an error.
-fn origin_error(status: Option<i64>) -> Option<String> {
+pub(crate) fn origin_error(status: Option<i64>) -> Option<String> {
     status
         .filter(|code| *code >= 400)
         .map(|code| format!("HTTP {code} from origin"))
@@ -41,7 +39,12 @@ fn origin_error(status: Option<i64>) -> Option<String> {
 
 /// A failed URL from a vendor's own error list: the origin status when it has one (the body stays
 /// as content), otherwise the vendor's body or reason is the error text.
-fn vendor_error(url: &str, status: Option<i64>, reason: Option<&str>, body: Option<&str>) -> Value {
+pub(crate) fn vendor_error(
+    url: &str,
+    status: Option<i64>,
+    reason: Option<&str>,
+    body: Option<&str>,
+) -> Value {
     let (content, error) = match origin_error(status) {
         Some(origin) => (body.unwrap_or("").to_owned(), origin),
         None => (
@@ -128,8 +131,14 @@ fn exa_http_error(status: u16, body: &str) -> String {
 }
 
 pub(crate) async fn exa_search(settings: &WebSettings, query: &str, limit: usize) -> Value {
+    if settings
+        .keyless
+        .use_keyless("exa", settings.exa_key.is_some())
+    {
+        return crate::web_keyless::search_with_failover(settings, "exa", query, limit).await;
+    }
     let Some(key) = settings.exa_key.as_deref() else {
-        return failure(format!("{EXA_KEY_MISSING} ({KEYLESS})"));
+        return failure(EXA_KEY_MISSING);
     };
     let payload = json!({"query": query, "contents": {"highlights": true}, "numResults": limit});
     match post(
@@ -163,11 +172,17 @@ pub(crate) async fn exa_search(settings: &WebSettings, query: &str, limit: usize
 }
 
 pub(crate) async fn exa_extract(settings: &WebSettings, urls: &[String]) -> Vec<Value> {
+    if settings
+        .keyless
+        .use_keyless("exa", settings.exa_key.is_some())
+    {
+        return crate::web_keyless::extract_with_failover(settings, "exa", urls).await;
+    }
     let all = |message: &str| -> Vec<Value> {
         urls.iter().map(|url| entry(url, Some(message))).collect()
     };
     let Some(key) = settings.exa_key.as_deref() else {
-        return all(&format!("{EXA_KEY_MISSING} ({KEYLESS})"));
+        return all(EXA_KEY_MISSING);
     };
     let payload = json!({"urls": urls, "text": true});
     let response = match post(
@@ -211,7 +226,7 @@ pub(crate) async fn exa_extract(settings: &WebSettings, urls: &[String]) -> Vec<
 }
 
 /// The origin status an Exa crawl tag ends with (`CRAWL_HTTP_429` is 429, `CRAWL_NOT_FOUND` 404).
-fn crawl_status(tag: Option<&str>) -> Option<i64> {
+pub(crate) fn crawl_status(tag: Option<&str>) -> Option<i64> {
     let tag = tag?.trim_end();
     let word = tag
         .rsplit(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
@@ -294,8 +309,14 @@ fn parallel_http_error(status: u16, body: &str) -> String {
 }
 
 pub(crate) async fn parallel_search(settings: &WebSettings, query: &str, limit: usize) -> Value {
+    if settings
+        .keyless
+        .use_keyless("parallel", settings.parallel_key.is_some())
+    {
+        return crate::web_keyless::search_with_failover(settings, "parallel", query, limit).await;
+    }
     let Some(key) = settings.parallel_key.as_deref() else {
-        return failure(format!("{PARALLEL_KEY_MISSING} ({KEYLESS})"));
+        return failure(PARALLEL_KEY_MISSING);
     };
     let mode = settings
         .parallel_mode
@@ -341,11 +362,17 @@ pub(crate) async fn parallel_search(settings: &WebSettings, query: &str, limit: 
 }
 
 pub(crate) async fn parallel_extract(settings: &WebSettings, urls: &[String]) -> Vec<Value> {
+    if settings
+        .keyless
+        .use_keyless("parallel", settings.parallel_key.is_some())
+    {
+        return crate::web_keyless::extract_with_failover(settings, "parallel", urls).await;
+    }
     let all = |message: &str| -> Vec<Value> {
         urls.iter().map(|url| entry(url, Some(message))).collect()
     };
     let Some(key) = settings.parallel_key.as_deref() else {
-        return all(&format!("{PARALLEL_KEY_MISSING} ({KEYLESS})"));
+        return all(PARALLEL_KEY_MISSING);
     };
     let payload = json!({"urls": urls, "full_content": true});
     let response = match post(
@@ -522,8 +549,14 @@ fn configured(settings: &WebSettings) -> bool {
 }
 
 pub(crate) async fn firecrawl_search(settings: &WebSettings, query: &str, limit: usize) -> Value {
+    if settings
+        .keyless
+        .use_keyless("firecrawl", configured(settings))
+    {
+        return crate::web_keyless::search_with_failover(settings, "firecrawl", query, limit).await;
+    }
     if !configured(settings) {
-        return failure(format!("{FIRECRAWL_UNCONFIGURED} ({KEYLESS})"));
+        return failure(FIRECRAWL_UNCONFIGURED);
     }
     let payload = json!({"query": query, "limit": limit, "origin": FIRECRAWL_ORIGIN});
     match firecrawl_post(settings, "/v2/search", "search", &payload).await {
@@ -548,9 +581,17 @@ pub(crate) async fn firecrawl_search(settings: &WebSettings, query: &str, limit:
 }
 
 pub(crate) async fn firecrawl_extract(settings: &WebSettings, urls: &[String]) -> Vec<Value> {
+    if settings
+        .keyless
+        .use_keyless("firecrawl", configured(settings))
+    {
+        return crate::web_keyless::extract_with_failover(settings, "firecrawl", urls).await;
+    }
     if !configured(settings) {
-        let message = format!("{FIRECRAWL_UNCONFIGURED} ({KEYLESS})");
-        return urls.iter().map(|url| entry(url, Some(&message))).collect();
+        return urls
+            .iter()
+            .map(|url| entry(url, Some(FIRECRAWL_UNCONFIGURED)))
+            .collect();
     }
     let mut pages = Vec::new();
     for url in urls {
@@ -585,6 +626,16 @@ async fn firecrawl_scrape(settings: &WebSettings, url: &str) -> Value {
         .as_str()
         .filter(|u| !u.is_empty())
         .unwrap_or(url);
+    if let Some(blocked) = settings.website_policy.check_access(final_url) {
+        return json!({
+            "url": final_url,
+            "title": title,
+            "content": "",
+            "raw_content": "",
+            "error": blocked.message,
+            "blocked_by_policy": blocked.policy_metadata(),
+        });
+    }
     if !is_safe_url(final_url, settings.allow_private_urls).await {
         return scrape_failure(final_url, title, BLOCKED_REDIRECT);
     }
@@ -638,8 +689,14 @@ fn keenable_base(settings: &WebSettings) -> &str {
 }
 
 pub(crate) async fn keenable_search(settings: &WebSettings, query: &str, limit: usize) -> Value {
+    if settings
+        .keyless
+        .use_keyless("keenable", settings.keenable_key.is_some())
+    {
+        return crate::web_keyless::search_with_failover(settings, "keenable", query, limit).await;
+    }
     let Some(key) = settings.keenable_key.as_deref() else {
-        return failure(format!("KEENABLE_API_KEY is not set. {KEYLESS}"));
+        return failure("KEENABLE_API_KEY is not set.");
     };
     let payload = json!({"query": query, "max_results": limit.clamp(1, LIMIT_CAP)});
     let http = match client(Duration::from_secs(30)) {
@@ -700,7 +757,7 @@ async fn send_text(request: reqwest::RequestBuilder) -> Result<(u16, String), St
 
 /// `HTTP <status> from origin: <message>` when a fetch error describes the target's own answer
 /// (not Keenable's rate limit, authentication or server errors).
-fn keenable_origin_error(status: u16, body: &str) -> Option<String> {
+pub(crate) fn keenable_origin_error(status: u16, body: &str) -> Option<String> {
     let data = serde_json::from_str::<Value>(body).ok()?;
     let message = data
         .as_object()?
@@ -721,9 +778,17 @@ fn keenable_origin_error(status: u16, body: &str) -> Option<String> {
 }
 
 pub(crate) async fn keenable_extract(settings: &WebSettings, urls: &[String]) -> Vec<Value> {
+    if settings
+        .keyless
+        .use_keyless("keenable", settings.keenable_key.is_some())
+    {
+        return crate::web_keyless::extract_with_failover(settings, "keenable", urls).await;
+    }
     let Some(key) = settings.keenable_key.as_deref() else {
-        let message = format!("KEENABLE_API_KEY is not set. {KEYLESS}");
-        return urls.iter().map(|url| entry(url, Some(&message))).collect();
+        return urls
+            .iter()
+            .map(|url| entry(url, Some("KEENABLE_API_KEY is not set.")))
+            .collect();
     };
     let http = match client(Duration::from_secs(30)) {
         Ok(http) => http,
@@ -986,4 +1051,201 @@ pub(crate) async fn xai_search(settings: &WebSettings, query: &str, limit: usize
         return failure(format!("xAI returned an error: {message}"));
     }
     search_ok(xai_rows(&data, limit))
+}
+
+// ---- DuckDuckGo (ddgs) HTML search (pure Rust, no Python package required) ----
+
+const DDGS_HTML_URL: &str = "https://html.duckduckgo.com/html/";
+const DDGS_TIMEOUT_SECS: u64 = 30;
+
+fn decode_html_entities(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let after = &rest[amp + 1..];
+        if let Some(semi) = after.find(';').filter(|&i| i <= 12) {
+            let entity = &after[..semi];
+            let decoded = match entity {
+                "amp" => Some("&".to_owned()),
+                "lt" => Some("<".to_owned()),
+                "gt" => Some(">".to_owned()),
+                "quot" => Some("\"".to_owned()),
+                "apos" | "#39" | "#x27" => Some("'".to_owned()),
+                "nbsp" => Some(" ".to_owned()),
+                s if s.starts_with("#x") || s.starts_with("#X") => u32::from_str_radix(&s[2..], 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .map(|c| c.to_string()),
+                s if s.starts_with('#') => s[1..]
+                    .parse::<u32>()
+                    .ok()
+                    .and_then(char::from_u32)
+                    .map(|c| c.to_string()),
+                _ => None,
+            };
+            if let Some(ch) = decoded {
+                out.push_str(&ch);
+                rest = &after[semi + 1..];
+                continue;
+            }
+        }
+        out.push('&');
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+fn strip_html_tags(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut in_tag = false;
+    for c in input.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    decode_html_entities(&out)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn percent_decode_query(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(v) = u8::from_str_radix(&input[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        } else if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn unwrap_ddg_href(raw_href: &str) -> String {
+    let decoded = decode_html_entities(raw_href);
+    let trimmed = decoded.trim();
+    if let Some(query) = trimmed.split_once('?').map(|(_, q)| q) {
+        for pair in query.split('&') {
+            if let Some(val) = pair.strip_prefix("uddg=") {
+                let target = percent_decode_query(val);
+                if !target.is_empty() {
+                    return target;
+                }
+            }
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("//") {
+        format!("https://{rest}")
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// Parse DuckDuckGo HTML search results (`html.duckduckgo.com/html/`) into `title_hit` rows.
+pub(crate) fn parse_ddgs_html(html: &str, limit: usize) -> Vec<Value> {
+    use regex::Regex;
+    use std::sync::LazyLock;
+
+    static LINK_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r#"(?is)<a\b[^>]*class="[^"]*\bresult__a\b[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>"#,
+        )
+        .expect("valid link regex")
+    });
+    static LINK_ALT_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r#"(?is)<a\b[^>]*href="([^"]+)"[^>]*class="[^"]*\bresult__a\b[^"]*"[^>]*>(.*?)</a>"#,
+        )
+        .expect("valid link alt regex")
+    });
+    static SNIPPET_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?is)<(?:a|div|span)\b[^>]*class="[^"]*\bresult__snippet\b[^"]*"[^>]*>(.*?)</(?:a|div|span)>"#)
+            .expect("valid snippet regex")
+    });
+
+    let mut link_matches: Vec<(usize, usize, String, String)> = Vec::new();
+    for re in [&*LINK_RE, &*LINK_ALT_RE] {
+        for cap in re.captures_iter(html) {
+            let m = cap.get(0).unwrap();
+            let href = unwrap_ddg_href(cap.get(1).map_or("", |g| g.as_str()));
+            let title = strip_html_tags(cap.get(2).map_or("", |g| g.as_str()));
+            if !href.is_empty() && !link_matches.iter().any(|(s, _, _, _)| *s == m.start()) {
+                link_matches.push((m.start(), m.end(), title, href));
+            }
+        }
+    }
+    link_matches.sort_by_key(|(start, _, _, _)| *start);
+
+    let mut rows = Vec::new();
+    for (idx, (_, end, title, url)) in link_matches.iter().enumerate() {
+        let next_start = link_matches
+            .get(idx + 1)
+            .map_or(html.len(), |(s, _, _, _)| *s);
+        let slice = &html[*end..next_start];
+        let snippet = SNIPPET_RE
+            .captures(slice)
+            .and_then(|c| c.get(1))
+            .map(|g| strip_html_tags(g.as_str()))
+            .unwrap_or_default();
+        rows.push(title_hit(title, url, &snippet, rows.len() + 1));
+        if limit > 0 && rows.len() >= limit {
+            break;
+        }
+    }
+    rows
+}
+
+pub(crate) async fn ddgs_search(settings: &WebSettings, query: &str, limit: usize) -> Value {
+    let url = settings.ddgs_base.as_deref().unwrap_or(DDGS_HTML_URL);
+    let http = match client(Duration::from_secs(DDGS_TIMEOUT_SECS)) {
+        Ok(http) => http,
+        Err(error) => return failure(format!("DuckDuckGo search failed: {error}")),
+    };
+    let response = match http
+        .post(url)
+        .header(
+            "User-Agent",
+            concat!(
+                "Mozilla/5.0 (compatible; Hermes-Agent/",
+                env!("CARGO_PKG_VERSION"),
+                ")"
+            ),
+        )
+        .header("Accept", "text/html,application/xhtml+xml")
+        .form(&[("q", query)])
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) if error.is_timeout() => {
+            return failure(format!(
+                "DuckDuckGo search timed out after {DDGS_TIMEOUT_SECS}s — DuckDuckGo may be rate-limiting or slow. Try again later or switch to a different search provider."
+            ));
+        }
+        Err(error) => return failure(format!("DuckDuckGo search failed: {}", error.without_url())),
+    };
+    let status = response.status().as_u16();
+    let raw = match read_body(response).await {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(error) => return failure(format!("DuckDuckGo search failed: {error}")),
+    };
+    if status >= 400 {
+        return failure(format!("DuckDuckGo search failed: HTTP {status}"));
+    }
+    search_ok(parse_ddgs_html(&raw, limit.max(1)))
 }

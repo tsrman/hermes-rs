@@ -127,6 +127,7 @@ fn side_route(
         extras,
         reasoning: Default::default(),
         timeout_secs: aux.timeout_secs,
+        openai_native_web_search: false,
     }))
 }
 
@@ -308,6 +309,8 @@ struct Route {
     reasoning: hermes_runtime::reasoning::ReasoningSettings,
     #[serde(default)]
     timeout_secs: Option<u64>,
+    #[serde(default)]
+    openai_native_web_search: bool,
 }
 
 impl Route {
@@ -353,6 +356,7 @@ impl Route {
                         provider_name,
                         &self.base_url,
                     ))
+                    .with_openai_native_web_search(self.openai_native_web_search)
                     .with_session_id(session_id.map(str::to_owned))
                     .with_extras(extras)
                     .with_max_attempts(attempts),
@@ -559,11 +563,6 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         clarify_timeout_secs: settings.clarify_timeout_secs,
         mcp_servers: settings.mcp_servers,
         mcp_result_size_chars: settings.mcp_result_size_chars,
-        web: settings.web,
-        browser: settings.browser,
-        memory: settings.memory,
-        tools: settings.tools,
-        model_override: args.model,
         primary: Route {
             model: settings.model,
             provider: settings.provider.into(),
@@ -571,6 +570,8 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
             extras,
             reasoning: settings.reasoning.clone(),
             timeout_secs: None,
+            openai_native_web_search: settings.web.search
+                == hermes_runtime::web_tools::Backend::OpenaiNative,
             base_url,
             api_key,
         },
@@ -586,8 +587,15 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
                 extras: Default::default(),
                 reasoning: settings.reasoning.clone(),
                 timeout_secs: None,
+                openai_native_web_search: settings.web.search
+                    == hermes_runtime::web_tools::Backend::OpenaiNative,
             })
             .collect(),
+        web: settings.web,
+        browser: settings.browser,
+        memory: settings.memory,
+        tools: settings.tools,
+        model_override: args.model,
     })
 }
 

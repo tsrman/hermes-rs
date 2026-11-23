@@ -631,7 +631,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     };
     settings.mcp_servers = mcp_servers(&config, &secrets);
     settings.mcp_result_size_chars = crate::mcp_media::parse_mcp_result_size_chars(&config);
-    settings.web = WebSettings::from_config(&config, &secrets);
+    settings.web = WebSettings::from_config(&config, &secrets, Some(home));
     settings.browser = BrowserSettings::from_config(&config, &secrets);
     settings.memory = MemorySettings::from_config(&config);
     settings.tools = ToolPolicy::from_config(&config);

@@ -5,12 +5,15 @@
 //! is reported as such and never replaced silently.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::url_safety::is_safe_url;
+use crate::web_keyless::KeylessSettings;
+use crate::website_policy::WebsitePolicy;
 
 pub(crate) const WEB_SEARCH: &str = "web_search";
 pub(crate) const WEB_EXTRACT: &str = "web_extract";
@@ -21,6 +24,7 @@ const CHAR_LIMIT_CEILING: usize = 500_000;
 const SEARCH_LIMIT_CAP: usize = 20;
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const BLOCKED_ERROR: &str = "Blocked: URL targets a private or internal network address";
+const OPENAI_NATIVE_SEARCH_ERROR: &str = "openai-native declares OpenAI's server-side web_search tool; it cannot run as a client-side search and requires the Codex Responses transport (provider openai-codex). For client-side search use firecrawl (default) or another backend.";
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub enum Backend {
@@ -35,6 +39,8 @@ pub enum Backend {
     Firecrawl,
     Keenable,
     Xai,
+    Ddgs,
+    OpenaiNative,
     /// A backend of the Python agent that this crate does not implement.
     Unsupported(String),
 }
@@ -72,6 +78,13 @@ pub struct WebSettings {
     pub xai_key: Option<String>,
     pub xai_base: Option<String>,
     pub xai: XaiSettings,
+    /// Test-only override for DuckDuckGo HTML search endpoint.
+    #[serde(default)]
+    pub ddgs_base: Option<String>,
+    #[serde(default)]
+    pub keyless: KeylessSettings,
+    #[serde(default)]
+    pub website_policy: WebsitePolicy,
     pub char_limit: Option<usize>,
     pub allow_private_urls: bool,
 }
@@ -118,6 +131,7 @@ impl WebSettings {
     pub(crate) fn from_config(
         config: &serde_yaml::Value,
         secrets: &HashMap<String, String>,
+        home: Option<&Path>,
     ) -> Self {
         let env = |name: &str| {
             std::env::var(name)
@@ -134,6 +148,13 @@ impl WebSettings {
                 .filter(|value| !value.is_empty())
         };
         let shared = field("backend");
+        let search_pin = field("search_backend");
+        let extract_pin = field("extract_backend");
+        let explicit_backend = search_pin
+            .clone()
+            .or_else(|| extract_pin.clone())
+            .or_else(|| shared.clone());
+        let keyless = KeylessSettings::from_config(web, explicit_backend);
         let auto = || -> Option<String> {
             let candidates = [
                 ("tavily", env("TAVILY_API_KEY").is_some()),
@@ -151,6 +172,7 @@ impl WebSettings {
             candidates
                 .into_iter()
                 .find_map(|(name, available)| available.then(|| name.to_owned()))
+                .or_else(|| keyless.explicit_keyless_backend().map(str::to_owned))
         };
         let resolve = |specific: Option<String>| -> Backend {
             let name = specific
@@ -168,6 +190,8 @@ impl WebSettings {
                 "firecrawl" => Backend::Firecrawl,
                 "keenable" => Backend::Keenable,
                 "xai" => Backend::Xai,
+                "ddgs" => Backend::Ddgs,
+                "openai-native" => Backend::OpenaiNative,
                 // The managed subscription is served by Firecrawl.
                 "nous" => Backend::Unsupported("firecrawl".into()),
                 other => Backend::Unsupported(other.to_owned()),
@@ -187,9 +211,10 @@ impl WebSettings {
                     .is_some_and(|value| crate::config::truthy(value, false))
             }),
         };
+        let website_policy = WebsitePolicy::from_config(config, home);
         Self {
-            search: resolve(field("search_backend")),
-            extract: resolve(field("extract_backend")),
+            search: resolve(search_pin),
+            extract: resolve(extract_pin),
             tavily_key: env("TAVILY_API_KEY"),
             tavily_base: env("TAVILY_BASE_URL"),
             searxng_url: env("SEARXNG_URL"),
@@ -206,6 +231,9 @@ impl WebSettings {
             xai_key: env("XAI_API_KEY"),
             xai_base: env("XAI_BASE_URL").map(|url| url.trim_end_matches('/').to_owned()),
             xai: XaiSettings::from_config(web.and_then(|web| web.get("xai"))),
+            ddgs_base: None,
+            keyless,
+            website_policy,
             firecrawl_key: env("FIRECRAWL_API_KEY"),
             firecrawl_url: env("FIRECRAWL_API_URL").map(|url| url.trim_end_matches('/').to_owned()),
             char_limit: web
@@ -311,6 +339,8 @@ pub async fn search(settings: &WebSettings, arguments: &str) -> Value {
         Backend::Firecrawl => crate::web_vendors::firecrawl_search(settings, query, limit).await,
         Backend::Keenable => crate::web_vendors::keenable_search(settings, query, limit).await,
         Backend::Xai => crate::web_vendors::xai_search(settings, query, limit).await,
+        Backend::Ddgs => crate::web_vendors::ddgs_search(settings, query, limit).await,
+        Backend::OpenaiNative => failure(OPENAI_NATIVE_SEARCH_ERROR),
         Backend::Unsupported(name) => failure(unsupported(name)),
         Backend::None => {
             failure("No web search provider configured. Run `hermes tools` to set one up.")
@@ -321,7 +351,7 @@ pub async fn search(settings: &WebSettings, arguments: &str) -> Value {
 
 fn unsupported(name: &str) -> String {
     format!(
-        "The web backend '{name}' is not supported by the Rust CLI yet. Set web.backend to tavily, perplexity, exa, parallel, firecrawl, keenable, xai (search only), searxng (search only) or brave-free (search only)."
+        "The web backend '{name}' is not supported by the Rust CLI yet. Set web.backend to tavily, perplexity, exa, parallel, firecrawl, keenable, xai (search only), ddgs (search only), openai-native (Codex Responses search only), searxng (search only) or brave-free (search only)."
     )
 }
 
@@ -760,10 +790,21 @@ pub async fn extract(settings: &WebSettings, arguments: &str) -> Value {
 
     let mut safe: Vec<(usize, String)> = Vec::new();
     for (index, url) in requested {
-        if is_safe_url(&url, settings.allow_private_urls).await {
-            safe.push((index, url));
-        } else {
+        if !is_safe_url(&url, settings.allow_private_urls).await {
             fixed.insert(index, entry(&url, Some(BLOCKED_ERROR)));
+        } else if let Some(blocked) = settings.website_policy.check_access(&url) {
+            fixed.insert(
+                index,
+                json!({
+                    "url": url,
+                    "title": "",
+                    "content": "",
+                    "error": blocked.message,
+                    "blocked_by_policy": blocked.policy_metadata(),
+                }),
+            );
+        } else {
+            safe.push((index, url));
         }
     }
 
@@ -780,6 +821,18 @@ pub async fn extract(settings: &WebSettings, arguments: &str) -> Value {
             Backend::Xai => {
                 return Value::String(
                     json!({"success": false, "error": "xAI Web Search (Grok) is a search-only backend and cannot extract URL content. Set web.extract_backend to firecrawl, tavily, keenable, exa, or parallel."})
+                        .to_string(),
+                );
+            }
+            Backend::Ddgs => {
+                return Value::String(
+                    json!({"success": false, "error": "DuckDuckGo (ddgs) is a search-only backend and cannot extract URL content. Set web.extract_backend to firecrawl, tavily, keenable, exa, or parallel."})
+                        .to_string(),
+                );
+            }
+            Backend::OpenaiNative => {
+                return Value::String(
+                    json!({"success": false, "error": "OpenAI Native Web Search (Codex Responses) is a search-only backend and cannot extract URL content. Set web.extract_backend to firecrawl, tavily, keenable, exa, or parallel."})
                         .to_string(),
                 );
             }
@@ -806,17 +859,25 @@ pub async fn extract(settings: &WebSettings, arguments: &str) -> Value {
                 );
             }
         };
-        // A page reported under a URL nobody asked for (a redirect target) is checked again.
+        // A page reported under a URL nobody asked for (a redirect target) is checked again
+        // against both the website blocklist policy and the SSRF guard.
         for page in &mut fetched {
             let url = page["url"].as_str().unwrap_or("").to_owned();
-            if !url.is_empty()
-                && !urls.contains(&url)
-                && page["error"].is_null()
-                && !is_safe_url(&url, settings.allow_private_urls).await
-            {
-                *page = json!({
-                    "url": url, "title": page["title"], "content": "", "raw_content": "", "error": BLOCKED_ERROR
-                });
+            if !url.is_empty() && !urls.contains(&url) && page["error"].is_null() {
+                if let Some(blocked) = settings.website_policy.check_access(&url) {
+                    *page = json!({
+                        "url": url,
+                        "title": page["title"],
+                        "content": "",
+                        "raw_content": "",
+                        "error": blocked.message,
+                        "blocked_by_policy": blocked.policy_metadata(),
+                    });
+                } else if !is_safe_url(&url, settings.allow_private_urls).await {
+                    *page = json!({
+                        "url": url, "title": page["title"], "content": "", "raw_content": "", "error": BLOCKED_ERROR
+                    });
+                }
             }
         }
     }
@@ -843,12 +904,21 @@ pub async fn extract(settings: &WebSettings, arguments: &str) -> Value {
         .map(|page| {
             let content = page["content"].as_str().unwrap_or("");
             let content = truncate(&strip_base64_images(content), char_limit);
-            json!({
-                "url": page["url"].as_str().unwrap_or(""),
-                "title": page["title"].as_str().unwrap_or(""),
-                "content": content,
-                "error": page["error"],
-            })
+            let mut row = Map::new();
+            row.insert(
+                "url".into(),
+                Value::String(page["url"].as_str().unwrap_or("").to_owned()),
+            );
+            row.insert(
+                "title".into(),
+                Value::String(page["title"].as_str().unwrap_or("").to_owned()),
+            );
+            row.insert("content".into(), Value::String(content));
+            row.insert("error".into(), page["error"].clone());
+            if let Some(policy) = page.get("blocked_by_policy").filter(|v| !v.is_null()) {
+                row.insert("blocked_by_policy".into(), policy.clone());
+            }
+            Value::Object(row)
         })
         .collect();
     if trimmed.is_empty() {
@@ -1046,7 +1116,7 @@ mod settings_tests {
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect();
-        WebSettings::from_config(&config, &secrets)
+        WebSettings::from_config(&config, &secrets, None)
     }
 
     #[test]
@@ -1090,7 +1160,9 @@ mod settings_tests {
         );
         assert_eq!(keenable.search, Backend::Keenable);
         let native = load("web: {search_backend: openai-native}", &[]);
-        assert_eq!(native.search, Backend::Unsupported("openai-native".into()));
+        assert_eq!(native.search, Backend::OpenaiNative);
+        let ddgs = load("web: {search_backend: ddgs}", &[]);
+        assert_eq!(ddgs.search, Backend::Ddgs);
         // Per-capability pins beat the shared backend.
         let pinned = load(
             "web: {backend: tavily, search_backend: Brave-Free, extract_backend: firecrawl}",

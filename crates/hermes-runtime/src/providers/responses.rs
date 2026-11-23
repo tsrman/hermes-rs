@@ -24,6 +24,7 @@ pub struct ResponsesProvider {
     extras: super::Extras,
     is_xai: bool,
     session_id: Option<String>,
+    openai_native_web_search: bool,
 }
 
 impl ResponsesProvider {
@@ -36,6 +37,7 @@ impl ResponsesProvider {
             extras: super::Extras::default(),
             is_xai: crate::reasoning::is_xai_responses("", base_url),
             session_id: None,
+            openai_native_web_search: false,
         })
     }
 
@@ -59,6 +61,13 @@ impl ResponsesProvider {
     /// Session identifier used to scope `prompt_cache_key` (and `x-grok-conv-id` on xAI).
     pub fn with_session_id(mut self, session_id: Option<String>) -> Self {
         self.session_id = session_id.filter(|s| !s.is_empty());
+        self
+    }
+
+    /// Swap a client-side `web_search` function 1:1 for the server-executed `{"type": "web_search"}`
+    /// built-in tool when `web.search_backend: openai-native` is configured.
+    pub fn with_openai_native_web_search(mut self, enabled: bool) -> Self {
+        self.openai_native_web_search = enabled;
         self
     }
 
@@ -92,6 +101,17 @@ impl ResponsesProvider {
         with_extra_body: bool,
     ) -> Result<(Map<String, Value>, Option<String>), ProviderError> {
         let mut body = translate_request(request)?;
+        if self.openai_native_web_search {
+            if let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) {
+                let had_client_web_search = tools
+                    .iter()
+                    .any(|t| t.get("name").and_then(Value::as_str) == Some("web_search"));
+                if had_client_web_search {
+                    tools.retain(|t| t.get("name").and_then(Value::as_str) != Some("web_search"));
+                    tools.push(json!({"type": "web_search"}));
+                }
+            }
+        }
         let mut grok_conv_id = None;
         if with_extra_body {
             let scope = cache_scope_from_session_id(self.session_id.as_deref());
