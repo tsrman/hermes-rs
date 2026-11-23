@@ -33,6 +33,8 @@ class CliTest(unittest.TestCase):
             "test_context_overflow_after_a_tool_call_is_not_retried": "overflow_tools",
             "test_context_overflow_after_tool_calls_compresses_the_turns_earlier_steps": "overflow_midturn",
             "test_mid_turn_overflow_with_compression_disabled_is_an_error": "overflow_midturn",
+            "test_default_settings_do_not_compress_a_three_exchange_turn_that_overflows": "overflow_midturn",
+            "test_default_settings_do_not_compress_a_three_exchange_turn_over_the_threshold": "pressure_midturn",
             "test_a_turn_over_the_threshold_compresses_its_earlier_steps_before_the_next_request": "pressure_midturn",
             "test_a_turn_under_the_threshold_is_not_compressed": "pressure_midturn",
             "test_a_summary_that_swallows_the_running_request_restates_it": "pressure_midturn",
@@ -541,6 +543,26 @@ class CliTest(unittest.TestCase):
         result, recorded = self.chat_with_profile(extra_config="security:\n  redact_secrets: false\n")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.stored_replies(recorded), [self.RAW])
+
+    # Recorded from the reference (`compression_window_cases.json`): with the default `protect_first_n: 3` the
+    # head of a turn is the system prompt plus three rows, and `compress()` returns the list untouched at
+    # `head + 4` rows or fewer. A turn of a query and three exchanges is eight rows, so nothing is compressed.
+    # BEHAVIOUR CHANGE from the previous port release, which compressed such a turn (it needed only three exchanges).
+    def test_default_settings_do_not_compress_a_three_exchange_turn_that_overflows(self):
+        result, recorded = self.chat_with_profile(extra_config="compression:\n  threshold_tokens: '100000'\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ContextOverflow", result.stderr)
+        self.assertNotIn("replacing earlier steps", result.stderr)
+        # Three tool calls, then the fourth request the provider refuses; no summary request in between.
+        self.assertEqual(len(recorded), 4)
+        self.assertFalse(any(r["messages"][0]["content"].startswith("Summarize") for r in recorded))
+
+    def test_default_settings_do_not_compress_a_three_exchange_turn_over_the_threshold(self):
+        result, recorded = self.chat_with_profile(extra_config="compression:\n  threshold_tokens: '50'\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("replacing earlier steps", result.stderr)
+        tool_count = lambda request: sum(m.get("role") == "tool" for m in request["messages"])
+        self.assertEqual([tool_count(r) for r in recorded], [0, 1, 2, 3])
 
     def test_mid_turn_overflow_with_compression_disabled_is_an_error(self):
         result, recorded = self.chat_with_profile(extra_config="compression:\n  enabled: false\n")
