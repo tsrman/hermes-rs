@@ -57,6 +57,10 @@ routes ignore it); `auxiliary.compression.extra_body` is not read; fallback rout
    `target_ratio`, `tail_mode`, `min_tail_user_messages`, `max_attempts`, `abort_on_summary_failure`,
    `model_thresholds`, `proactive_prune_*`, `micro_compact*`, `idle_compact_after_seconds`. Each needs a
    check of whether the reference code path exists in a one-shot CLI before porting.
+   **Status 2026-11-23:** `target_ratio`, `tail_mode`, `min_tail_user_messages`, `max_attempts` and
+   `model_thresholds` are read now (the first three drive the window selection, backlog item 3);
+   `abort_on_summary_failure`, `proactive_prune_*`, `micro_compact*` and `idle_compact_after_seconds` are
+   refused with a reason. See the notes at the end.
 9. **(provider window done; scoping deliberately not) `model.context_length` scoping.** The reference drops it when the startup runtime differs from the
    configured default (`_scope_context_length_to_default_runtime`), and reads `providers.*.context_length`
    [code]. The port applies it unconditionally and ignores the per-provider value.
@@ -142,8 +146,14 @@ for these inputs: `model:` as a list, `providers:` as a list, `custom_providers:
 
 ## Order of work
 
-Status 2026-11-22: steps 1 and 2 are done (see the tables above; fallbacks and TLS options excepted, and noted
-as such). Next is step 3.
+Status 2026-11-23: steps 1 to 4 are done (fallbacks and TLS options excepted, and noted as such): item 7 for
+`auxiliary.compression`; item 8, whose keys are read or refused with a reason, including the compression
+window keys (`target_ratio`, `tail_mode`, `min_tail_user_messages`); item 9 as far as the provider window
+(the scoping of `model.context_length` is deliberately not ported); items 11 and 13. Item 12 is done as well. Step 5 is done for items
+14 (init files; `persistent_shell` refused), 15 (detector, `command_allowlist`), 16 (route), 17, 18, 19
+(prefill, `terminal.timeout`) and 20 (`model_overrides.context_window`); item 10 (`model.max_concurrency`) is still ignored. Step 6 is partly done (see the table
+in "Validation behaviour"). What is left in a default config is listed at the end of the last notes: `agent.stall_guards`,
+`compression.abort_on_summary_failure`, local shell state persistence and the Responses request body.
 
 1. Items 2 and 1/3/4 together (env expansion, then named providers with their key, URL and mode); one
    reference fixture of `resolve_runtime_provider` over about 20 config shapes.
@@ -200,9 +210,10 @@ fixtures in `crates/hermes-runtime/tests/fixtures` and the 134 compat tests guar
   the port has none, and without any window compression would turn off entirely, overflow recovery
   included. The configured window is kept instead; a `providers` entry window for the active model
   is only used when `model.context_length` is absent.
-- Still open in item 8: `target_ratio`, `tail_mode`, `min_tail_user_messages`, `max_attempts`,
-  `abort_on_summary_failure`, `model_thresholds`, proactive pruning and micro-compaction. Each changes
-  which messages are summarized, so each needs the reference's boundary selection recorded first.
+- Item 8 was open here at the time of writing. Since then (2026-11-23) `target_ratio`, `tail_mode`,
+  `min_tail_user_messages`, `max_attempts` and `model_thresholds` are read, after the reference's boundary
+  selection was recorded; `abort_on_summary_failure` and the opt-in pruning keys are refused (see "Notes on
+  the config keys of items 8, 11 and 13").
 
 ## Finding while recording the default request (item 11): the default system prompt was a different, much shorter text (fixed, see the end of this section)
 

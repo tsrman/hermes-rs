@@ -6,13 +6,14 @@
 
 | Набор | Инструменты | Состояние |
 | --- | --- | --- |
-| web | `web_search`, `web_extract` | Сделано для Tavily, SearXNG и Brave. Нет Firecrawl, Exa, Parallel, Keenable, Perplexity, DDGS, режима без ключей |
+| web | `web_search`, `web_extract` | Сделано для Tavily, SearXNG, Brave, Perplexity, Exa, Parallel, Firecrawl, Keenable и xAI (`web_tools.rs`, `web_vendors.rs`). Нет `openai_native` (нужен OAuth Codex), DDGS, режима без ключей, политики сайтов `check_website_access` |
 | file | `read_file`, `write_file`, `patch`, `search_files` | Сделано (схемы `read_file` и `terminal` рукописные) |
 | terminal | `terminal`, `process_manage` | Сделано, включая `background=true`, окружение пользователя и запоминание каталога. Нет pty, `notify_on_complete`, `watch_patterns` |
 | skills | `skills_list`, `skill_view`, `skill_manage` | Сделано (`skill_manage` без нечёткого patch и журнала) |
 | memory | `memory` | Сделано. Нет плагина holographic |
 | прочее | `clarify`, `todo_list`, `session_search`, `execute_code`, `delegate_task`, `browser_cdp` | Сделано (отличия в разделах ниже) |
 | мета | `tool_search`, `tool_describe`, `tool_call` | Сделано |
+| MCP | `mcp__<сервер>__<инструмент>`, `mcp__<сервер>__list_resources`, `mcp__<сервер>__read_resource` | Сделано для stdio и Streamable HTTP (`mcp.rs`): имена, ответы `tools/call` и таймаут как в эталоне, отмена, обновление сессии, ресурсы. Нет кэша изображений и звука (`MEDIA:`), слоя вытеснения (предел 100 000 байт), OAuth, prompts, `sampling`, транспорта SSE |
 | не сделано | `browser_exec`, `browser_vault`, `browser_dialog`, `vision_analyze`, `manage_connections`, `cronjob_manage`, `fact_store`, `fact_feedback` | — |
 
 Из рабочего прототипа в Python по умолчанию видны `clarify`, `delegate_task`, `execute_code`, `memory`, `patch`, `read_file`, `search_files`, `skill_manage`, `skill_view`, `skills_list`, `terminal`, `web_extract`, `web_search`, `write_file` и три мета-инструмента. `todo_list`, `session_search` и браузер скрыты в отложенном каталоге.
@@ -75,7 +76,7 @@
 
 | Инструмент | Что нужно |
 | --- | --- |
-| `cronjob_manage` (не сделано) | Сначала `cron add/edit/run` в CLI, для чего нужен порт `lifecycle_guard.py` (около 1650 строк, защита от prompt с командами перезапуска gateway). Затем инструмент (`cronjob_tools.py`, около 1300 строк) поверх тех же функций |
+| `cronjob_manage` (не сделано) | `cron add/edit/run` в CLI сделаны (без `cron.lifecycle_guard`, защиты от prompt с командами перезапуска gateway; `lifecycle_guard.py`, около 1650 строк, не портирован). Остаётся инструмент (`cronjob_tools.py`, около 1300 строк) поверх тех же функций |
 | `delegate_task` (сделано, см. раздел ниже) | Субагенты: дочерний ход в том же процессе с урезанным набором инструментов, глубина и лимиты, сессии, результаты, возобновление. Эталон — около 8000 строк в `delegate_tool*.py`. Начать с синхронного делегирования без автовозобновления |
 | `execute_code` (сделано, см. раздел ниже) | Решение нужно принять заранее (см. ниже). Запуск скрипта, который вызывает инструменты через RPC |
 
@@ -109,7 +110,7 @@
 
 ## Порядок и вехи
 
-Состояние на 2026-11-22: пункты 1–5, 6 (`browser_cdp`; `browser_dialog` не сделан), 9 и 10 (`execute_code`) выполнены; не сделаны 7 (`cronjob_manage`), 8 (`vision_analyze`), `browser_exec`, 11.
+Состояние на 2026-11-22: пункты 1–5, 6 (`browser_cdp`; `browser_dialog` не сделан), 9 и 10 (`execute_code`) выполнены; не сделаны 7 (`cronjob_manage`), 8 (`vision_analyze`), `browser_exec`, 11. На 2026-11-23 это не изменилось, но `cron add/edit/run`, от которых зависит пункт 7, сделаны.
 
 1. Волна 0 целиком.
 2. `todo_list`, `session_search`.
