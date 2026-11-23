@@ -678,3 +678,71 @@ pub(crate) fn plan(messages: &[Value], rules: &WindowRules) -> Option<Range<usiz
     }
     Some(start..if newest >= end { newest + 1 } else { end })
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn a_tool_call_is_priced_by_the_python_repr_of_its_dict() {
+        // Recorded with `str()` in the reference interpreter.
+        let call = json!({"a": "it's", "b": "a\"b", "c": "it's \"x\"", "d": "l1\nl2\t\\",
+                          "e": null, "f": true, "g": [1, 2.5, "я"], "h": {}, "i": "\u{1}\u{7f}"});
+        assert_eq!(
+            python_repr(&call),
+            "{'a': \"it's\", 'b': 'a\"b', 'c': 'it\\'s \"x\"', 'd': 'l1\\nl2\\t\\\\', 'e': None, \
+             'f': True, 'g': [1, 2.5, 'я'], 'h': {}, 'i': '\\x01\\x7f'}"
+        );
+    }
+
+    #[test]
+    fn tokens_are_estimated_like_the_reference() {
+        assert_eq!(estimate_tokens(""), 0);
+        assert_eq!(estimate_tokens("abc"), 1);
+        assert_eq!(estimate_tokens("abcde"), 2);
+        // Cyrillic is two bytes a character; CJK and Hangul count a token each.
+        assert_eq!(estimate_tokens("яяяя"), 2);
+        assert_eq!(estimate_tokens("语言语言"), 4);
+        assert_eq!(estimate_tokens("한국어 abcd"), 3 + 2);
+    }
+
+    #[test]
+    fn a_row_costs_its_text_its_calls_and_ten_tokens_of_overhead() {
+        let plain = json!({"role": "user", "content": "x".repeat(40)});
+        assert_eq!(row_tokens(&plain, true), 10 + 10);
+        let call = json!({"id": "c1", "type": "function"});
+        let with_call = json!({"role": "assistant", "content": null, "tool_calls": [call]});
+        assert_eq!(
+            row_tokens(&with_call, true),
+            10 + estimate_tokens(&python_repr(&call))
+        );
+        // Thinking is charged for the newest assistant turn only.
+        let thinking =
+            json!({"role": "assistant", "content": "", "reasoning_content": "y".repeat(80)});
+        assert_eq!(row_tokens(&thinking, true), 10 + 20);
+        assert_eq!(row_tokens(&thinking, false), 10);
+        // `reasoning_content` wins: the wire carries one thinking field, not both.
+        let both = json!({"role": "assistant", "content": "", "reasoning": "z".repeat(80),
+                          "reasoning_content": "y".repeat(80)});
+        assert_eq!(row_tokens(&both, true), 10 + 20);
+        let only = json!({"role": "assistant", "content": "", "reasoning": "z".repeat(80)});
+        assert_eq!(row_tokens(&only, true), 10 + 20);
+    }
+
+    #[test]
+    fn handoffs_and_scaffolding_are_not_user_turns() {
+        let user = |text: &str| json!({"role": "user", "content": text});
+        assert!(is_real_user(&user("hello")));
+        assert!(!is_real_user(&user("   ")));
+        assert!(!is_real_user(&user("[CONTEXT SUMMARY]:\nx")));
+        assert!(!is_real_user(&user(
+            "[IMPORTANT: Background process p1 done]"
+        )));
+        assert!(!is_real_user(
+            &json!({"role": "user", "content": "x", "_compressed_summary": true})
+        ));
+        assert!(!is_real_user(&json!({"role": "assistant", "content": "x"})));
+    }
+}

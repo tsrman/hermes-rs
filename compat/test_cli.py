@@ -34,10 +34,12 @@ class CliTest(unittest.TestCase):
             "test_mid_turn_overflow_with_compression_disabled_is_an_error": "overflow_midturn",
             "test_a_turn_over_the_threshold_compresses_its_earlier_steps_before_the_next_request": "pressure_midturn",
             "test_a_turn_under_the_threshold_is_not_compressed": "pressure_midturn",
+            "test_a_summary_that_swallows_the_running_request_restates_it": "pressure_midturn",
             "test_model_thresholds_override_the_trigger_for_the_model": "pressure_midturn",
             "test_model_thresholds_for_another_model_are_not_used": "pressure_midturn",
             "test_a_model_threshold_scoped_to_the_providers_name_applies_only_there": "pressure_midturn",
             "test_a_model_threshold_scoped_to_another_provider_does_not_apply": "pressure_midturn",
+            "test_the_second_pass_of_a_turn_protects_only_the_system_prompt": "pressure_long",
             "test_max_attempts_caps_how_often_a_turn_compresses_itself": "pressure_long",
             "test_max_attempts_defaults_to_three": "pressure_long",
             "test_max_attempts_below_one_means_three": "pressure_long",
@@ -300,9 +302,14 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("Archiveword", str(messages))
         self.assertEqual(messages[1]["content"], "Keep this first exchange")
         self.assertIn("[CONTEXT SUMMARY]:", messages[3]["content"])
+        # The tail is the reference's: with so short a history the whole conversation fits the token
+        # budget, so `_find_tail_cut_by_tokens` forces a cut that keeps the last `max(3, protect_last_n)`
+        # rows (here the tool exchange, the reply and the new query), and the request "Keep this recent
+        # exchange" goes into the summary with the older rows (recorded in `compression_window_cases.json`).
+        self.assertIn("Keep this recent exchange", summary_input)
         self.assertEqual([message["role"] for message in messages[4:]],
-                         ["user", "assistant", "tool", "assistant", "user"])
-        self.assertEqual(messages[6]["tool_call_id"], "preserved")
+                         ["assistant", "tool", "assistant", "user"])
+        self.assertEqual(messages[5]["tool_call_id"], "preserved")
         self.assertEqual(messages[-1]["content"], "New task")
 
         with sqlite3.connect(database) as db:
@@ -353,7 +360,11 @@ class CliTest(unittest.TestCase):
             self.assertEqual(db.execute("SELECT count(*) FROM messages WHERE _compressed_summary = 1").fetchone(), (0,))
 
     def test_context_overflow_after_tool_calls_compresses_the_turns_earlier_steps(self):
-        config = "compression:\n  threshold_tokens: '100000'\n"
+        # `protect_first_n: 1` keeps the system prompt and the query as the head. With the default 3 the
+        # reference protects the first exchange too and needs more than eight rows before it compresses
+        # at all (`compress()` returns an untouched list at `head + 4` rows or fewer; recorded in
+        # `compression_window_cases.json`).
+        config = "compression:\n  threshold_tokens: '100000'\n  protect_first_n: 1\n"
         result, recorded = self.chat_with_profile(extra_config=config, args=("--save-session",))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "Ответ модели\n")
@@ -378,7 +389,7 @@ class CliTest(unittest.TestCase):
 
     def test_a_turn_over_the_threshold_compresses_its_earlier_steps_before_the_next_request(self):
         # The provider never refuses: the runtime itself notices the request has outgrown the threshold.
-        config = "compression:\n  threshold_tokens: '50'\n"
+        config = "compression:\n  threshold_tokens: '50'\n  protect_first_n: 1\n"
         result, recorded = self.chat_with_profile(extra_config=config)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "Ответ модели\n")
@@ -387,6 +398,22 @@ class CliTest(unittest.TestCase):
         self.assertEqual([tool_count(r) for r in recorded], [0, 1, 2, 0, 2])
         self.assertNotIn("tools", recorded[3])
         self.assertIn("[CONTEXT SUMMARY]", json.dumps(recorded[4]["messages"]))
+
+    def test_a_summary_that_swallows_the_running_request_restates_it(self):
+        # A legacy tail of `target_ratio` of the trigger (15 tokens) cannot hold the exchanges, so the
+        # reference's window runs past the request itself (`split_oversized_turn`, issue 80449) and the
+        # active request would vanish with it. The reference restates the task after the summary; the port
+        # appends the request to the summary row, verbatim.
+        config = ("compression:\n  threshold_tokens: '150'\n  tail_mode: legacy\n  target_ratio: 0.1\n"
+                  "  protect_first_n: 0\n  max_attempts: 1\n")
+        result, recorded = self.chat_with_profile(extra_config=config, query="read the fixture")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("replacing earlier steps of this turn with a summary", result.stderr)
+        answer = recorded[-1]["messages"]
+        summary = next(m for m in answer if str(m["content"]).startswith("[CONTEXT SUMMARY]"))
+        self.assertTrue(summary["content"].endswith("[ACTIVE REQUEST, VERBATIM]\nread the fixture"), summary)
+        # The query itself is gone from the request: only the summary carries it.
+        self.assertEqual([m["content"] for m in answer if m["role"] == "user"], [summary["content"]])
 
     def test_a_turn_under_the_threshold_is_not_compressed(self):
         config = "compression:\n  threshold_tokens: '1000000'\n"
@@ -399,7 +426,7 @@ class CliTest(unittest.TestCase):
         """Whether a turn of three large reads on a 1M-token window compresses, given `model_thresholds`."""
         (self.workdir / "fixture.txt").write_text("".join(f"line {n} " + "x" * 190 + "\n" for n in range(9000)),
                                                   encoding="utf-8")
-        config = f"  context_length: 1000000\ncompression:\n  model_thresholds: {thresholds}\n"
+        config = f"  context_length: 1000000\ncompression:\n  protect_first_n: 1\n  model_thresholds: {thresholds}\n"
         result, _ = self.chat_with_profile(extra_config=config)
         self.assertEqual(result.returncode, 0, result.stderr)
         return "replacing earlier steps of this turn" in result.stderr
@@ -424,6 +451,20 @@ class CliTest(unittest.TestCase):
         result, recorded = self.chat_with_profile(extra_config=config)
         self.assertEqual(result.returncode, 0, result.stderr)
         return sum(r["messages"][0]["content"].startswith("Summarize completed") for r in recorded)
+
+    def test_the_second_pass_of_a_turn_protects_only_the_system_prompt(self):
+        # Mid-turn passes run over the whole request (`compression_window_cases.json` records the plan).
+        config = "compression:\n  threshold_tokens: '50'\n  protect_first_n: 2\n"
+        result, recorded = self.chat_with_profile(extra_config=config)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        inputs = [json.dumps(r["messages"][1]["content"]) for r in recorded
+                  if r["messages"][0]["content"].startswith("Summarize completed")]
+        self.assertGreaterEqual(len(inputs), 2)
+        # `protect_first_n` keeps the query out of the first summary; once a pass has run the reference
+        # decays the head to the system prompt (`_effective_protect_first_n`, issue 11996), so the next
+        # summary reads it.
+        self.assertNotIn("read the fixture", inputs[0])
+        self.assertIn("read the fixture", inputs[1])
 
     def test_max_attempts_caps_how_often_a_turn_compresses_itself(self):
         self.assertEqual(self.summaries_with(1), 1)

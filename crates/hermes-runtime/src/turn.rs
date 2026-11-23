@@ -732,6 +732,11 @@ async fn squeeze_turn(
     query_index: usize,
     after_pass: bool,
 ) -> bool {
+    // Before the turn's first step there is nothing of this turn to replace: the history belongs to the
+    // preflight pass (and, after a refusal, to the retry that compresses the saved history).
+    if sent.len() <= query_index + 1 {
+        return false;
+    }
     let Some(range) = settings.select_in_turn(sent, after_pass) else {
         return false;
     };

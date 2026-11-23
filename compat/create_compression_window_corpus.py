@@ -56,6 +56,11 @@ SETTINGS = [
     ("{threshold_tokens: 300, tail_mode: legacy, protect_last_n: 8}", 100000),
     ("{threshold_tokens: 800, tail_mode: legacy, protect_first_n: 0}", 100000),
     ("{threshold_tokens: 200, protect_last_n: 8, protect_first_n: 2}", 100000),
+    # The share of the trigger that caps the lean budget applies above 2000 tokens only, and a legacy tail is
+    # held to a fifth of the window, which is the fallback window when none is configured.
+    ("{threshold_tokens: 2000}", 100000),
+    ("{threshold_tokens: 2001}", 100000),
+    ("{threshold_tokens: 60000, tail_mode: legacy, target_ratio: 0.8}", None),
     # A long head: the last user turn may sit inside it.
     ("{threshold_tokens: 3000, protect_first_n: 8}", 128000),
     ("{threshold_tokens: 3000, protect_first_n: 0, min_tail_user_messages: 2}", 128000),
