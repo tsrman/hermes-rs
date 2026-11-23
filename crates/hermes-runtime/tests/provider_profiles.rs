@@ -90,15 +90,15 @@ fn responses_providers_and_explicit_api_modes() {
 #[test]
 fn fallbacks_accept_named_providers_and_unknown_ones_are_rejected() {
     let dir = home(
-        "model: {default: m, provider: custom, base_url: 'http://x/v1'}\nfallback_providers:\n  - {provider: stepfun, model: s}\n  - {provider: nvidia, model: d}\n  - {provider: deepseek, model: ds}\n",
-        "STEPFUN_API_KEY=s-secret\nDEEPSEEK_API_KEY=d-secret\n",
+        "model: {default: m, provider: custom, base_url: 'http://x/v1'}\nfallback_providers:\n  - {provider: stepfun, model: s}\n  - {provider: nonexistent_vendor, model: d}\n  - {provider: nvidia, model: nv}\n  - {provider: deepseek, model: ds}\n",
+        "STEPFUN_API_KEY=s-secret\nNVIDIA_API_KEY=nv-secret\nDEEPSEEK_API_KEY=d-secret\n",
     );
     let settings = load_chat_settings(Some(dir.path())).unwrap();
-    // NVIDIA rewrites messages, which this runtime does not do, so it is dropped.
     let kept: Vec<&str> = settings.fallbacks.iter().map(|f| f.provider).collect();
-    assert_eq!(kept, ["stepfun", "deepseek"]);
+    assert_eq!(kept, ["stepfun", "nvidia", "deepseek"]);
     assert_eq!(settings.fallbacks[0].api_key.as_deref(), Some("s-secret"));
-    assert_eq!(settings.fallbacks[1].api_key.as_deref(), Some("d-secret"));
-    let dir = home("model: {default: m, provider: nvidia}\n", "");
+    assert_eq!(settings.fallbacks[1].api_key.as_deref(), Some("nv-secret"));
+    assert_eq!(settings.fallbacks[2].api_key.as_deref(), Some("d-secret"));
+    let dir = home("model: {default: m, provider: nonexistent_vendor}\n", "");
     assert!(load_chat_settings(Some(dir.path())).is_err());
 }

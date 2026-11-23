@@ -11,7 +11,7 @@ use hermes_runtime::memory_tool::MemorySettings;
 use hermes_runtime::prompt::PromptSettings;
 use hermes_runtime::providers::profiles;
 use hermes_runtime::providers::{
-    AnthropicProvider, OpenAiProvider, Provider, ProviderError, ResponsesProvider,
+    AnthropicProvider, BedrockProvider, OpenAiProvider, Provider, ProviderError, ResponsesProvider,
 };
 use hermes_runtime::storage::SessionWriter;
 use hermes_runtime::tool_policy::ToolPolicy;
@@ -128,6 +128,18 @@ fn side_route(
         reasoning: Default::default(),
         timeout_secs: aux.timeout_secs,
         openai_native_web_search: false,
+        bedrock_region: (provider == "bedrock").then(|| {
+            hermes_runtime::providers::bedrock::resolve_bedrock_region(
+                &settings.bedrock,
+                settings.secrets(),
+            )
+        }),
+        bedrock_auth: (provider == "bedrock")
+            .then(|| hermes_runtime::providers::bedrock::resolve_aws_auth(settings.secrets()).ok())
+            .flatten(),
+        bedrock_guardrail: (provider == "bedrock")
+            .then(|| settings.bedrock.guardrail_config())
+            .flatten(),
     }))
 }
 
@@ -311,6 +323,12 @@ struct Route {
     timeout_secs: Option<u64>,
     #[serde(default)]
     openai_native_web_search: bool,
+    #[serde(default)]
+    bedrock_region: Option<String>,
+    #[serde(default)]
+    bedrock_auth: Option<hermes_runtime::providers::bedrock::AwsAuth>,
+    #[serde(default)]
+    bedrock_guardrail: Option<serde_json::Value>,
 }
 
 impl Route {
@@ -328,17 +346,69 @@ impl Route {
             "custom" => "custom",
             "openai" => "openai",
             "anthropic" => "anthropic",
-            other => match profiles::lookup(other) {
-                Some(profile) => profile.name.as_str(),
-                None => return Err("unsupported provider".into()),
-            },
+            "nvidia" => "nvidia",
+            "bedrock" => "bedrock",
+            "vertex" => "vertex",
+            other => {
+                if let Some((oauth_name, _)) =
+                    hermes_runtime::providers::oauth::resolve_oauth_provider(other)
+                {
+                    oauth_name
+                } else if let Some(profile) = profiles::lookup(other) {
+                    profile.name.as_str()
+                } else {
+                    return Err("unsupported provider".into());
+                }
+            }
         };
         let timeout = Duration::from_secs(self.timeout_secs.unwrap_or(120));
         let setup = |error| format!("provider setup failed: {error:?}");
-        let provider = if provider_name == "anthropic" {
+        let provider = if provider_name == "bedrock" {
+            let region = self
+                .bedrock_region
+                .as_deref()
+                .unwrap_or(hermes_runtime::providers::bedrock::DEFAULT_BEDROCK_REGION);
+            let auth = self.bedrock_auth.clone().unwrap_or_else(|| {
+                hermes_runtime::providers::bedrock::AwsAuth::Bearer(self.api_key.clone())
+            });
+            if hermes_runtime::providers::bedrock::bedrock_openai_uses_mantle(&model) {
+                let default_runtime =
+                    hermes_runtime::providers::bedrock::bedrock_runtime_base_url(region);
+                let mantle_url = if self.base_url.trim_end_matches('/')
+                    == default_runtime.trim_end_matches('/')
+                {
+                    hermes_runtime::providers::bedrock::bedrock_openai_base_url(region)
+                } else {
+                    self.base_url.clone()
+                };
+                Provider::Responses(
+                    ResponsesProvider::new(&mantle_url, &self.api_key, timeout)
+                        .map_err(setup)?
+                        .with_sigv4(region.to_owned(), auth)
+                        .with_session_id(session_id.map(str::to_owned))
+                        .with_extras(self.extras.clone())
+                        .with_max_attempts(attempts),
+                )
+            } else {
+                Provider::Bedrock(
+                    BedrockProvider::new(&self.base_url, region, auth, timeout)
+                        .map_err(setup)?
+                        .with_guardrail(self.bedrock_guardrail.clone())
+                        .with_extras(self.extras.clone())
+                        .with_max_attempts(attempts),
+                )
+            }
+        } else if provider_name == "anthropic" || provider_name == "minimax-oauth" {
+            let is_oauth = hermes_runtime::providers::oauth::anthropic_route_is_oauth(
+                &self.base_url,
+                &self.api_key,
+                Some(provider_name),
+            );
             Provider::Anthropic(
                 AnthropicProvider::new(&self.base_url, &self.api_key, timeout)
                     .map_err(setup)?
+                    .with_bearer_auth(provider_name == "minimax-oauth")
+                    .with_oauth_identity(is_oauth)
                     .with_extras(self.extras.clone())
                     .with_max_attempts(attempts),
             )
@@ -365,6 +435,7 @@ impl Route {
             Provider::OpenAi(
                 OpenAiProvider::new(&self.base_url, &self.api_key, timeout)
                     .map_err(setup)?
+                    .with_strip_tool_message_names(provider_name == "nvidia")
                     .with_extras(self.extras.clone())
                     .with_max_attempts(attempts),
             )
@@ -415,25 +486,111 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         args.resume = Some(latest.id);
     }
     let mut settings = load_chat_settings(home)?;
-    let base_url = args
-        .base_url
-        .or_else(|| settings.base_url.clone())
-        .filter(|value| !value.is_empty())
-        .ok_or(format!("model base URL is required. {SETUP_HINT}"))?;
-    let vendor_api_key = settings.vendor_key_for(settings.provider, &base_url);
-    let api_key = args
-        .api_key
-        .or(settings.config_api_key.clone())
-        .or(settings.api_key.clone())
-        .or(vendor_api_key)
-        .filter(|value| !value.is_empty())
-        // A custom endpoint may be a local server that wants no key; the reference sends this
-        // placeholder there, and the endpoint's own 401 is the answer if it does want one.
-        .or_else(|| {
-            hermes_runtime::config::ChatSettings::keyless_endpoint(settings.provider)
-                .then(|| "no-key-required".to_owned())
-        })
-        .ok_or(format!("API key is required. {SETUP_HINT}"))?;
+    let mut bedrock_region = None;
+    let mut bedrock_auth = None;
+    let mut bedrock_guardrail = None;
+    let (base_url, api_key) = if settings.provider == "vertex" {
+        let explicit_key = args
+            .api_key
+            .clone()
+            .or(settings.config_api_key.clone())
+            .or(settings.api_key.clone())
+            .filter(|v| !v.is_empty());
+        let explicit_url = args
+            .base_url
+            .clone()
+            .or_else(|| settings.base_url.clone())
+            .filter(|v| !v.is_empty());
+        match (explicit_url, explicit_key) {
+            (Some(u), Some(k)) => (u, k),
+            (u_opt, k_opt) => {
+                let (token, v_url) = hermes_runtime::providers::vertex::resolve_vertex_route(
+                    &settings.vertex,
+                    settings.secrets(),
+                )?;
+                (u_opt.unwrap_or(v_url), k_opt.unwrap_or(token))
+            }
+        }
+    } else if settings.provider == "bedrock" {
+        let region = hermes_runtime::providers::bedrock::resolve_bedrock_region(
+            &settings.bedrock,
+            settings.secrets(),
+        );
+        let explicit_key = args
+            .api_key
+            .clone()
+            .or(settings.config_api_key.clone())
+            .or(settings.api_key.clone())
+            .filter(|v| !v.is_empty());
+        let auth = match explicit_key {
+            Some(token) => hermes_runtime::providers::bedrock::AwsAuth::Bearer(token),
+            None => hermes_runtime::providers::bedrock::resolve_aws_auth(settings.secrets())?,
+        };
+        let url = args
+            .base_url
+            .clone()
+            .or_else(|| settings.base_url.clone())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| {
+                hermes_runtime::providers::bedrock::bedrock_runtime_base_url(&region)
+            });
+        let key_repr = match &auth {
+            hermes_runtime::providers::bedrock::AwsAuth::Bearer(t) => t.clone(),
+            hermes_runtime::providers::bedrock::AwsAuth::SigV4 { .. } => "aws-sigv4".to_owned(),
+        };
+        bedrock_region = Some(region);
+        bedrock_auth = Some(auth);
+        bedrock_guardrail = settings.bedrock.guardrail_config();
+        (url, key_repr)
+    } else if hermes_runtime::providers::oauth::resolve_oauth_provider(settings.provider).is_some()
+    {
+        let explicit_key = args
+            .api_key
+            .clone()
+            .or(settings.config_api_key.clone())
+            .or(settings.api_key.clone())
+            .filter(|v| !v.is_empty());
+        let explicit_url = args.base_url.clone().filter(|v| !v.is_empty());
+        match explicit_key {
+            Some(k) => {
+                let u = explicit_url
+                    .or_else(|| settings.base_url.clone())
+                    .filter(|v| !v.is_empty())
+                    .ok_or(format!("model base URL is required. {SETUP_HINT}"))?;
+                (u, k)
+            }
+            None => {
+                let resolved = hermes_runtime::providers::oauth::resolve_oauth_credentials(
+                    home,
+                    settings.provider,
+                    settings.secrets(),
+                )?;
+                let u = explicit_url.unwrap_or(resolved.base_url);
+                (u, resolved.access_token)
+            }
+        }
+    } else {
+        let base_url = args
+            .base_url
+            .or_else(|| settings.base_url.clone())
+            .filter(|value| !value.is_empty())
+            .ok_or(format!("model base URL is required. {SETUP_HINT}"))?;
+        let vendor_api_key = settings.vendor_key_for(settings.provider, &base_url);
+        let api_key = args
+            .api_key
+            .or(settings.config_api_key.clone())
+            .or(settings.api_key.clone())
+            .or(vendor_api_key)
+            .filter(|value| !value.is_empty())
+            // A custom endpoint may be a local server that wants no key; the reference sends this
+            // placeholder there, and the endpoint's own 401 is the answer if it does want one.
+            .or_else(|| {
+                hermes_runtime::config::ChatSettings::keyless_endpoint(settings.provider)
+                    .then(|| "no-key-required".to_owned())
+            })
+            .ok_or(format!("API key is required. {SETUP_HINT}"))?;
+        (base_url, api_key)
+    };
     if let Some(model) = args.model.as_deref().or(settings.model.as_deref()) {
         // The reference's order after `model.context_length`: an explicit `model_overrides`
         // entry, then the matching `providers` entry, then a `_default` override.
@@ -574,6 +731,9 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
                 == hermes_runtime::web_tools::Backend::OpenaiNative,
             base_url,
             api_key,
+            bedrock_region,
+            bedrock_auth,
+            bedrock_guardrail,
         },
         fallbacks: settings
             .fallbacks
@@ -589,6 +749,9 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
                 timeout_secs: None,
                 openai_native_web_search: settings.web.search
                     == hermes_runtime::web_tools::Backend::OpenaiNative,
+                bedrock_region: None,
+                bedrock_auth: None,
+                bedrock_guardrail: None,
             })
             .collect(),
         web: settings.web,

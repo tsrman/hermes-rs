@@ -13,7 +13,7 @@ use regex::Regex;
 use ring::digest::{digest, SHA256};
 use serde_json::{json, Map, Value};
 
-use super::openai::{build_client, endpoint_url, open_stream};
+use super::openai::{build_client, endpoint_url, open_stream_bytes};
 use super::{Completion, ProviderError, ToolCall};
 
 pub struct ResponsesProvider {
@@ -25,6 +25,7 @@ pub struct ResponsesProvider {
     is_xai: bool,
     session_id: Option<String>,
     openai_native_web_search: bool,
+    sigv4: Option<(String, super::bedrock::AwsAuth)>,
 }
 
 impl ResponsesProvider {
@@ -38,7 +39,14 @@ impl ResponsesProvider {
             is_xai: crate::reasoning::is_xai_responses("", base_url),
             session_id: None,
             openai_native_web_search: false,
+            sigv4: None,
         })
+    }
+
+    /// Sign requests with AWS SigV4 (for Bedrock Mantle OpenAI Responses endpoints).
+    pub fn with_sigv4(mut self, region: String, auth: super::bedrock::AwsAuth) -> Self {
+        self.sigv4 = Some((region, auth));
+        self
     }
 
     /// Body fields and headers the configured endpoint adds to every request.
@@ -157,20 +165,53 @@ impl ResponsesProvider {
         F: FnMut(&str),
     {
         let (request, grok_conv_id) = self.build_request_body(request, with_extra_body)?;
-        let mut response = open_stream(
+        let body_bytes = serde_json::to_vec(&request).map_err(|_| ProviderError::InvalidRequest)?;
+        let endpoint_url =
+            reqwest::Url::parse(&self.endpoint).map_err(|_| ProviderError::InvalidRequest)?;
+        let mut response = open_stream_bytes(
             &self.client,
             &self.endpoint,
-            &request,
+            &body_bytes,
             self.max_attempts,
-            |builder| {
+            |builder, payload| {
                 let mut builder = self.extras.apply_headers(builder);
                 if let Some(conv_id) = grok_conv_id.as_deref() {
                     builder = builder.header("x-grok-conv-id", conv_id);
                 }
-                if self.api_key.is_empty() {
-                    builder
-                } else {
-                    builder.bearer_auth(&self.api_key)
+                match &self.sigv4 {
+                    Some((
+                        region,
+                        super::bedrock::AwsAuth::SigV4 {
+                            access_key_id,
+                            secret_access_key,
+                            session_token,
+                        },
+                    )) => {
+                        let secs = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64;
+                        let now = chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
+                            .unwrap_or_default();
+                        let signed = super::bedrock::sign_sigv4(
+                            "POST",
+                            &endpoint_url,
+                            payload,
+                            "bedrock-mantle",
+                            region,
+                            access_key_id,
+                            secret_access_key,
+                            session_token.as_deref(),
+                            now,
+                        );
+                        for (k, v) in signed {
+                            builder = builder.header(k, v);
+                        }
+                        builder
+                    }
+                    Some((_, super::bedrock::AwsAuth::Bearer(token))) => builder.bearer_auth(token),
+                    None if self.api_key.is_empty() => builder,
+                    None => builder.bearer_auth(&self.api_key),
                 }
             },
         )

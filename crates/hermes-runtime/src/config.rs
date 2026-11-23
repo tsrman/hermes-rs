@@ -106,6 +106,8 @@ pub struct ChatSettings {
     pub browser: BrowserSettings,
     pub memory: MemorySettings,
     pub tools: ToolPolicy,
+    pub vertex: crate::providers::vertex::VertexSettings,
+    pub bedrock: crate::providers::bedrock::BedrockSettings,
     openai_api_key: Option<String>,
     openai_base_url: Option<String>,
     /// The profile `.env` values, for the keys of named providers.
@@ -217,6 +219,8 @@ impl Default for ChatSettings {
             browser: BrowserSettings::default(),
             memory: MemorySettings::default(),
             tools: ToolPolicy::allow_all(),
+            vertex: crate::providers::vertex::VertexSettings::default(),
+            bedrock: crate::providers::bedrock::BedrockSettings::default(),
             openai_api_key: None,
             openai_base_url: None,
             secrets: HashMap::new(),
@@ -239,6 +243,22 @@ impl ChatSettings {
     }
 
     pub fn anthropic_key_for(&self, base_url: &str) -> Option<String> {
+        for var in [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+        ] {
+            if let Some(key) = scoped_key(
+                var,
+                "ANTHROPIC_BASE_URL",
+                None,
+                self.anthropic_base_url.as_ref(),
+                &["anthropic.com"],
+                base_url,
+            ) {
+                return Some(key);
+            }
+        }
         scoped_key(
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_BASE_URL",
@@ -247,6 +267,25 @@ impl ChatSettings {
             &["anthropic.com"],
             base_url,
         )
+    }
+
+    pub fn nvidia_key_for(&self, base_url: &str) -> Option<String> {
+        let profile_key = self.secrets.get(crate::providers::nvidia::NVIDIA_KEY_ENV);
+        let profile_url = self
+            .secrets
+            .get(crate::providers::nvidia::NVIDIA_BASE_URL_ENV);
+        scoped_key(
+            crate::providers::nvidia::NVIDIA_KEY_ENV,
+            crate::providers::nvidia::NVIDIA_BASE_URL_ENV,
+            profile_key,
+            profile_url,
+            &["integrate.api.nvidia.com", "nvidia.com"],
+            base_url,
+        )
+    }
+
+    pub fn secrets(&self) -> &HashMap<String, String> {
+        &self.secrets
     }
 
     /// An environment variable, else a profile `.env` value; empty values count as unset.
@@ -291,13 +330,18 @@ impl ChatSettings {
     /// Custom endpoints and named providers may run without a key (local servers): the reference
     /// sends the placeholder `no-key-required` there. Vendor providers need a real one.
     pub fn keyless_endpoint(provider: &str) -> bool {
-        !matches!(provider, "openai" | "anthropic") && profiles::lookup(provider).is_none()
+        !matches!(
+            provider,
+            "openai" | "anthropic" | "nvidia" | "bedrock" | "vertex"
+        ) && crate::providers::oauth::resolve_oauth_provider(provider).is_none()
+            && profiles::lookup(provider).is_none()
     }
 
     pub fn vendor_key_for(&self, provider: &str, base_url: &str) -> Option<String> {
         match provider {
             "openai" => self.openai_key_for(base_url),
             "anthropic" => self.anthropic_key_for(base_url),
+            "nvidia" => self.nvidia_key_for(base_url),
             other => match profiles::lookup(other) {
                 Some(profile) => self.profile_key_for(profile, base_url),
                 // Custom endpoints keep using an OpenAI key paired with their URL.
@@ -575,13 +619,40 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
             "1" | "true" | "yes" | "on"
         );
     }
+    settings.vertex = crate::providers::vertex::VertexSettings::from_config(&config);
+    settings.bedrock = crate::providers::bedrock::BedrockSettings::from_config(&config);
     // A named provider's endpoint may be overridden from the environment or the profile `.env`.
     let configured_base_url = config["model"]
         .get("base_url")
         .and_then(serde_yaml::Value::as_str)
         .is_some_and(|url| !url.is_empty());
     if !configured_base_url {
-        if let Some(profile) = profiles::lookup(settings.provider) {
+        if settings.provider == "nvidia" {
+            let overridden = std::env::var(crate::providers::nvidia::NVIDIA_BASE_URL_ENV)
+                .ok()
+                .or_else(|| {
+                    secrets
+                        .get(crate::providers::nvidia::NVIDIA_BASE_URL_ENV)
+                        .cloned()
+                })
+                .filter(|value| !value.trim().is_empty());
+            if overridden.is_some() {
+                settings.base_url = overridden;
+            }
+        } else if settings.provider == "bedrock" {
+            let overridden = std::env::var("BEDROCK_BASE_URL")
+                .ok()
+                .or_else(|| secrets.get("BEDROCK_BASE_URL").cloned())
+                .filter(|value| !value.trim().is_empty());
+            if overridden.is_some() {
+                settings.base_url = overridden;
+            } else {
+                let region =
+                    crate::providers::bedrock::resolve_bedrock_region(&settings.bedrock, &secrets);
+                settings.base_url =
+                    Some(crate::providers::bedrock::bedrock_runtime_base_url(&region));
+            }
+        } else if let Some(profile) = profiles::lookup(settings.provider) {
             let overridden = profile.base_url_envs.iter().find_map(|name| {
                 std::env::var(name)
                     .ok()
@@ -605,7 +676,11 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.api_key = secrets.get("HERMES_API_KEY").cloned();
     settings.openai_api_key = secrets.get("OPENAI_API_KEY").cloned();
     settings.openai_base_url = secrets.get("OPENAI_BASE_URL").cloned();
-    settings.anthropic_api_key = secrets.get("ANTHROPIC_API_KEY").cloned();
+    settings.anthropic_api_key = secrets
+        .get("ANTHROPIC_API_KEY")
+        .or_else(|| secrets.get("ANTHROPIC_TOKEN"))
+        .or_else(|| secrets.get("CLAUDE_CODE_OAUTH_TOKEN"))
+        .cloned();
     settings.anthropic_base_url = secrets.get("ANTHROPIC_BASE_URL").cloned();
     settings.prefill_file = [
         std::env::var("HERMES_PREFILL_MESSAGES_FILE").unwrap_or_default(),
@@ -629,7 +704,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
         key_env: None,
         ..AuxiliaryRoute::from_section(&config["delegation"])
     };
-    settings.mcp_servers = mcp_servers(&config, &secrets);
+    settings.mcp_servers = mcp_servers(&config, &secrets, Some(home));
     settings.mcp_result_size_chars = crate::mcp_media::parse_mcp_result_size_chars(&config);
     settings.web = WebSettings::from_config(&config, &secrets, Some(home));
     settings.browser = BrowserSettings::from_config(&config, &secrets);
@@ -723,18 +798,36 @@ pub fn default_base_url(provider: &str) -> Option<&'static str> {
     match provider {
         "openai" => Some("https://api.openai.com/v1"),
         "anthropic" => Some("https://api.anthropic.com/v1"),
-        other => profiles::lookup(other).map(|profile| profile.base_url.as_str()),
+        "nvidia" => Some(crate::providers::nvidia::NVIDIA_BASE_URL),
+        "bedrock" => Some("https://bedrock-runtime.us-east-1.amazonaws.com"),
+        other => crate::providers::oauth::default_oauth_base_url(other)
+            .or_else(|| profiles::lookup(other).map(|profile| profile.base_url.as_str())),
     }
 }
 
 /// The canonical provider name and whether it speaks the Responses API by default.
 pub fn resolve_provider(name: &str) -> Option<(&'static str, bool)> {
-    match name.trim() {
+    let trimmed = name.trim();
+    match trimmed {
         "" | "auto" | "custom" => Some(("custom", false)),
         "openai" => Some(("openai", false)),
         "anthropic" => Some(("anthropic", false)),
+        other if crate::providers::nvidia::is_nvidia_provider(other) => Some(("nvidia", false)),
         other => {
-            profiles::lookup(other).map(|profile| (profile.name.as_str(), profile.uses_responses()))
+            let norm = other.to_ascii_lowercase().replace('_', "-");
+            if matches!(
+                norm.as_str(),
+                "bedrock" | "aws" | "aws-bedrock" | "amazon-bedrock" | "amazon"
+            ) {
+                return Some(("bedrock", false));
+            }
+            if matches!(norm.as_str(), "vertex" | "vertex-ai" | "google-vertex") {
+                return Some(("vertex", false));
+            }
+            crate::providers::oauth::resolve_oauth_provider(other).or_else(|| {
+                profiles::lookup(other)
+                    .map(|profile| (profile.name.as_str(), profile.uses_responses()))
+            })
         }
     }
 }
@@ -763,6 +856,7 @@ fn mcp_tool_call_timeout(config: &serde_yaml::Value) -> f64 {
 fn mcp_servers(
     config: &serde_yaml::Value,
     secrets: &HashMap<String, String>,
+    home: Option<&Path>,
 ) -> Vec<McpServerConfig> {
     let Some(entries) = config
         .get("mcp_servers")
@@ -795,7 +889,7 @@ fn mcp_servers(
                 (Some(_), None) => String::new(),
                 (None, None) => return None,
             };
-            let headers = entry
+            let mut headers: std::collections::BTreeMap<String, String> = entry
                 .get("headers")
                 .and_then(serde_yaml::Value::as_mapping)
                 .map(|headers| {
@@ -807,6 +901,17 @@ fn mcp_servers(
                         .collect()
                 })
                 .unwrap_or_default();
+            if url.is_some()
+                && !headers
+                    .keys()
+                    .any(|k| k.eq_ignore_ascii_case("authorization"))
+            {
+                if let Some(token) =
+                    home.and_then(|h| crate::providers::oauth::resolve_mcp_oauth_token(h, &name))
+                {
+                    headers.insert("Authorization".to_owned(), format!("Bearer {token}"));
+                }
+            }
             let args = entry
                 .get("args")
                 .and_then(serde_yaml::Value::as_sequence)
@@ -994,7 +1099,7 @@ mod mcp_tests {
         )
         .unwrap();
         let secrets = HashMap::from([("TOKEN".to_owned(), "t0".to_owned())]);
-        let servers = mcp_servers(&config, &secrets);
+        let servers = mcp_servers(&config, &secrets, None);
         assert_eq!(servers.len(), 2);
         let remote = &servers[1];
         assert_eq!(remote.url.as_deref(), Some("https://example.test/mcp"));
@@ -1657,7 +1762,7 @@ mod mcp_timeout_tests {
                 config["timeouts"] = case["timeouts"].clone();
             }
             let config: serde_yaml::Value = serde_yaml::to_value(&config).unwrap();
-            let servers = mcp_servers(&config, &HashMap::new());
+            let servers = mcp_servers(&config, &HashMap::new(), None);
             assert_eq!(
                 servers[0].timeout_secs,
                 case["resolved"].as_f64().unwrap(),

@@ -14,6 +14,7 @@ pub struct OpenAiProvider {
     api_key: String,
     max_attempts: u32,
     extras: super::Extras,
+    strip_tool_message_names: bool,
 }
 
 impl OpenAiProvider {
@@ -24,7 +25,14 @@ impl OpenAiProvider {
             api_key: api_key.to_owned(),
             max_attempts: 3,
             extras: super::Extras::default(),
+            strip_tool_message_names: false,
         })
+    }
+
+    /// Strip `name` and `tool_name` from `role: "tool"` messages (NVIDIA NIM strict schema).
+    pub fn with_strip_tool_message_names(mut self, enabled: bool) -> Self {
+        self.strip_tool_message_names = enabled;
+        self
     }
 
     /// Body fields and headers the configured endpoint adds to every request.
@@ -96,6 +104,9 @@ impl OpenAiProvider {
             .as_object()
             .cloned()
             .ok_or(ProviderError::InvalidRequest)?;
+        if self.strip_tool_message_names {
+            super::nvidia::rewrite_request_messages(&mut request);
+        }
         if with_extra_body {
             self.extras.merge_body(&mut request);
         }
@@ -199,11 +210,33 @@ pub(super) async fn open_stream(
     max_attempts: u32,
     authorize: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, ProviderError> {
+    let body = serde_json::to_vec(request).map_err(|_| ProviderError::InvalidRequest)?;
+    open_stream_bytes(client, endpoint, &body, max_attempts, |builder, _| {
+        authorize(builder)
+    })
+    .await
+}
+
+/// POST a pre-serialized JSON streaming request with retry on transient failures,
+/// giving `authorize` access to the exact wire payload bytes (used for AWS SigV4).
+pub(super) async fn open_stream_bytes(
+    client: &reqwest::Client,
+    endpoint: &str,
+    body: &[u8],
+    max_attempts: u32,
+    authorize: impl Fn(reqwest::RequestBuilder, &[u8]) -> reqwest::RequestBuilder,
+) -> Result<reqwest::Response, ProviderError> {
     let mut attempt = 1;
     loop {
         let last_attempt = attempt == max_attempts;
         let backoff = (2_u64 << (attempt - 1).min(5)).min(60);
-        let builder = authorize(client.post(endpoint).json(request));
+        let builder = authorize(
+            client
+                .post(endpoint)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body.to_vec()),
+            body,
+        );
         let delay = match builder.send().await {
             Ok(response) => {
                 let status = response.status().as_u16();

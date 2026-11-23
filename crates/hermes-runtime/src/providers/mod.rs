@@ -1,7 +1,11 @@
 pub mod anthropic;
+pub mod bedrock;
+pub mod nvidia;
+pub mod oauth;
 pub mod openai;
 pub mod profiles;
 pub mod responses;
+pub mod vertex;
 
 use hermes_core::sse::SseError;
 
@@ -53,6 +57,7 @@ pub struct Completion {
 }
 
 pub use anthropic::AnthropicProvider;
+pub use bedrock::BedrockProvider;
 pub use openai::OpenAiProvider;
 pub use responses::ResponsesProvider;
 
@@ -61,6 +66,7 @@ pub enum Provider {
     OpenAi(OpenAiProvider),
     Anthropic(AnthropicProvider),
     Responses(ResponsesProvider),
+    Bedrock(BedrockProvider),
 }
 
 /// What the configured endpoint adds to every request: body fields and headers. Header values
@@ -126,6 +132,7 @@ impl Provider {
             Self::OpenAi(provider) => provider.complete(request, on_text).await,
             Self::Anthropic(provider) => provider.complete(request, on_text).await,
             Self::Responses(provider) => provider.complete(request, on_text).await,
+            Self::Bedrock(provider) => provider.complete(request, on_text).await,
         }
     }
 }
@@ -144,6 +151,7 @@ impl Provider {
             Self::OpenAi(provider) => provider.complete_plain(request, on_text).await,
             Self::Anthropic(provider) => provider.complete_plain(request, on_text).await,
             Self::Responses(provider) => provider.complete_plain(request, on_text).await,
+            Self::Bedrock(provider) => provider.complete_plain(request, on_text).await,
         }
     }
 }
@@ -163,5 +171,11 @@ impl From<AnthropicProvider> for Provider {
 impl From<ResponsesProvider> for Provider {
     fn from(provider: ResponsesProvider) -> Self {
         Self::Responses(provider)
+    }
+}
+
+impl From<BedrockProvider> for Provider {
+    fn from(provider: BedrockProvider) -> Self {
+        Self::Bedrock(provider)
     }
 }

@@ -22,6 +22,8 @@ pub struct AnthropicProvider {
     api_key: String,
     max_attempts: u32,
     extras: super::Extras,
+    bearer_auth: bool,
+    oauth_identity: bool,
 }
 
 impl AnthropicProvider {
@@ -32,7 +34,22 @@ impl AnthropicProvider {
             api_key: api_key.to_owned(),
             max_attempts: 3,
             extras: super::Extras::default(),
+            bearer_auth: false,
+            oauth_identity: false,
         })
+    }
+
+    /// Use `Authorization: Bearer <token>` instead of `x-api-key` (e.g. MiniMax OAuth).
+    pub fn with_bearer_auth(mut self, enabled: bool) -> Self {
+        self.bearer_auth = enabled;
+        self
+    }
+
+    /// Enable Anthropic OAuth identity handling (Bearer auth, OAuth beta/CLI headers,
+    /// Claude Code system prefix, and `mcp__` tool wire-name remapping).
+    pub fn with_oauth_identity(mut self, enabled: bool) -> Self {
+        self.oauth_identity = enabled;
+        self
     }
 
     /// Body fields and headers the configured endpoint adds to every request.
@@ -82,16 +99,44 @@ impl AnthropicProvider {
         if with_extra_body {
             self.extras.merge_body(&mut request);
         }
+        let wire_map: std::collections::HashMap<String, String> = if self.oauth_identity {
+            apply_anthropic_oauth_request_transforms(&mut request)
+        } else {
+            std::collections::HashMap::new()
+        };
+        let oauth_beta_header = if self.oauth_identity {
+            let mut betas: Vec<&str> = super::oauth::ANTHROPIC_COMMON_BETAS.to_vec();
+            betas.extend_from_slice(super::oauth::ANTHROPIC_OAUTH_ONLY_BETAS);
+            Some(betas.join(","))
+        } else {
+            None
+        };
+        let oauth_user_agent = format!(
+            "claude-code/{} (external, cli)",
+            super::oauth::CLAUDE_CODE_VERSION_FALLBACK
+        );
         let mut response = open_stream(
             &self.client,
             &self.endpoint,
             &request,
             self.max_attempts,
             |builder| {
-                self.extras
+                let mut builder = self
+                    .extras
                     .apply_headers(builder)
-                    .header("x-api-key", &self.api_key)
-                    .header("anthropic-version", API_VERSION)
+                    .header("anthropic-version", API_VERSION);
+                if self.bearer_auth || self.oauth_identity {
+                    builder = builder.bearer_auth(&self.api_key);
+                } else {
+                    builder = builder.header("x-api-key", &self.api_key);
+                }
+                if let Some(beta) = oauth_beta_header.as_deref() {
+                    builder = builder
+                        .header("anthropic-beta", beta)
+                        .header("user-agent", &oauth_user_agent)
+                        .header("x-app", "cli");
+                }
+                builder
             },
         )
         .await?;
@@ -112,7 +157,14 @@ impl AnthropicProvider {
                         if block.get("type").and_then(Value::as_str) == Some("tool_use") {
                             let call = calls.entry(index(&event)?).or_default();
                             call.id = string(block, "id")?;
-                            call.name = string(block, "name")?;
+                            let raw_name = string(block, "name")?;
+                            call.name = if self.oauth_identity {
+                                super::oauth::anthropic_oauth_reverse_tool_name(
+                                    &raw_name, &wire_map,
+                                )
+                            } else {
+                                raw_name
+                            };
                         }
                     }
                     Some("content_block_delta") => {
@@ -237,6 +289,105 @@ fn string(value: &Value, key: &str) -> Result<String, ProviderError> {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or(ProviderError::InvalidEvent)
+}
+
+/// Apply Anthropic OAuth request transformations:
+/// 1. Prepend the Claude Code system identity block.
+/// 2. Remap tool names in `tools[]` and replayed `tool_use` blocks to OAuth wire names.
+///
+/// Returns the `original -> wire` map for reversing incoming response `tool_use` names.
+fn apply_anthropic_oauth_request_transforms(
+    request: &mut Map<String, Value>,
+) -> std::collections::HashMap<String, String> {
+    let prefix_block = json!({
+        "type": "text",
+        "text": super::oauth::CLAUDE_CODE_SYSTEM_PREFIX,
+    });
+    match request.get_mut("system") {
+        Some(Value::Array(blocks)) => {
+            let already_has = blocks
+                .first()
+                .and_then(|b| b.get("text"))
+                .and_then(Value::as_str)
+                == Some(super::oauth::CLAUDE_CODE_SYSTEM_PREFIX);
+            if !already_has {
+                blocks.insert(0, prefix_block);
+            }
+        }
+        Some(Value::String(text)) => {
+            let existing = text.clone();
+            let mut blocks = vec![prefix_block];
+            if !existing.is_empty() && existing != super::oauth::CLAUDE_CODE_SYSTEM_PREFIX {
+                blocks.push(json!({"type": "text", "text": existing}));
+            }
+            request.insert("system".into(), Value::Array(blocks));
+        }
+        _ => {
+            request.insert("system".into(), Value::Array(vec![prefix_block]));
+        }
+    }
+
+    let mut all_names: Vec<String> = Vec::new();
+    if let Some(tools) = request.get("tools").and_then(Value::as_array) {
+        for tool in tools {
+            if let Some(name) = tool.get("name").and_then(Value::as_str) {
+                all_names.push(name.to_owned());
+            }
+        }
+    }
+    if let Some(messages) = request.get("messages").and_then(Value::as_array) {
+        for msg in messages {
+            if let Some(blocks) = msg.get("content").and_then(Value::as_array) {
+                for block in blocks {
+                    if block.get("type").and_then(Value::as_str) == Some("tool_use") {
+                        if let Some(name) = block.get("name").and_then(Value::as_str) {
+                            all_names.push(name.to_owned());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let name_refs: Vec<&str> = all_names.iter().map(String::as_str).collect();
+    let wire_map = super::oauth::anthropic_oauth_wire_names(&name_refs);
+    if !wire_map.is_empty() {
+        if let Some(tools) = request.get_mut("tools").and_then(Value::as_array_mut) {
+            for tool in tools {
+                if let Some(name) = tool
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .and_then(|n| wire_map.get(n))
+                    .cloned()
+                {
+                    if let Some(obj) = tool.as_object_mut() {
+                        obj.insert("name".into(), Value::String(name));
+                    }
+                }
+            }
+        }
+        if let Some(messages) = request.get_mut("messages").and_then(Value::as_array_mut) {
+            for msg in messages {
+                if let Some(blocks) = msg.get_mut("content").and_then(Value::as_array_mut) {
+                    for block in blocks {
+                        if block.get("type").and_then(Value::as_str) == Some("tool_use") {
+                            if let Some(name) = block
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .and_then(|n| wire_map.get(n))
+                                .cloned()
+                            {
+                                if let Some(obj) = block.as_object_mut() {
+                                    obj.insert("name".into(), Value::String(name));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    wire_map
 }
 
 /// Convert an OpenAI chat-format request into a streaming Messages request.
