@@ -267,6 +267,8 @@ pub struct ChatRequest {
     clarify_timeout_secs: u32,
     #[serde(default)]
     mcp_servers: Vec<McpServerConfig>,
+    #[serde(default = "default_mcp_result_size_chars")]
+    mcp_result_size_chars: usize,
     #[serde(default)]
     web: WebSettings,
     #[serde(default)]
@@ -286,6 +288,10 @@ fn default_clarify_timeout() -> u32 {
 
 fn default_stall_guards() -> bool {
     true
+}
+
+fn default_mcp_result_size_chars() -> usize {
+    hermes_runtime::mcp_media::DEFAULT_MCP_RESULT_SIZE_CHARS
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -552,6 +558,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         terminal_env: settings.terminal_env,
         clarify_timeout_secs: settings.clarify_timeout_secs,
         mcp_servers: settings.mcp_servers,
+        mcp_result_size_chars: settings.mcp_result_size_chars,
         web: settings.web,
         browser: settings.browser,
         memory: settings.memory,
@@ -659,7 +666,12 @@ where
             emit(Event::Stdout(json_warning(warning)));
         }
     }
-    let (clients, warnings) = McpClients::start(&request.mcp_servers).await;
+    let (clients, warnings) = McpClients::start_with_options(
+        &request.mcp_servers,
+        home.map(Path::to_path_buf),
+        request.mcp_result_size_chars,
+    )
+    .await;
     for warning in warnings {
         if json_mode {
             emit(Event::Stdout(json_warning(&warning)));

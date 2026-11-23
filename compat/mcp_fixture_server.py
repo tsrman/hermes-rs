@@ -29,6 +29,12 @@ TOOLS = [
     ],
 ]
 
+if os.environ.get("HERMES_MCP_MEDIA") == "1":
+    TOOLS[1] += [
+        {"name": "png", "description": "Return valid PNG image.", "inputSchema": {"type": "object"}},
+        {"name": "huge", "description": "Return multi-line oversized output.", "inputSchema": {"type": "object"}},
+    ]
+
 
 EXTRA = os.environ.get("HERMES_MCP_EXTRA") == "1"
 if EXTRA:
@@ -94,6 +100,11 @@ def call(name, arguments):
                 "_meta": {"com.example/k": "v", "modelcontextprotocol.io/r": 1}}
     if name == "image":
         return {"content": [{"type": "image", "data": "AAAA", "mimeType": "image/png"}]}
+    if name == "png":
+        return {"content": [{"type": "image", "data": "iVBORw0KGgoAAAAAAAAAAAAAAAAAAAAA", "mimeType": "image/png"}]}
+    if name == "huge":
+        lines = "\n".join(f"row {i:04d} payload" for i in range(60)) + "\n"
+        return {"content": [{"type": "text", "text": lines}]}
     return {"isError": True, "content": [{"type": "text", "text": "unknown tool"}]}
 
 

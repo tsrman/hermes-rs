@@ -222,6 +222,31 @@ class Handler(BaseHTTPRequestHandler):
             call_id = f"mcp-resource-{steps}"
             function = ({"name": "mcp__fixture__list_resources", "arguments": "{}"} if steps == 0 else
                         {"name": "mcp__fixture__read_resource", "arguments": '{"uri":"mem://plain"}'})
+        elif scenario == "mcp_media_and_spillover":
+            tool_msgs = [m for m in messages if m.get("role") == "tool"]
+            steps = len(tool_msgs)
+            wants_tool = steps < 3
+            call_id = f"mcp-ms-{steps}"
+            if steps == 0:
+                function = {"name": "mcp__fixture__png", "arguments": "{}"}
+            elif steps == 1:
+                function = {"name": "mcp__fixture__huge", "arguments": "{}"}
+            elif steps == 2:
+                # Extract the persisted spillover path from step 1's <persisted-output> message
+                spill_msg = tool_msgs[1]["content"]
+                marker = "Full output saved to: "
+                path_line = next(
+                    line[len(marker):].strip()
+                    for line in spill_msg.splitlines()
+                    if line.startswith(marker)
+                )
+                function = {"name": "read_file", "arguments": json.dumps({"path": path_line, "offset": 55, "limit": 5})}
+        elif scenario == "mcp_sse_prompts":
+            steps = sum(message.get("role") == "tool" for message in messages)
+            wants_tool = steps < 2
+            call_id = f"mcp-sse-{steps}"
+            function = ({"name": "mcp__legacy__list_prompts", "arguments": "{}"} if steps == 0 else
+                        {"name": "mcp__legacy__get_prompt", "arguments": '{"name":"summarize","arguments":{"topic":"mcp"}}'})
         elif scenario == "mcp_old_name":
             # The name this port gave MCP tools before it followed the reference (`mcp__<server>__<tool>`).
             last_user = max(i for i, message in enumerate(messages) if message.get("role") == "user")
@@ -356,7 +381,7 @@ def main():
         "text", "tool", "partial_tool", "stall", "tool_retry", "tool_rate_limit",
         "fallback_after_tool", "fallback_auth", "partial_text", "disconnect_once",
         "iteration_limit", "iteration_summary_tool", "partial_after_tool", "stall_on_resume", "burst", "skill",
-        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "overflow_midturn", "pressure_midturn", "mcp", "mcp_resources", "mcp_old_name", "mcp_slow", "web", "memory", "cron_failure", "todo", "delegate", "code", "reply_secrets", "pressure_long", "pressure_summary_fail", "pressure_summary_grow", "stall_identical_calls", "stall_continue_intent", "stall_degenerate_final",
+        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "overflow_midturn", "pressure_midturn", "mcp", "mcp_resources", "mcp_media_and_spillover", "mcp_sse_prompts", "mcp_old_name", "mcp_slow", "web", "memory", "cron_failure", "todo", "delegate", "code", "reply_secrets", "pressure_long", "pressure_summary_fail", "pressure_summary_grow", "stall_identical_calls", "stall_continue_intent", "stall_degenerate_final",
     ), default="text")
     args = parser.parse_args()
     if bool(args.tls_cert) != bool(args.tls_key):

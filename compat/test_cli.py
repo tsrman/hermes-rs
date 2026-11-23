@@ -59,6 +59,8 @@ class CliTest(unittest.TestCase):
             "test_web_search_uses_the_configured_backend_and_hides_tools_without_one": "web",
             "test_mcp_streamable_http_tool_uses_profile_secrets": "mcp",
             "test_mcp_resources_are_listed_and_read_for_the_model": "mcp_resources",
+            "test_mcp_media_cache_and_spillover_are_readable_via_read_file": "mcp_media_and_spillover",
+            "test_mcp_legacy_sse_and_prompts_work_end_to_end": "mcp_sse_prompts",
             "test_a_history_with_the_old_mcp_names_resumes_and_a_repeated_old_call_is_unknown": "mcp_old_name",
             "test_cancelling_a_turn_stops_the_stdio_mcp_server": "mcp_slow",
             "test_cancelling_a_turn_cancels_the_http_mcp_call": "mcp_slow",
@@ -715,6 +717,7 @@ class CliTest(unittest.TestCase):
             stdout=subprocess.PIPE, text=True)
         self.addCleanup(server.wait)
         self.addCleanup(server.kill)
+        self.addCleanup(server.stdout.close)
         url = server.stdout.readline().strip()
         config = (f"mcp_servers:\n  fixture:\n    url: {url}\n    headers:\n"
                   "      Authorization: 'Bearer ${MCP_TOKEN}'\n")
@@ -741,6 +744,61 @@ class CliTest(unittest.TestCase):
         # The model gets the text the reference's handlers produce (Python's JSON separators).
         self.assertEqual(recorded[1]["messages"][-1]["content"], corpus["list_output"])
         self.assertEqual(recorded[2]["messages"][-1]["content"], corpus["reads"]["mem://plain"])
+
+    def test_mcp_media_cache_and_spillover_are_readable_via_read_file(self):
+        server = ROOT / "compat" / "mcp_fixture_server.py"
+        config = (
+            "tool_budget:\n  mcp_result_size_chars: 200\n"
+            f"mcp_servers:\n  fixture:\n    command: python3\n    args: ['-I', '{server}']\n"
+            "    env:\n      HERMES_MCP_MEDIA: '1'\n"
+        )
+        result, recorded = self.chat_with_profile(extra_config=config)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        tool_msgs = [m["content"] for m in recorded[-1]["messages"] if m["role"] == "tool"]
+        self.assertEqual(len(tool_msgs), 3)
+        # Step 0: PNG cached under <HERMES_HOME>/cache/images/ and returned as MEDIA:<path>.
+        png_res = json.loads(tool_msgs[0])["result"]
+        self.assertTrue(png_res.startswith("MEDIA:"), png_res)
+        img_path = Path(png_res.removeprefix("MEDIA:"))
+        self.assertTrue(img_path.exists())
+        self.assertEqual(img_path.parent, self.workdir / "hermes" / "cache" / "images")
+        self.assertTrue(img_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+        # Step 1: Oversized output spilled to <HERMES_HOME>/cache/spillover/mcp-ms-1.txt.
+        self.assertTrue(tool_msgs[1].startswith("<persisted-output>"), tool_msgs[1])
+        self.assertIn("cache/spillover/mcp-ms-1.txt", tool_msgs[1])
+        # Step 2: read_file paged through the spilled file outside workspace root.
+        read_res = json.loads(tool_msgs[2])
+        self.assertIn("55|row 0054 payload", read_res["content"])
+
+    def test_mcp_legacy_sse_and_prompts_work_end_to_end(self):
+        log = self.workdir / "sse-log.json"
+        server = subprocess.Popen(
+            ["python3", str(ROOT / "compat" / "mcp_sse_fixture_server.py"),
+             "--token", "sse-secret", "--log", str(log), "--prompts"],
+            stdout=subprocess.PIPE, text=True)
+        self.addCleanup(server.wait)
+        self.addCleanup(server.kill)
+        self.addCleanup(server.stdout.close)
+        url = server.stdout.readline().strip()
+        config = (
+            f"mcp_servers:\n  legacy:\n    url: {url}\n    transport: sse\n"
+            "    headers:\n      Authorization: 'Bearer ${SSE_TOKEN}'\n"
+        )
+        result, recorded = self.chat_with_profile(extra_config=config, dotenv="SSE_TOKEN=sse-secret\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        names = [tool["function"]["name"] for tool in recorded[0]["tools"]]
+        self.assertIn("mcp__legacy__list_prompts", names)
+        self.assertIn("mcp__legacy__get_prompt", names)
+        tool_msgs = [m["content"] for m in recorded[-1]["messages"] if m["role"] == "tool"]
+        self.assertEqual(len(tool_msgs), 2)
+        self.assertEqual(
+            [p["name"] for p in json.loads(tool_msgs[0])["prompts"]],
+            ["summarize", "bare"],
+        )
+        self.assertEqual(
+            tool_msgs[1],
+            '{"messages": [{"role": "user", "content": "Summarize mcp"}], "description": "Summary prompt"}',
+        )
 
     def test_a_history_with_the_old_mcp_names_resumes_and_a_repeated_old_call_is_unknown(self):
         # Sessions saved before the tools were named `mcp__<server>__<tool>` hold calls to

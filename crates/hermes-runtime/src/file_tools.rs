@@ -58,6 +58,9 @@ pub enum ApprovalDecision {
 pub(crate) struct FileWorkspace<'a> {
     root: &'a Path,
     profile: Option<PathBuf>,
+    /// Exact selected profile directory, whose `cache/spillover` and `cache/documents`
+    /// subtrees are readable (read-only) by `read_file` for spilled MCP results and blobs.
+    cache_home: Option<PathBuf>,
     observed: HashMap<PathBuf, Observation>,
     /// Misses per file, so a model that keeps retrying a patch is told to stop.
     patch_failures: HashMap<PathBuf, u32>,
@@ -102,8 +105,9 @@ impl Observation {
 
 impl<'a> FileWorkspace<'a> {
     pub(crate) fn new(root: &'a Path, profile: Option<&Path>) -> Self {
-        let profile = profile.map(|path| path.canonicalize().unwrap_or_else(|_| path.to_owned()));
-        let profile = profile.map(|path| {
+        let cache_home =
+            profile.map(|path| path.canonicalize().unwrap_or_else(|_| path.to_owned()));
+        let profile = cache_home.clone().map(|path| {
             // Named profiles live under <root>/profiles/<name>. Protect the
             // entire store, including the default and other named profiles.
             match path.parent() {
@@ -116,6 +120,7 @@ impl<'a> FileWorkspace<'a> {
         Self {
             root,
             profile,
+            cache_home,
             observed: HashMap::new(),
             patch_failures: HashMap::new(),
             search_repeat: (None, 0),
@@ -150,7 +155,7 @@ impl<'a> FileWorkspace<'a> {
             .filter(|value| *value > 0)
             .ok_or("Invalid limit")?
             .min(self.limits.max_lines as u64);
-        let (root, resolved) = match self.resolve(path) {
+        let (root, resolved) = match self.resolve_read(path) {
             Ok(found) => found,
             Err(error) if error.contains("No such file") => {
                 // A path that does not exist: name similar files, but only inside the workspace.
@@ -330,6 +335,39 @@ impl<'a> FileWorkspace<'a> {
             .map_err(|error| error.to_string())?;
         self.check_path(&root, &resolved)?;
         Ok((root, resolved))
+    }
+
+    /// Resolve a path for `read_file`: workspace files plus read-only access to the selected
+    /// profile's `cache/spillover` and `cache/documents` directories.
+    fn resolve_read(&self, path: &str) -> Result<(PathBuf, PathBuf), String> {
+        if let Some(found) = self.resolve_cache_read(path) {
+            return Ok(found);
+        }
+        self.resolve(path)
+    }
+
+    fn resolve_cache_read(&self, path: &str) -> Option<(PathBuf, PathBuf)> {
+        let requested = Path::new(path);
+        if !requested.is_absolute() {
+            return None;
+        }
+        let home = self.cache_home.as_ref()?;
+        let cache = home.join("cache");
+        let resolved = requested.canonicalize().ok()?;
+        for subdir in ["spillover", "documents"] {
+            let Ok(allowed) = cache.join(subdir).canonicalize() else {
+                continue;
+            };
+            if let Ok(rel) = resolved.strip_prefix(&allowed) {
+                if !rel.as_os_str().is_empty()
+                    && !rel.components().any(protected_component)
+                    && !requested.components().any(protected_component)
+                {
+                    return Some((allowed, resolved));
+                }
+            }
+        }
+        None
     }
 
     fn check_path(&self, root: &Path, path: &Path) -> Result<(), String> {
@@ -1023,5 +1061,77 @@ mod limit_tests {
             "{page}"
         );
         assert!(page.get("next_offset").is_some(), "{page}");
+    }
+
+    #[tokio::test]
+    async fn read_file_reads_spillover_and_document_caches_only_read_only() {
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let profile = tempfile::tempdir().unwrap();
+        let spill_dir = profile.path().join("cache").join("spillover");
+        let doc_dir = profile.path().join("cache").join("documents");
+        let img_dir = profile.path().join("cache").join("images");
+        std::fs::create_dir_all(&spill_dir).unwrap();
+        std::fs::create_dir_all(&doc_dir).unwrap();
+        std::fs::create_dir_all(&img_dir).unwrap();
+
+        let spill_file = spill_dir.join("call_1.txt");
+        let doc_file = doc_dir.join("doc_abc_report.txt");
+        let env_file = profile.path().join(".env");
+        let img_file = img_dir.join("img_1.png");
+        std::fs::write(&spill_file, "alpha\nbeta\ngamma\n").unwrap();
+        std::fs::write(&doc_file, "doc body\n").unwrap();
+        std::fs::write(&env_file, "SECRET=do-not-read\n").unwrap();
+        std::fs::write(&img_file, "not text").unwrap();
+
+        let mut workspace = FileWorkspace::new(workspace_dir.path(), Some(profile.path()));
+
+        // Allowed: read_file on spillover with offset/limit and on documents.
+        let read_spill = workspace.read(
+            &json!({"path": spill_file.display().to_string(), "offset": 2, "limit": 1}).to_string(),
+        );
+        assert_eq!(read_spill["total_lines"], 3, "{read_spill}");
+        assert!(read_spill["content"].as_str().unwrap().contains("2|beta"));
+
+        let read_doc = workspace.read(&json!({"path": doc_file.display().to_string()}).to_string());
+        assert!(
+            read_doc["content"].as_str().unwrap().contains("doc body"),
+            "{read_doc}"
+        );
+
+        // Denied: profile .env, traversal out of spillover, images dir, and any write_file.
+        let read_env = workspace.read(&json!({"path": env_file.display().to_string()}).to_string());
+        assert!(read_env["error"].is_string(), "expected error: {read_env}");
+
+        let traversal = spill_dir.join("..").join("..").join(".env");
+        let read_trav =
+            workspace.read(&json!({"path": traversal.display().to_string()}).to_string());
+        assert!(
+            read_trav["error"].is_string(),
+            "expected traversal error: {read_trav}"
+        );
+
+        let read_img = workspace.read(&json!({"path": img_file.display().to_string()}).to_string());
+        assert!(
+            read_img["error"].is_string(),
+            "expected image dir error: {read_img}"
+        );
+
+        let mut approve = |_: ApprovalRequest| async { ApprovalDecision::Approved };
+        let write_spill = workspace
+            .edit(
+                WRITE_FILE,
+                &json!({"path": spill_file.display().to_string(), "content": "hijack"}).to_string(),
+                Some(5),
+                &mut approve,
+            )
+            .await;
+        assert!(
+            write_spill["error"].is_string(),
+            "expected write refusal: {write_spill}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&spill_file).unwrap(),
+            "alpha\nbeta\ngamma\n"
+        );
     }
 }

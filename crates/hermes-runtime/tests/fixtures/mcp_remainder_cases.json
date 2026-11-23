@@ -1,0 +1,517 @@
+{
+  "image_sniff_cases": [
+    {
+      "label": "png",
+      "data_b64": "iVBORw0KGgoAAAAAAAAAAAAAAAAAAAAA",
+      "expected": true
+    },
+    {
+      "label": "jpeg",
+      "data_b64": "/9j/4AAAAAAAAAAAAAAAAA==",
+      "expected": true
+    },
+    {
+      "label": "gif87",
+      "data_b64": "R0lGODdhAAAAAAAAAAAAAA==",
+      "expected": true
+    },
+    {
+      "label": "gif89",
+      "data_b64": "R0lGODlhAAAAAAAAAAAAAA==",
+      "expected": true
+    },
+    {
+      "label": "bmp",
+      "data_b64": "Qk0AAAAAAAAAAAAAAAAAAA==",
+      "expected": true
+    },
+    {
+      "label": "webp",
+      "data_b64": "UklGRhAAAABXRUJQAAAAAA==",
+      "expected": true
+    },
+    {
+      "label": "heic",
+      "data_b64": "AAAAFGZ0eXBoZWljAAAAAA==",
+      "expected": false
+    },
+    {
+      "label": "avif",
+      "data_b64": "AAAAFGZ0eXBhdmlmAAAAAA==",
+      "expected": false
+    },
+    {
+      "label": "short_ftyp",
+      "data_b64": "AAAADGZ0eXBoZWlj",
+      "expected": false
+    },
+    {
+      "label": "html",
+      "data_b64": "PGh0bWw+PGJvZHk+NDA0PC9ib2R5PjwvaHRtbD4=",
+      "expected": false
+    },
+    {
+      "label": "short_3",
+      "data_b64": "AAAA",
+      "expected": false
+    },
+    {
+      "label": "riff_not_webp",
+      "data_b64": "UklGRhAAAABXQVZFAAAAAA==",
+      "expected": false
+    }
+  ],
+  "audio_sniff_cases": [
+    {
+      "label": "m4a_brand",
+      "data_b64": "AAAAFGZ0eXBNNEEgAAAAAA==",
+      "fallback": ".ogg",
+      "expected": ".m4a"
+    },
+    {
+      "label": "mp4_generic_maps_m4a",
+      "data_b64": "AAAAFGZ0eXBpc29tAAAAAA==",
+      "fallback": ".ogg",
+      "expected": ".m4a"
+    },
+    {
+      "label": "ogg",
+      "data_b64": "T2dnUwAC",
+      "fallback": ".wav",
+      "expected": ".ogg"
+    },
+    {
+      "label": "flac",
+      "data_b64": "ZkxhQwAA",
+      "fallback": ".ogg",
+      "expected": ".flac"
+    },
+    {
+      "label": "mp3_id3",
+      "data_b64": "SUQzAwA=",
+      "fallback": ".ogg",
+      "expected": ".mp3"
+    },
+    {
+      "label": "mp3_sync",
+      "data_b64": "//uQAA==",
+      "fallback": ".ogg",
+      "expected": ".mp3"
+    },
+    {
+      "label": "aac_adts",
+      "data_b64": "//FQgA==",
+      "fallback": ".ogg",
+      "expected": ".aac"
+    },
+    {
+      "label": "wav",
+      "data_b64": "UklGRiQAAABXQVZFZm10IA==",
+      "fallback": ".ogg",
+      "expected": ".wav"
+    },
+    {
+      "label": "webm",
+      "data_b64": "GkXfo59C",
+      "fallback": ".ogg",
+      "expected": ".webm"
+    },
+    {
+      "label": "unknown_wav_fallback",
+      "data_b64": "bm90LWF1ZGlvLWhlYWRlcg==",
+      "fallback": ".wav",
+      "expected": ".wav"
+    },
+    {
+      "label": "unknown_no_dot",
+      "data_b64": "bm90LWF1ZGlvLWhlYWRlcg==",
+      "fallback": "mp3",
+      "expected": ".mp3"
+    }
+  ],
+  "media_cases": [
+    {
+      "label": "png_image",
+      "wire": {
+        "content": [
+          {
+            "type": "image",
+            "data": "iVBORw0KGgoAAAAAAAAAAAAAAAAAAAAA",
+            "mimeType": "image/png"
+          }
+        ]
+      },
+      "expected": "{\"result\": \"MEDIA:<HOME>/cache/images/img_<HEX12>.png\"}"
+    },
+    {
+      "label": "jpeg_image",
+      "wire": {
+        "content": [
+          {
+            "type": "image",
+            "data": "/9j/4AAAAAAAAAAAAAAAAA==",
+            "mimeType": "image/jpeg; charset=utf-8"
+          }
+        ]
+      },
+      "expected": "{\"result\": \"MEDIA:<HOME>/cache/images/img_<HEX12>.jpg\"}"
+    },
+    {
+      "label": "non_image_rejected",
+      "wire": {
+        "content": [
+          {
+            "type": "image",
+            "data": "PGh0bWw+PGJvZHk+NDA0PC9ib2R5PjwvaHRtbD4=",
+            "mimeType": "image/png"
+          }
+        ]
+      },
+      "expected": "{\"result\": \"\"}"
+    },
+    {
+      "label": "bad_b64_image",
+      "wire": {
+        "content": [
+          {
+            "type": "image",
+            "data": "!!!not-base64!!!",
+            "mimeType": "image/png"
+          }
+        ]
+      },
+      "expected": "{\"result\": \"\"}"
+    },
+    {
+      "label": "wav_audio",
+      "wire": {
+        "content": [
+          {
+            "type": "audio",
+            "data": "UklGRiQAAABXQVZFZm10IA==",
+            "mimeType": "audio/wav"
+          }
+        ]
+      },
+      "expected": "{\"result\": \"MEDIA:<HOME>/cache/audio/audio_<HEX12>.wav\"}"
+    },
+    {
+      "label": "ogg_audio_with_wav_mime",
+      "wire": {
+        "content": [
+          {
+            "type": "audio",
+            "data": "T2dnUwAC",
+            "mimeType": "audio/wav"
+          }
+        ]
+      },
+      "expected": "{\"result\": \"MEDIA:<HOME>/cache/audio/audio_<HEX12>.ogg\"}"
+    },
+    {
+      "label": "unknown_audio_fallback",
+      "wire": {
+        "content": [
+          {
+            "type": "audio",
+            "data": "cmF3Ynl0ZXM=",
+            "mimeType": "audio/x-unknown"
+          }
+        ]
+      },
+      "expected": "{\"result\": \"MEDIA:<HOME>/cache/audio/audio_<HEX12>.ogg\"}"
+    },
+    {
+      "label": "embedded_blob",
+      "wire": {
+        "content": [
+          {
+            "type": "resource",
+            "resource": {
+              "uri": "file:///reports/q1.pdf",
+              "blob": "JVBERi0xLjQK",
+              "mimeType": "application/pdf"
+            }
+          }
+        ]
+      },
+      "expected": "{\"result\": \"[MCP resource saved to <HOME>/cache/documents/doc_<HEX12>_q1.pdf (application/pdf, 9 bytes) — read it with read_file or terminal tools]\"}"
+    },
+    {
+      "label": "embedded_blob_bad_b64",
+      "wire": {
+        "content": [
+          {
+            "type": "resource",
+            "resource": {
+              "uri": "file:///bad.bin",
+              "blob": "!!!",
+              "mimeType": "application/octet-stream"
+            }
+          }
+        ]
+      },
+      "expected": "{\"result\": \"[MCP resource saved to <HOME>/cache/documents/doc_<HEX12>_bad.bin (application/octet-stream, 0 bytes) — read it with read_file or terminal tools]\"}"
+    },
+    {
+      "label": "text_and_image",
+      "wire": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Screenshot taken"
+          },
+          {
+            "type": "image",
+            "data": "iVBORw0KGgoAAAAAAAAAAAAAAAAAAAAA",
+            "mimeType": "image/png"
+          }
+        ]
+      },
+      "expected": "{\"result\": \"Screenshot taken\\nMEDIA:<HOME>/cache/images/img_<HEX12>.png\"}"
+    }
+  ],
+  "filename_cases": [
+    {
+      "uri": "file:///reports/q1.pdf",
+      "mime": "application/pdf",
+      "expected": "q1.pdf"
+    },
+    {
+      "uri": "file:///a/b/../../etc/passwd",
+      "mime": "text/plain",
+      "expected": "passwd"
+    },
+    {
+      "uri": "https://example.test/dir/my%20file.txt?x=1",
+      "mime": "text/plain",
+      "expected": "my file.txt"
+    },
+    {
+      "uri": "file:///dir/bad\u0000\u0007\nname.bin",
+      "mime": "application/octet-stream",
+      "expected": "badname.bin"
+    },
+    {
+      "uri": "file:///",
+      "mime": "application/pdf",
+      "expected": "resource.pdf"
+    },
+    {
+      "uri": "mem://only-host",
+      "mime": "application/x-unknown-zzz",
+      "expected": "resource.bin"
+    },
+    {
+      "uri": "file:///aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+      "mime": "application/json",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json"
+    },
+    {
+      "uri": "file:///bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "mime": "application/octet-stream",
+      "expected": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "structured_cap_cases": [
+    {
+      "label": "structured_only_over_cap",
+      "cap": 200,
+      "wire": {
+        "content": [],
+        "structuredContent": {
+          "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      },
+      "expected": "{\"result\": \"{\\\"payload\\\": \\\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n... [MCP RESULT TRUNCATED - 115 chars omitted out of 315 total] ...\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\"}\"}"
+    },
+    {
+      "label": "structured_and_text_over_cap",
+      "cap": 200,
+      "wire": {
+        "content": [
+          {
+            "type": "text",
+            "text": "summary"
+          }
+        ],
+        "structuredContent": {
+          "payload": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      },
+      "expected": "{\"result\": \"summary\"}"
+    },
+    {
+      "label": "text_over_cap",
+      "cap": 200,
+      "wire": {
+        "content": [
+          {
+            "type": "text",
+            "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ]
+      },
+      "expected": "{\"result\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n\\n... [MCP RESULT TRUNCATED - 100 chars omitted out of 300 total] ...\\n\\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}"
+    }
+  ],
+  "pageable_cases": [
+    {
+      "label": "mcp_result_only",
+      "input": "{\"result\": \"line1\\nline2\\nline3\"}",
+      "expected": "line1\nline2\nline3"
+    },
+    {
+      "label": "mcp_result_with_structured_and_meta",
+      "input": "{\"result\": \"hello\\nworld\", \"structuredContent\": {\"k\": 1}, \"_meta\": {\"v\": \"ok\"}}",
+      "expected": "hello\nworld\n\n<mcp-result-metadata>\n{\n \"_meta\": {\n  \"v\": \"ok\"\n },\n \"structuredContent\": {\n  \"k\": 1\n }\n}\n</mcp-result-metadata>\n"
+    },
+    {
+      "label": "mcp_empty_result",
+      "input": "{\"result\": \"\", \"structuredContent\": {\"k\": 1}}",
+      "expected": "{\"result\": \"\", \"structuredContent\": {\"k\": 1}}"
+    },
+    {
+      "label": "plain_text",
+      "input": "just plain text",
+      "expected": "just plain text"
+    }
+  ],
+  "preview_cases": [
+    {
+      "label": "fits",
+      "text": "short text",
+      "max_chars": 50,
+      "preview": "short text",
+      "has_more": false
+    },
+    {
+      "label": "nl_second_half",
+      "text": "aaaa\nbbbb\ncccc\ndddd",
+      "max_chars": 12,
+      "preview": "aaaa\nbbbb\n",
+      "has_more": true
+    },
+    {
+      "label": "nl_first_half_only",
+      "text": "aa\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "max_chars": 20,
+      "preview": "aa\nbbbbbbbbbbbbbbbbb",
+      "has_more": true
+    },
+    {
+      "label": "no_nl",
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "max_chars": 10,
+      "preview": "xxxxxxxxxx",
+      "has_more": true
+    }
+  ],
+  "safe_id_cases": [
+    {
+      "raw_id": "call_123",
+      "expected": "call_123.txt"
+    },
+    {
+      "raw_id": "bad/id:with spaces!",
+      "expected": "bad_id_with_spaces_dc1e244b29b4.txt"
+    },
+    {
+      "raw_id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "expected": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_a09244d54a7e.txt"
+    },
+    {
+      "raw_id": "",
+      "expected": "tool_result.txt"
+    },
+    {
+      "raw_id": "...",
+      "expected": "tool_result_ab5df625bc76.txt"
+    }
+  ],
+  "spillover_example": {
+    "input": "{\"result\": \"row 0000 value\\nrow 0001 value\\nrow 0002 value\\nrow 0003 value\\nrow 0004 value\\nrow 0005 value\\nrow 0006 value\\nrow 0007 value\\nrow 0008 value\\nrow 0009 value\\nrow 0010 value\\nrow 0011 value\\nrow 0012 value\\nrow 0013 value\\nrow 0014 value\\nrow 0015 value\\nrow 0016 value\\nrow 0017 value\\nrow 0018 value\\nrow 0019 value\\nrow 0020 value\\nrow 0021 value\\nrow 0022 value\\nrow 0023 value\\nrow 0024 value\\nrow 0025 value\\nrow 0026 value\\nrow 0027 value\\nrow 0028 value\\nrow 0029 value\\nrow 0030 value\\nrow 0031 value\\nrow 0032 value\\nrow 0033 value\\nrow 0034 value\\nrow 0035 value\\nrow 0036 value\\nrow 0037 value\\nrow 0038 value\\nrow 0039 value\\nrow 0040 value\\nrow 0041 value\\nrow 0042 value\\nrow 0043 value\\nrow 0044 value\\nrow 0045 value\\nrow 0046 value\\nrow 0047 value\\nrow 0048 value\\nrow 0049 value\\nrow 0050 value\\nrow 0051 value\\nrow 0052 value\\nrow 0053 value\\nrow 0054 value\\nrow 0055 value\\nrow 0056 value\\nrow 0057 value\\nrow 0058 value\\nrow 0059 value\\nrow 0060 value\\nrow 0061 value\\nrow 0062 value\\nrow 0063 value\\nrow 0064 value\\nrow 0065 value\\nrow 0066 value\\nrow 0067 value\\nrow 0068 value\\nrow 0069 value\\nrow 0070 value\\nrow 0071 value\\nrow 0072 value\\nrow 0073 value\\nrow 0074 value\\nrow 0075 value\\nrow 0076 value\\nrow 0077 value\\nrow 0078 value\\nrow 0079 value\\nrow 0080 value\\nrow 0081 value\\nrow 0082 value\\nrow 0083 value\\nrow 0084 value\\nrow 0085 value\\nrow 0086 value\\nrow 0087 value\\nrow 0088 value\\nrow 0089 value\\nrow 0090 value\\nrow 0091 value\\nrow 0092 value\\nrow 0093 value\\nrow 0094 value\\nrow 0095 value\\nrow 0096 value\\nrow 0097 value\\nrow 0098 value\\nrow 0099 value\\nrow 0100 value\\nrow 0101 value\\nrow 0102 value\\nrow 0103 value\\nrow 0104 value\\nrow 0105 value\\nrow 0106 value\\nrow 0107 value\\nrow 0108 value\\nrow 0109 value\\nrow 0110 value\\nrow 0111 value\\nrow 0112 value\\nrow 0113 value\\nrow 0114 value\\nrow 0115 value\\nrow 0116 value\\nrow 0117 value\\nrow 0118 value\\nrow 0119 value\\nrow 0120 value\\nrow 0121 value\\nrow 0122 value\\nrow 0123 value\\nrow 0124 value\\nrow 0125 value\\nrow 0126 value\\nrow 0127 value\\nrow 0128 value\\nrow 0129 value\\nrow 0130 value\\nrow 0131 value\\nrow 0132 value\\nrow 0133 value\\nrow 0134 value\\nrow 0135 value\\nrow 0136 value\\nrow 0137 value\\nrow 0138 value\\nrow 0139 value\\nrow 0140 value\\nrow 0141 value\\nrow 0142 value\\nrow 0143 value\\nrow 0144 value\\nrow 0145 value\\nrow 0146 value\\nrow 0147 value\\nrow 0148 value\\nrow 0149 value\\nrow 0150 value\\nrow 0151 value\\nrow 0152 value\\nrow 0153 value\\nrow 0154 value\\nrow 0155 value\\nrow 0156 value\\nrow 0157 value\\nrow 0158 value\\nrow 0159 value\\nrow 0160 value\\nrow 0161 value\\nrow 0162 value\\nrow 0163 value\\nrow 0164 value\\nrow 0165 value\\nrow 0166 value\\nrow 0167 value\\nrow 0168 value\\nrow 0169 value\\nrow 0170 value\\nrow 0171 value\\nrow 0172 value\\nrow 0173 value\\nrow 0174 value\\nrow 0175 value\\nrow 0176 value\\nrow 0177 value\\nrow 0178 value\\nrow 0179 value\\nrow 0180 value\\nrow 0181 value\\nrow 0182 value\\nrow 0183 value\\nrow 0184 value\\nrow 0185 value\\nrow 0186 value\\nrow 0187 value\\nrow 0188 value\\nrow 0189 value\\nrow 0190 value\\nrow 0191 value\\nrow 0192 value\\nrow 0193 value\\nrow 0194 value\\nrow 0195 value\\nrow 0196 value\\nrow 0197 value\\nrow 0198 value\\nrow 0199 value\\nrow 0200 value\\nrow 0201 value\\nrow 0202 value\\nrow 0203 value\\nrow 0204 value\\nrow 0205 value\\nrow 0206 value\\nrow 0207 value\\nrow 0208 value\\nrow 0209 value\\nrow 0210 value\\nrow 0211 value\\nrow 0212 value\\nrow 0213 value\\nrow 0214 value\\nrow 0215 value\\nrow 0216 value\\nrow 0217 value\\nrow 0218 value\\nrow 0219 value\\nrow 0220 value\\nrow 0221 value\\nrow 0222 value\\nrow 0223 value\\nrow 0224 value\\nrow 0225 value\\nrow 0226 value\\nrow 0227 value\\nrow 0228 value\\nrow 0229 value\\nrow 0230 value\\nrow 0231 value\\nrow 0232 value\\nrow 0233 value\\nrow 0234 value\\nrow 0235 value\\nrow 0236 value\\nrow 0237 value\\nrow 0238 value\\nrow 0239 value\\nrow 0240 value\\nrow 0241 value\\nrow 0242 value\\nrow 0243 value\\nrow 0244 value\\nrow 0245 value\\nrow 0246 value\\nrow 0247 value\\nrow 0248 value\\nrow 0249 value\\nrow 0250 value\\nrow 0251 value\\nrow 0252 value\\nrow 0253 value\\nrow 0254 value\\nrow 0255 value\\nrow 0256 value\\nrow 0257 value\\nrow 0258 value\\nrow 0259 value\\nrow 0260 value\\nrow 0261 value\\nrow 0262 value\\nrow 0263 value\\nrow 0264 value\\nrow 0265 value\\nrow 0266 value\\nrow 0267 value\\nrow 0268 value\\nrow 0269 value\\nrow 0270 value\\nrow 0271 value\\nrow 0272 value\\nrow 0273 value\\nrow 0274 value\\nrow 0275 value\\nrow 0276 value\\nrow 0277 value\\nrow 0278 value\\nrow 0279 value\\nrow 0280 value\\nrow 0281 value\\nrow 0282 value\\nrow 0283 value\\nrow 0284 value\\nrow 0285 value\\nrow 0286 value\\nrow 0287 value\\nrow 0288 value\\nrow 0289 value\\nrow 0290 value\\nrow 0291 value\\nrow 0292 value\\nrow 0293 value\\nrow 0294 value\\nrow 0295 value\\nrow 0296 value\\nrow 0297 value\\nrow 0298 value\\nrow 0299 value\\nrow 0300 value\\nrow 0301 value\\nrow 0302 value\\nrow 0303 value\\nrow 0304 value\\nrow 0305 value\\nrow 0306 value\\nrow 0307 value\\nrow 0308 value\\nrow 0309 value\\nrow 0310 value\\nrow 0311 value\\nrow 0312 value\\nrow 0313 value\\nrow 0314 value\\nrow 0315 value\\nrow 0316 value\\nrow 0317 value\\nrow 0318 value\\nrow 0319 value\\nrow 0320 value\\nrow 0321 value\\nrow 0322 value\\nrow 0323 value\\nrow 0324 value\\nrow 0325 value\\nrow 0326 value\\nrow 0327 value\\nrow 0328 value\\nrow 0329 value\\nrow 0330 value\\nrow 0331 value\\nrow 0332 value\\nrow 0333 value\\nrow 0334 value\\nrow 0335 value\\nrow 0336 value\\nrow 0337 value\\nrow 0338 value\\nrow 0339 value\\nrow 0340 value\\nrow 0341 value\\nrow 0342 value\\nrow 0343 value\\nrow 0344 value\\nrow 0345 value\\nrow 0346 value\\nrow 0347 value\\nrow 0348 value\\nrow 0349 value\\nrow 0350 value\\nrow 0351 value\\nrow 0352 value\\nrow 0353 value\\nrow 0354 value\\nrow 0355 value\\nrow 0356 value\\nrow 0357 value\\nrow 0358 value\\nrow 0359 value\\nrow 0360 value\\nrow 0361 value\\nrow 0362 value\\nrow 0363 value\\nrow 0364 value\\nrow 0365 value\\nrow 0366 value\\nrow 0367 value\\nrow 0368 value\\nrow 0369 value\\nrow 0370 value\\nrow 0371 value\\nrow 0372 value\\nrow 0373 value\\nrow 0374 value\\nrow 0375 value\\nrow 0376 value\\nrow 0377 value\\nrow 0378 value\\nrow 0379 value\\nrow 0380 value\\nrow 0381 value\\nrow 0382 value\\nrow 0383 value\\nrow 0384 value\\nrow 0385 value\\nrow 0386 value\\nrow 0387 value\\nrow 0388 value\\nrow 0389 value\\nrow 0390 value\\nrow 0391 value\\nrow 0392 value\\nrow 0393 value\\nrow 0394 value\\nrow 0395 value\\nrow 0396 value\\nrow 0397 value\\nrow 0398 value\\nrow 0399 value\\n\", \"_meta\": {\"src\": \"fx\"}}",
+    "threshold": 1000,
+    "preview_size": 200,
+    "tool_call_id": "call-spill-1",
+    "message": "<persisted-output>\nThis tool result was too large (6,080 characters, 5.9 KB).\nFull output saved to: <HOME>/cache/spillover/call-spill-1.txt\nUse the read_file tool with offset and limit to access specific sections of this output.\nRecovery: page through the saved file with read_file (offset/limit) or process it with execute_code — do NOT re-request the same data from the remote API; the archive is kept while this session's transcript references it. If it is missing, inspect the current state before retrying — the call that produced it may already have taken effect.\n\nPreview (first 195 chars):\nrow 0000 value\nrow 0001 value\nrow 0002 value\nrow 0003 value\nrow 0004 value\nrow 0005 value\nrow 0006 value\nrow 0007 value\nrow 0008 value\nrow 0009 value\nrow 0010 value\nrow 0011 value\nrow 0012 value\n\n...\n</persisted-output>",
+    "spilled_body": "row 0000 value\nrow 0001 value\nrow 0002 value\nrow 0003 value\nrow 0004 value\nrow 0005 value\nrow 0006 value\nrow 0007 value\nrow 0008 value\nrow 0009 value\nrow 0010 value\nrow 0011 value\nrow 0012 value\nrow 0013 value\nrow 0014 value\nrow 0015 value\nrow 0016 value\nrow 0017 value\nrow 0018 value\nrow 0019 value\nrow 0020 value\nrow 0021 value\nrow 0022 value\nrow 0023 value\nrow 0024 value\nrow 0025 value\nrow 0026 value\nrow 0027 value\nrow 0028 value\nrow 0029 value\nrow 0030 value\nrow 0031 value\nrow 0032 value\nrow 0033 value\nrow 0034 value\nrow 0035 value\nrow 0036 value\nrow 0037 value\nrow 0038 value\nrow 0039 value\nrow 0040 value\nrow 0041 value\nrow 0042 value\nrow 0043 value\nrow 0044 value\nrow 0045 value\nrow 0046 value\nrow 0047 value\nrow 0048 value\nrow 0049 value\nrow 0050 value\nrow 0051 value\nrow 0052 value\nrow 0053 value\nrow 0054 value\nrow 0055 value\nrow 0056 value\nrow 0057 value\nrow 0058 value\nrow 0059 value\nrow 0060 value\nrow 0061 value\nrow 0062 value\nrow 0063 value\nrow 0064 value\nrow 0065 value\nrow 0066 value\nrow 0067 value\nrow 0068 value\nrow 0069 value\nrow 0070 value\nrow 0071 value\nrow 0072 value\nrow 0073 value\nrow 0074 value\nrow 0075 value\nrow 0076 value\nrow 0077 value\nrow 0078 value\nrow 0079 value\nrow 0080 value\nrow 0081 value\nrow 0082 value\nrow 0083 value\nrow 0084 value\nrow 0085 value\nrow 0086 value\nrow 0087 value\nrow 0088 value\nrow 0089 value\nrow 0090 value\nrow 0091 value\nrow 0092 value\nrow 0093 value\nrow 0094 value\nrow 0095 value\nrow 0096 value\nrow 0097 value\nrow 0098 value\nrow 0099 value\nrow 0100 value\nrow 0101 value\nrow 0102 value\nrow 0103 value\nrow 0104 value\nrow 0105 value\nrow 0106 value\nrow 0107 value\nrow 0108 value\nrow 0109 value\nrow 0110 value\nrow 0111 value\nrow 0112 value\nrow 0113 value\nrow 0114 value\nrow 0115 value\nrow 0116 value\nrow 0117 value\nrow 0118 value\nrow 0119 value\nrow 0120 value\nrow 0121 value\nrow 0122 value\nrow 0123 value\nrow 0124 value\nrow 0125 value\nrow 0126 value\nrow 0127 value\nrow 0128 value\nrow 0129 value\nrow 0130 value\nrow 0131 value\nrow 0132 value\nrow 0133 value\nrow 0134 value\nrow 0135 value\nrow 0136 value\nrow 0137 value\nrow 0138 value\nrow 0139 value\nrow 0140 value\nrow 0141 value\nrow 0142 value\nrow 0143 value\nrow 0144 value\nrow 0145 value\nrow 0146 value\nrow 0147 value\nrow 0148 value\nrow 0149 value\nrow 0150 value\nrow 0151 value\nrow 0152 value\nrow 0153 value\nrow 0154 value\nrow 0155 value\nrow 0156 value\nrow 0157 value\nrow 0158 value\nrow 0159 value\nrow 0160 value\nrow 0161 value\nrow 0162 value\nrow 0163 value\nrow 0164 value\nrow 0165 value\nrow 0166 value\nrow 0167 value\nrow 0168 value\nrow 0169 value\nrow 0170 value\nrow 0171 value\nrow 0172 value\nrow 0173 value\nrow 0174 value\nrow 0175 value\nrow 0176 value\nrow 0177 value\nrow 0178 value\nrow 0179 value\nrow 0180 value\nrow 0181 value\nrow 0182 value\nrow 0183 value\nrow 0184 value\nrow 0185 value\nrow 0186 value\nrow 0187 value\nrow 0188 value\nrow 0189 value\nrow 0190 value\nrow 0191 value\nrow 0192 value\nrow 0193 value\nrow 0194 value\nrow 0195 value\nrow 0196 value\nrow 0197 value\nrow 0198 value\nrow 0199 value\nrow 0200 value\nrow 0201 value\nrow 0202 value\nrow 0203 value\nrow 0204 value\nrow 0205 value\nrow 0206 value\nrow 0207 value\nrow 0208 value\nrow 0209 value\nrow 0210 value\nrow 0211 value\nrow 0212 value\nrow 0213 value\nrow 0214 value\nrow 0215 value\nrow 0216 value\nrow 0217 value\nrow 0218 value\nrow 0219 value\nrow 0220 value\nrow 0221 value\nrow 0222 value\nrow 0223 value\nrow 0224 value\nrow 0225 value\nrow 0226 value\nrow 0227 value\nrow 0228 value\nrow 0229 value\nrow 0230 value\nrow 0231 value\nrow 0232 value\nrow 0233 value\nrow 0234 value\nrow 0235 value\nrow 0236 value\nrow 0237 value\nrow 0238 value\nrow 0239 value\nrow 0240 value\nrow 0241 value\nrow 0242 value\nrow 0243 value\nrow 0244 value\nrow 0245 value\nrow 0246 value\nrow 0247 value\nrow 0248 value\nrow 0249 value\nrow 0250 value\nrow 0251 value\nrow 0252 value\nrow 0253 value\nrow 0254 value\nrow 0255 value\nrow 0256 value\nrow 0257 value\nrow 0258 value\nrow 0259 value\nrow 0260 value\nrow 0261 value\nrow 0262 value\nrow 0263 value\nrow 0264 value\nrow 0265 value\nrow 0266 value\nrow 0267 value\nrow 0268 value\nrow 0269 value\nrow 0270 value\nrow 0271 value\nrow 0272 value\nrow 0273 value\nrow 0274 value\nrow 0275 value\nrow 0276 value\nrow 0277 value\nrow 0278 value\nrow 0279 value\nrow 0280 value\nrow 0281 value\nrow 0282 value\nrow 0283 value\nrow 0284 value\nrow 0285 value\nrow 0286 value\nrow 0287 value\nrow 0288 value\nrow 0289 value\nrow 0290 value\nrow 0291 value\nrow 0292 value\nrow 0293 value\nrow 0294 value\nrow 0295 value\nrow 0296 value\nrow 0297 value\nrow 0298 value\nrow 0299 value\nrow 0300 value\nrow 0301 value\nrow 0302 value\nrow 0303 value\nrow 0304 value\nrow 0305 value\nrow 0306 value\nrow 0307 value\nrow 0308 value\nrow 0309 value\nrow 0310 value\nrow 0311 value\nrow 0312 value\nrow 0313 value\nrow 0314 value\nrow 0315 value\nrow 0316 value\nrow 0317 value\nrow 0318 value\nrow 0319 value\nrow 0320 value\nrow 0321 value\nrow 0322 value\nrow 0323 value\nrow 0324 value\nrow 0325 value\nrow 0326 value\nrow 0327 value\nrow 0328 value\nrow 0329 value\nrow 0330 value\nrow 0331 value\nrow 0332 value\nrow 0333 value\nrow 0334 value\nrow 0335 value\nrow 0336 value\nrow 0337 value\nrow 0338 value\nrow 0339 value\nrow 0340 value\nrow 0341 value\nrow 0342 value\nrow 0343 value\nrow 0344 value\nrow 0345 value\nrow 0346 value\nrow 0347 value\nrow 0348 value\nrow 0349 value\nrow 0350 value\nrow 0351 value\nrow 0352 value\nrow 0353 value\nrow 0354 value\nrow 0355 value\nrow 0356 value\nrow 0357 value\nrow 0358 value\nrow 0359 value\nrow 0360 value\nrow 0361 value\nrow 0362 value\nrow 0363 value\nrow 0364 value\nrow 0365 value\nrow 0366 value\nrow 0367 value\nrow 0368 value\nrow 0369 value\nrow 0370 value\nrow 0371 value\nrow 0372 value\nrow 0373 value\nrow 0374 value\nrow 0375 value\nrow 0376 value\nrow 0377 value\nrow 0378 value\nrow 0379 value\nrow 0380 value\nrow 0381 value\nrow 0382 value\nrow 0383 value\nrow 0384 value\nrow 0385 value\nrow 0386 value\nrow 0387 value\nrow 0388 value\nrow 0389 value\nrow 0390 value\nrow 0391 value\nrow 0392 value\nrow 0393 value\nrow 0394 value\nrow 0395 value\nrow 0396 value\nrow 0397 value\nrow 0398 value\nrow 0399 value\n\n\n<mcp-result-metadata>\n{\n \"_meta\": {\n  \"src\": \"fx\"\n }\n}\n</mcp-result-metadata>\n",
+    "inline_fallback": "prev\n\n[Truncated: tool response was 12,345 chars. Full output could not be saved to sandbox.]"
+  },
+  "prompts": {
+    "schemas": [
+      {
+        "key": "list_prompts",
+        "description": "List available prompts from MCP server '{server}'",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "key": "get_prompt",
+        "description": "Get a prompt by name from MCP server '{server}'",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Name of the prompt to retrieve"
+            },
+            "arguments": {
+              "type": "object",
+              "description": "Optional arguments to pass to the prompt",
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "name"
+          ]
+        }
+      }
+    ],
+    "list_wire": [
+      {
+        "name": "summarize",
+        "description": "Summarize x󠁁y",
+        "arguments": [
+          {
+            "name": "topic",
+            "description": "Topic x󠁁y",
+            "required": true
+          },
+          {
+            "name": "tone",
+            "required": false
+          }
+        ]
+      },
+      {
+        "name": "bare"
+      }
+    ],
+    "list_output": "{\"prompts\": [{\"name\": \"summarize\", \"description\": \"Summarize xy\", \"arguments\": [{\"name\": \"topic\", \"description\": \"Topic xy\", \"required\": true}, {\"name\": \"tone\", \"required\": false}]}, {\"name\": \"bare\"}]}",
+    "get_wire": {
+      "description": "Prompt desc x󠁁y",
+      "messages": [
+        {
+          "role": "user",
+          "content": {
+            "type": "text",
+            "text": "Hello x󠁁y"
+          }
+        },
+        {
+          "role": "assistant",
+          "content": {
+            "type": "text",
+            "text": "Ready"
+          }
+        }
+      ],
+      "resultType": "complete"
+    },
+    "get_output": "{\"messages\": [{\"role\": \"user\", \"content\": \"Hello xy\"}, {\"role\": \"assistant\", \"content\": \"Ready\"}], \"description\": \"Prompt desc xy\"}"
+  }
+}

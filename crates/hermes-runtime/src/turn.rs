@@ -802,7 +802,12 @@ where
                 answer
             } else if mcp_tool.is_some() {
                 match options.mcp {
-                    Some(mcp) => mcp.lock().await.call(&name, &arguments).await,
+                    Some(mcp) => {
+                        mcp.lock()
+                            .await
+                            .call_with_id(&name, &arguments, &call.id)
+                            .await
+                    }
                     None => json!({"error": format!("Unknown tool: {name}")}),
                 }
             } else if let Some(tool) = if through_bridge {

@@ -18,6 +18,7 @@ mod file_tools;
 mod fuzzy;
 pub mod journal;
 pub mod mcp;
+pub mod mcp_media;
 pub mod memory_tool;
 #[cfg(unix)]
 pub mod process;

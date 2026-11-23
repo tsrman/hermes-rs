@@ -20,9 +20,11 @@ fn config(name: &str, timeout_secs: u64) -> McpServerConfig {
         env: BTreeMap::new(),
         url: None,
         headers: BTreeMap::new(),
+        transport: None,
         timeout_secs: timeout_secs as f64,
         connect_timeout_secs: 10,
         resources: true,
+        prompts: true,
     }
 }
 
@@ -65,8 +67,8 @@ async fn lists_paginated_tools_and_returns_results() {
     let failed = parsed(clients.call("mcp__my_server__fail", "").await);
     assert_eq!(failed, json!({"error": "tool failed"}));
     let image = parsed(clients.call("mcp__my_server__image", "{}").await);
-    assert_eq!(image, json!({"result": "[image content omitted]"}));
-    let invalid = clients.call("mcp__my_server__echo", "[1]").await;
+    assert_eq!(image, json!({"result": ""}));
+    let invalid = parsed(clients.call("mcp__my_server__echo", "[1]").await);
     assert!(invalid["error"].is_string());
     clients.shutdown().await;
 }

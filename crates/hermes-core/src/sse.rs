@@ -6,10 +6,17 @@ pub enum SseError {
     IncompleteEvent,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SseEvent {
+    pub event: Option<String>,
+    pub data: String,
+}
+
 #[derive(Default)]
 pub struct SseDecoder {
     line: Vec<u8>,
     data: Vec<String>,
+    pending_event: Option<String>,
     skip_lf: bool,
     /// The `id` field of the event being read; it takes effect when the event ends.
     pending_id: Option<String>,
@@ -24,6 +31,14 @@ impl SseDecoder {
     }
 
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<String>, SseError> {
+        Ok(self
+            .push_events(bytes)?
+            .into_iter()
+            .map(|ev| ev.data)
+            .collect())
+    }
+
+    pub fn push_events(&mut self, bytes: &[u8]) -> Result<Vec<SseEvent>, SseError> {
         let mut events = Vec::new();
         for &byte in bytes {
             if self.skip_lf {
@@ -62,7 +77,7 @@ impl SseDecoder {
         self.retry_ms
     }
 
-    fn consume_line(&mut self, events: &mut Vec<String>) -> Result<(), SseError> {
+    fn consume_line(&mut self, events: &mut Vec<SseEvent>) -> Result<(), SseError> {
         let line = std::str::from_utf8(&self.line).map_err(|_| SseError::InvalidUtf8)?;
         if line.is_empty() {
             if let Some(id) = self.pending_id.take().filter(|id| !id.is_empty()) {
@@ -71,8 +86,12 @@ impl SseDecoder {
             if let Some(retry) = self.pending_retry.take() {
                 self.retry_ms = Some(retry);
             }
+            let event = self.pending_event.take();
             if !self.data.is_empty() {
-                events.push(self.data.join("\n"));
+                events.push(SseEvent {
+                    event,
+                    data: self.data.join("\n"),
+                });
                 self.data.clear();
             }
         } else if !line.starts_with(':') {
@@ -80,6 +99,7 @@ impl SseDecoder {
             let value = value.strip_prefix(' ').unwrap_or(value);
             match field {
                 "data" => self.data.push(value.to_owned()),
+                "event" => self.pending_event = Some(value.to_owned()),
                 "id" if !value.contains('\0') => self.pending_id = Some(value.to_owned()),
                 "retry" if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) => {
                     self.pending_retry = value.parse().ok();

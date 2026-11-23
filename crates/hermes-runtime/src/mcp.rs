@@ -1,29 +1,35 @@
-//! MCP client over stdio and Streamable HTTP.
+//! MCP client over stdio, Streamable HTTP, and legacy HTTP+SSE.
 //!
 //! Follows `tools/mcp_tool*.py` and the `mcp` SDK it calls (2.3.0), as recorded by
-//! `compat/create_mcp_corpus.py`:
+//! `compat/create_mcp_corpus.py` and `compat/create_mcp_remainder_corpus.py`:
 //!
 //! * a call that is abandoned (its turn is cancelled, or its time runs out) sends
 //!   `notifications/cancelled` with `{requestId, reason: "caller cancelled"}`; `initialize` never does;
 //! * a Streamable HTTP request that gets a 404 for a session the client holds fails with
 //!   "Session terminated". The server is then initialized again and tools are listed again. A
-//!   tool with `readOnlyHint: true` and the resource tools are retried once; any other tool is
-//!   not, because it may have run, and the model gets an `outcome_uncertain` error instead;
+//!   tool with `readOnlyHint: true` and the resource/prompt tools are retried once; any other
+//!   tool is not, because it may have run, and the model gets an `outcome_uncertain` error instead;
 //! * an event stream that ends before the answer is resumed with a GET and `Last-Event-ID`
 //!   (the `retry` field or one second apart, two failed attempts in a row end the call);
-//! * a server that advertises `resources` (and has not turned them off with `tools.resources`)
-//!   gets `mcp__<server>__list_resources` and `mcp__<server>__read_resource`;
+//! * legacy HTTP+SSE (`transport: sse`) connects with GET, validates same-origin `event: endpoint`,
+//!   and exchanges JSON-RPC requests via POST + SSE responses;
+//! * a server that advertises `resources` (unless `tools.resources: false`) gets
+//!   `mcp__<server>__list_resources` and `mcp__<server>__read_resource`; one that advertises
+//!   `prompts` (unless `tools.prompts: false`) gets `mcp__<server>__list_prompts` and
+//!   `mcp__<server>__get_prompt`;
 //! * every tool is named `mcp__<server>__<tool>` (`mcp_prefixed_tool_name`), the 64-character
 //!   limit of the providers is kept with a hash suffix, and a name two tools of one server share
 //!   after sanitising is given to neither;
 //! * a call answers with the text `_render_call_tool_result` makes (`json.dumps` separators,
-//!   `structuredContent`, `_meta`, `isError`), and is given 300 s unless `timeout` or
-//!   `timeouts.mcp.tool_call` says otherwise.
+//!   `structuredContent` + 2M hard cap, `_meta`, `isError`, `MEDIA:` image/audio cache,
+//!   embedded binary document cache, disk spillover `<persisted-output>`), and is given 300 s
+//!   unless `timeout` or `timeouts.mcp.tool_call` says otherwise.
 //!
-//! Not ported: prompts and event utilities, OAuth, sampling, elicitation, the SSE transport,
-//! the circuit breaker, stdio respawn, and saving binary resources to a document cache.
+//! Not ported (deferred): OAuth (grouped with provider OAuth), sampling, elicitation,
+//! event subscriptions, the circuit breaker, and stdio respawn.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -33,15 +39,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 
+use crate::mcp_media::{
+    cache_mcp_audio_block, cache_mcp_image_block, cache_mcp_resource_blob,
+    maybe_persist_mcp_result, DEFAULT_MCP_RESULT_SIZE_CHARS, DEFAULT_PREVIEW_SIZE_CHARS,
+};
 use crate::session_search::py_json_dumps;
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const MAX_LINE_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_RESULT_BYTES: usize = 100_000;
 /// The longest time the reference hands to a platform wait (`MAX_SAFE_TIMEOUT_S`, one year).
 pub const MAX_TIMEOUT_SECS: f64 = 31_536_000.0;
 /// What a tool call may take when neither the server nor `timeouts.mcp.tool_call` says (`_DEFAULT_TOOL_TIMEOUT`).
@@ -90,17 +99,23 @@ pub struct McpServerConfig {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
-    /// Streamable HTTP endpoint.
+    /// Streamable HTTP or legacy SSE endpoint.
     #[serde(default)]
     pub url: Option<String>,
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
+    /// Optional explicit transport (`"sse"` selects legacy HTTP+SSE instead of Streamable HTTP).
+    #[serde(default)]
+    pub transport: Option<String>,
     /// The time a tool call may take (the reference's `tool_timeout`), in seconds.
     pub timeout_secs: f64,
     pub connect_timeout_secs: u64,
     /// `tools.resources`: offer the resource tools of a server that advertises resources.
     #[serde(default = "enabled")]
     pub resources: bool,
+    /// `tools.prompts`: offer the prompt tools of a server that advertises prompts.
+    #[serde(default = "enabled")]
+    pub prompts: bool,
 }
 
 /// Why a request failed. The variant decides the text the model sees, as the reference's
@@ -430,10 +445,11 @@ async fn finish(
     }
 }
 
-/// A server reached over stdio or Streamable HTTP.
+/// A server reached over stdio, Streamable HTTP, or legacy HTTP+SSE.
 enum Transport {
     Stdio(Connection),
     Http(HttpConnection),
+    Sse(SseConnection),
 }
 
 impl Transport {
@@ -446,6 +462,7 @@ impl Transport {
         match self {
             Self::Stdio(connection) => connection.request(method, params, limit).await,
             Self::Http(connection) => connection.request(method, params, limit).await,
+            Self::Sse(connection) => connection.request(method, params, limit).await,
         }
     }
 
@@ -454,10 +471,11 @@ impl Transport {
         match self {
             Self::Stdio(connection) => connection.send(&message).await,
             Self::Http(connection) => connection.post(&message, limit).await.map(|_| ()),
+            Self::Sse(connection) => connection.post(&message, limit).await,
         }
     }
 
-    /// Close stdin and give a process a moment to exit, or end the HTTP session.
+    /// Close stdin and give a process a moment to exit, or end the HTTP/SSE session.
     async fn close(&mut self) {
         match self {
             Self::Stdio(connection) => {
@@ -469,6 +487,10 @@ impl Transport {
             Self::Http(connection) => {
                 flush_cancellations().await;
                 connection.end_session().await;
+            }
+            Self::Sse(connection) => {
+                flush_cancellations().await;
+                connection.close();
             }
         }
     }
@@ -500,32 +522,40 @@ enum StreamEnd {
     Broke,
 }
 
+fn build_http_client(
+    config: &McpServerConfig,
+    url: &str,
+) -> Result<(reqwest::Url, reqwest::Client, reqwest::header::HeaderMap), String> {
+    use reqwest::header::{HeaderName, HeaderValue};
+
+    let parsed = reqwest::Url::parse(url).map_err(|_| "invalid server URL".to_owned())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("server URL must use http or https".into());
+    }
+    let mut headers = reqwest::header::HeaderMap::new();
+    for (name, value) in &config.headers {
+        let name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| format!("invalid header name {name:?}"))?;
+        let mut value =
+            HeaderValue::from_str(value).map_err(|_| format!("invalid value for header {name}"))?;
+        // Keep credentials out of debug output.
+        value.set_sensitive(true);
+        headers.insert(name, value);
+    }
+    let client = reqwest::Client::builder()
+        .use_rustls_tls()
+        .tls_built_in_root_certs(false)
+        .tls_built_in_native_certs(true)
+        // A redirect would forward the configured headers to another origin.
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| format!("cannot create HTTP client: {}", error.without_url()))?;
+    Ok((parsed, client, headers))
+}
+
 impl HttpConnection {
     fn new(config: &McpServerConfig, url: &str) -> Result<Self, String> {
-        use reqwest::header::{HeaderName, HeaderValue};
-
-        let parsed = reqwest::Url::parse(url).map_err(|_| "invalid server URL".to_owned())?;
-        if !matches!(parsed.scheme(), "http" | "https") {
-            return Err("server URL must use http or https".into());
-        }
-        let mut headers = reqwest::header::HeaderMap::new();
-        for (name, value) in &config.headers {
-            let name = HeaderName::from_bytes(name.as_bytes())
-                .map_err(|_| format!("invalid header name {name:?}"))?;
-            let mut value = HeaderValue::from_str(value)
-                .map_err(|_| format!("invalid value for header {name}"))?;
-            // Keep credentials out of debug output.
-            value.set_sensitive(true);
-            headers.insert(name, value);
-        }
-        let client = reqwest::Client::builder()
-            .use_rustls_tls()
-            .tls_built_in_root_certs(false)
-            .tls_built_in_native_certs(true)
-            // A redirect would forward the configured headers to another origin.
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|error| format!("cannot create HTTP client: {}", error.without_url()))?;
+        let (_parsed, client, headers) = build_http_client(config, url)?;
         Ok(Self {
             client,
             url: url.to_owned(),
@@ -839,11 +869,287 @@ impl HttpConnection {
     }
 }
 
+type SsePending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, RpcError>>>>>;
+
+/// Legacy MCP HTTP+SSE connection (MCP 2024-11-05): one long-lived GET SSE stream receives
+/// `event: endpoint` followed by `event: message` JSON-RPC replies; client requests and
+/// notifications are POSTed to the advertised same-origin endpoint.
+struct SseConnection {
+    client: reqwest::Client,
+    post_url: String,
+    headers: reqwest::header::HeaderMap,
+    pending: SsePending,
+    reader: JoinHandle<()>,
+    next_id: u64,
+}
+
+fn same_origin(base: &reqwest::Url, target: &reqwest::Url) -> bool {
+    base.scheme() == target.scheme()
+        && base.host_str() == target.host_str()
+        && base.port_or_known_default() == target.port_or_known_default()
+}
+
+impl SseConnection {
+    async fn connect(config: &McpServerConfig, url: &str) -> Result<Self, String> {
+        let (parsed, client, headers) = build_http_client(config, url)?;
+        let connect_limit = Duration::from_secs(config.connect_timeout_secs);
+        let mut response = timeout(
+            connect_limit,
+            client
+                .get(url)
+                .headers(headers.clone())
+                .header(reqwest::header::ACCEPT, "text/event-stream")
+                .send(),
+        )
+        .await
+        .map_err(|_| "SSE connect timed out".to_owned())?
+        .map_err(|error| format!("SSE connect failed: {}", error.without_url()))?;
+        if !response.status().is_success() {
+            return Err(format!("HTTP {}", response.status().as_u16()));
+        }
+        let kind = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !kind.starts_with("text/event-stream") {
+            return Err("SSE server answered with an unsupported content type".into());
+        }
+
+        let mut decoder = SseDecoder::new();
+        let mut post_url: Option<String> = None;
+        let mut buffered_messages: Vec<String> = Vec::new();
+
+        let wait_endpoint = async {
+            while post_url.is_none() {
+                let chunk = response
+                    .chunk()
+                    .await
+                    .map_err(|error| format!("SSE read failed: {}", error.without_url()))?
+                    .ok_or_else(|| "SSE stream closed before endpoint event".to_owned())?;
+                let events = decoder
+                    .push_events(&chunk)
+                    .map_err(|_| "server sent an invalid event stream".to_owned())?;
+                for event in events {
+                    match event.event.as_deref() {
+                        Some("endpoint") if post_url.is_none() => {
+                            let raw = event.data.trim();
+                            if raw.is_empty() {
+                                return Err("SSE endpoint event was empty".into());
+                            }
+                            let resolved = parsed
+                                .join(raw)
+                                .map_err(|_| "invalid SSE endpoint URL".to_owned())?;
+                            if !same_origin(&parsed, &resolved) {
+                                return Err(
+                                    "SSE endpoint origin does not match server URL".to_owned()
+                                );
+                            }
+                            post_url = Some(resolved.to_string());
+                        }
+                        None | Some("message") if !event.data.is_empty() => {
+                            buffered_messages.push(event.data);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok::<(), String>(())
+        };
+        timeout(connect_limit, wait_endpoint)
+            .await
+            .map_err(|_| "SSE endpoint handshake timed out".to_owned())??;
+
+        let post_url = post_url.ok_or_else(|| "missing SSE endpoint".to_owned())?;
+        let pending: SsePending = Arc::new(Mutex::new(HashMap::new()));
+        let reader_pending = Arc::clone(&pending);
+        let reader_client = client.clone();
+        let reader_post_url = post_url.clone();
+        let reader_headers = headers.clone();
+        let reader = tokio::spawn(async move {
+            for data in buffered_messages {
+                dispatch_sse_message(
+                    &data,
+                    &reader_pending,
+                    &reader_client,
+                    &reader_post_url,
+                    &reader_headers,
+                )
+                .await;
+            }
+            loop {
+                let chunk = match response.chunk().await {
+                    Ok(Some(chunk)) => chunk,
+                    Ok(None) | Err(_) => break,
+                };
+                let Ok(events) = decoder.push_events(&chunk) else {
+                    break;
+                };
+                for event in events {
+                    if matches!(event.event.as_deref(), None | Some("message"))
+                        && !event.data.is_empty()
+                    {
+                        dispatch_sse_message(
+                            &event.data,
+                            &reader_pending,
+                            &reader_client,
+                            &reader_post_url,
+                            &reader_headers,
+                        )
+                        .await;
+                    }
+                }
+            }
+            let mut map = reader_pending.lock().await;
+            for (_, tx) in map.drain() {
+                let _ = tx.send(Err(RpcError::Server(
+                    "SSE stream ended without a response".into(),
+                )));
+            }
+        });
+
+        Ok(Self {
+            client,
+            post_url,
+            headers,
+            pending,
+            reader,
+            next_id: 0,
+        })
+    }
+
+    fn notifier(&self) -> Notifier {
+        Notifier::Http {
+            client: self.client.clone(),
+            url: self.post_url.clone(),
+            headers: self.headers.clone(),
+        }
+    }
+
+    async fn post(&mut self, message: &Value, limit: Duration) -> Result<(), RpcError> {
+        let send = self
+            .client
+            .post(&self.post_url)
+            .headers(self.headers.clone())
+            .json(message)
+            .send();
+        let response = timeout(limit, send)
+            .await
+            .map_err(|_| RpcError::Other("request timed out".into()))?
+            .map_err(|error| RpcError::Other(format!("request failed: {}", error.without_url())))?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(RpcError::Status(response.status().as_u16()))
+        }
+    }
+
+    async fn request(
+        &mut self,
+        method: &str,
+        params: Value,
+        limit: Duration,
+    ) -> Result<Value, RpcError> {
+        self.next_id += 1;
+        let id = self.next_id;
+        let message = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(id, tx);
+        let guard = (method != "initialize").then(|| CancelGuard::new(self.notifier(), id));
+        let started = Instant::now();
+        let wait = async {
+            let response = self
+                .client
+                .post(&self.post_url)
+                .headers(self.headers.clone())
+                .json(&message)
+                .send()
+                .await
+                .map_err(|error| {
+                    RpcError::Other(format!("request failed: {}", error.without_url()))
+                })?;
+            if !response.status().is_success() {
+                return Err(RpcError::Status(response.status().as_u16()));
+            }
+            rx.await.unwrap_or_else(|_| {
+                Err(RpcError::Server(
+                    "SSE stream ended without a response".into(),
+                ))
+            })
+        };
+        let outcome = finish(timeout(limit, wait).await, guard, method, started, limit).await;
+        if outcome.is_err() {
+            self.pending.lock().await.remove(&id);
+        }
+        outcome
+    }
+
+    fn close(&mut self) {
+        self.reader.abort();
+    }
+}
+
+impl Drop for SseConnection {
+    fn drop(&mut self) {
+        self.reader.abort();
+    }
+}
+
+async fn dispatch_sse_message(
+    data: &str,
+    pending: &SsePending,
+    client: &reqwest::Client,
+    post_url: &str,
+    headers: &reqwest::header::HeaderMap,
+) {
+    let Ok(message) = serde_json::from_str::<Value>(data) else {
+        return;
+    };
+    if message.get("method").is_some() {
+        if let Some(request_id) = message.get("id") {
+            let reply = json!({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32601, "message": "Method not found"}
+            });
+            let _ = timeout(
+                COURTESY_LIMIT,
+                client
+                    .post(post_url)
+                    .headers(headers.clone())
+                    .json(&reply)
+                    .send(),
+            )
+            .await;
+        }
+        return;
+    }
+    let Some(id) = message.get("id").and_then(Value::as_u64) else {
+        return;
+    };
+    let tx = pending.lock().await.remove(&id);
+    if let Some(tx) = tx {
+        let result = if let Some(error) = message.get("error") {
+            let text = error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("request failed");
+            Err(RpcError::Server(text.to_owned()))
+        } else {
+            Ok(message.get("result").cloned().unwrap_or(Value::Null))
+        };
+        let _ = tx.send(result);
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Remote,
     ListResources,
     ReadResource,
+    ListPrompts,
+    GetPrompt,
 }
 
 struct Tool {
@@ -873,15 +1179,28 @@ enum Failure {
     Down,
 }
 
-#[derive(Default)]
 pub struct McpClients {
     servers: Vec<Server>,
     tools: Vec<Tool>,
+    profile: Option<PathBuf>,
+    mcp_result_size_chars: usize,
+}
+
+impl Default for McpClients {
+    fn default() -> Self {
+        Self {
+            servers: Vec::new(),
+            tools: Vec::new(),
+            profile: None,
+            mcp_result_size_chars: DEFAULT_MCP_RESULT_SIZE_CHARS,
+        }
+    }
 }
 
 /// What `initialize` and discovery learned about a server.
 struct Discovered {
     resources: bool,
+    prompts: bool,
     tools: Vec<Value>,
 }
 
@@ -913,6 +1232,7 @@ async fn handshake(
     Ok(Discovered {
         // The family is served exactly when the capability is present (the reference's gate).
         resources: config.resources && init["capabilities"]["resources"].is_object(),
+        prompts: config.prompts && init["capabilities"]["prompts"].is_object(),
         tools,
     })
 }
@@ -944,7 +1264,22 @@ async fn list_all(
 impl McpClients {
     /// Connect to every configured server. Failures are returned as warnings.
     pub async fn start(configs: &[McpServerConfig]) -> (Self, Vec<String>) {
-        let mut clients = Self::default();
+        Self::start_with_options(configs, None, DEFAULT_MCP_RESULT_SIZE_CHARS).await
+    }
+
+    /// Connect to every configured server with a profile directory (for image/audio/document
+    /// caches and oversized tool-result spillover) and spillover threshold.
+    pub async fn start_with_options(
+        configs: &[McpServerConfig],
+        profile: Option<PathBuf>,
+        mcp_result_size_chars: usize,
+    ) -> (Self, Vec<String>) {
+        let mut clients = Self {
+            servers: Vec::new(),
+            tools: Vec::new(),
+            profile,
+            mcp_result_size_chars,
+        };
         let mut warnings = Vec::new();
         for config in configs {
             match clients.connect(config).await {
@@ -960,6 +1295,9 @@ impl McpClients {
 
     async fn connect(&mut self, config: &McpServerConfig) -> Result<(), String> {
         let mut transport = match config.url.as_deref().filter(|url| !url.is_empty()) {
+            Some(url) if config.transport.as_deref() == Some("sse") => {
+                Transport::Sse(SseConnection::connect(config, url).await?)
+            }
             Some(url) => Transport::Http(HttpConnection::new(config, url)?),
             None => Transport::Stdio(spawn_stdio(config)?),
         };
@@ -1024,18 +1362,15 @@ impl McpClients {
                 read_only: tool["annotations"]["readOnlyHint"].as_bool() == Some(true),
             });
         }
-        if !discovered.resources {
-            return;
-        }
-        // A tool of the server with the same name wins: the utilities are optional.
-        let utilities = [
-            (
+        let mut utilities: Vec<(Kind, &'static str, String, Value)> = Vec::new();
+        if discovered.resources {
+            utilities.push((
                 Kind::ListResources,
                 "list_resources",
                 format!("List available resources from MCP server '{config_name}'"),
                 json!({"type": "object", "properties": {}}),
-            ),
-            (
+            ));
+            utilities.push((
                 Kind::ReadResource,
                 "read_resource",
                 format!("Read a resource by URI from MCP server '{config_name}'"),
@@ -1044,8 +1379,35 @@ impl McpClients {
                     "properties": {"uri": {"type": "string", "description": "URI of the resource to read"}},
                     "required": ["uri"]
                 }),
-            ),
-        ];
+            ));
+        }
+        if discovered.prompts {
+            utilities.push((
+                Kind::ListPrompts,
+                "list_prompts",
+                format!("List available prompts from MCP server '{config_name}'"),
+                json!({"type": "object", "properties": {}}),
+            ));
+            utilities.push((
+                Kind::GetPrompt,
+                "get_prompt",
+                format!("Get a prompt by name from MCP server '{config_name}'"),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Name of the prompt to retrieve"},
+                        "arguments": {
+                            "type": "object",
+                            "description": "Optional arguments to pass to the prompt",
+                            "properties": {},
+                            "additionalProperties": true
+                        }
+                    },
+                    "required": ["name"]
+                }),
+            ));
+        }
+        // A tool of the server with the same name wins: the utilities are optional.
         for (kind, key, description, parameters) in utilities {
             let exposed = exposed_of(key);
             if shared(&exposed) > 0 || self.owns(&exposed) {
@@ -1138,31 +1500,36 @@ impl McpClients {
 
     /// Call a tool and return the result in the shape of a local tool output.
     pub async fn call(&mut self, name: &str, arguments: &str) -> Value {
+        self.call_with_id(name, arguments, "mcp_call").await
+    }
+
+    /// Call a tool with its `tool_call_id` (used to name spillover files for oversized results).
+    pub async fn call_with_id(&mut self, name: &str, arguments: &str, tool_call_id: &str) -> Value {
         let Some(tool) = self.tools.iter().find(|tool| tool.exposed == name) else {
-            return json!({"error": format!("Unknown tool: {name}")});
+            return tool_text(&json!({"error": format!("Unknown tool: {name}")}));
         };
         let (index, kind, remote, read_only) =
             (tool.server, tool.kind, tool.name.clone(), tool.read_only);
         let arguments = match serde_json::from_str::<Value>(arguments) {
             Ok(value) if value.is_object() => value,
             Ok(_) | Err(_) if arguments.trim().is_empty() => json!({}),
-            _ => return json!({"error": "Tool arguments must be a JSON object"}),
+            _ => return tool_text(&json!({"error": "Tool arguments must be a JSON object"})),
         };
-        match kind {
+        let rendered = match kind {
             Kind::Remote => {
                 let params = json!({"name": remote, "arguments": arguments});
                 match self
                     .request_recovering(index, "tools/call", params, read_only)
                     .await
                 {
-                    Err(failure) => self.failure_text(index, failure),
+                    Err(failure) => return self.failure_text(index, failure),
                     Ok(result) => {
                         let server = self.servers[index].config.name.clone();
-                        Value::String(render_call_tool_result(&result, &server))
+                        render_call_tool_result(&result, &server, self.profile.as_deref())
                     }
                 }
             }
-            Kind::ListResources => self.list_resources(index).await,
+            Kind::ListResources => return self.list_resources(index, tool_call_id).await,
             Kind::ReadResource => {
                 let uri = arguments["uri"].as_str().filter(|uri| !uri.is_empty());
                 let Some(uri) = uri else {
@@ -1173,15 +1540,47 @@ impl McpClients {
                     .request_recovering(index, "resources/read", params, true)
                     .await
                 {
-                    Err(failure) => self.failure_text(index, failure),
-                    Ok(result) => tool_text(&render_read_resource(&result)),
+                    Err(failure) => return self.failure_text(index, failure),
+                    Ok(result) => {
+                        py_json_dumps(&render_read_resource(&result, self.profile.as_deref()))
+                    }
                 }
             }
-        }
+            Kind::ListPrompts => return self.list_prompts(index, tool_call_id).await,
+            Kind::GetPrompt => {
+                let prompt_name = arguments["name"].as_str().filter(|n| !n.is_empty());
+                let Some(prompt_name) = prompt_name else {
+                    return tool_text(&json!({"error": "Missing required parameter 'name'"}));
+                };
+                let mut params = Map::new();
+                params.insert("name".into(), json!(prompt_name));
+                if let Some(prompt_args) = arguments.get("arguments").filter(|v| v.is_object()) {
+                    params.insert("arguments".into(), prompt_args.clone());
+                }
+                match self
+                    .request_recovering(index, "prompts/get", Value::Object(params), true)
+                    .await
+                {
+                    Err(failure) => return self.failure_text(index, failure),
+                    Ok(result) => py_json_dumps(&render_get_prompt(&result)),
+                }
+            }
+        };
+        Value::String(self.maybe_spillover(&rendered, tool_call_id))
+    }
+
+    fn maybe_spillover(&self, rendered: &str, tool_call_id: &str) -> String {
+        maybe_persist_mcp_result(
+            rendered,
+            tool_call_id,
+            self.profile.as_deref(),
+            self.mcp_result_size_chars,
+            DEFAULT_PREVIEW_SIZE_CHARS,
+        )
     }
 
     /// `resources/list`, all pages. The pages are not replayed as a whole: the first failure is the answer.
-    async fn list_resources(&mut self, index: usize) -> Value {
+    async fn list_resources(&mut self, index: usize, tool_call_id: &str) -> Value {
         let mut resources = Vec::new();
         let mut cursor: Option<String> = None;
         for _ in 0..MAX_LIST_PAGES {
@@ -1203,7 +1602,35 @@ impl McpClients {
                 break;
             }
         }
-        tool_text(&render_resource_list(&resources))
+        let rendered = py_json_dumps(&render_resource_list(&resources));
+        Value::String(self.maybe_spillover(&rendered, tool_call_id))
+    }
+
+    /// `prompts/list`, all pages. The pages are not replayed as a whole: the first failure is the answer.
+    async fn list_prompts(&mut self, index: usize, tool_call_id: &str) -> Value {
+        let mut prompts = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..MAX_LIST_PAGES {
+            let params = cursor.as_ref().map_or(json!({}), |c| json!({"cursor": c}));
+            match self
+                .request_recovering(index, "prompts/list", params, true)
+                .await
+            {
+                Err(failure) => return self.failure_text(index, failure),
+                Ok(page) => {
+                    prompts.extend(page["prompts"].as_array().cloned().unwrap_or_default());
+                    cursor = page["nextCursor"]
+                        .as_str()
+                        .filter(|cursor| !cursor.is_empty())
+                        .map(str::to_owned);
+                }
+            }
+            if cursor.is_none() {
+                break;
+            }
+        }
+        let rendered = py_json_dumps(&render_prompt_list(&prompts));
+        Value::String(self.maybe_spillover(&rendered, tool_call_id))
     }
 
     /// The error output of a failed request, as `tool_error` writes it.
@@ -1251,26 +1678,34 @@ fn text_blocks(result: &Value) -> Vec<&str> {
 
 /// `_render_call_tool_result(result, server, for_model=True)`: the JSON text a `tools/call`
 /// answer becomes for the model.
-fn render_call_tool_result(result: &Value, server: &str) -> String {
+fn render_call_tool_result(result: &Value, server: &str, profile: Option<&Path>) -> String {
+    render_call_tool_result_with_cap(result, server, profile, HARD_RESULT_CAP_CHARS)
+}
+
+/// Public entry point with a configurable hard cap for reference-corpus testing.
+pub fn render_call_tool_result_with_cap(
+    result: &Value,
+    server: &str,
+    profile: Option<&Path>,
+    max_chars: usize,
+) -> String {
     if result["isError"].as_bool() == Some(true) {
         return error_result(result);
     }
-    let (mut text, usable) = render_content_blocks(result, server);
-    truncate(&mut text, MAX_RESULT_BYTES);
-    let mut structured = result["structuredContent"]
-        .is_object()
-        .then(|| result["structuredContent"].clone());
+    let (mut text, usable) = render_content_blocks(result, server, profile);
+    text = truncate_head_tail(&text, max_chars, "MCP RESULT");
+    let mut structured = capped_structured_content(result, max_chars);
     let meta = strip_reserved_meta_keys(&result["_meta"]);
     if let Some(value) = structured.clone().filter(|_| usable > 0) {
-        if text_blocks(result)
-            .iter()
-            .any(|text_block| text_is_value(text_block, &value))
+        if value.is_string()
+            || text_blocks(result)
+                .iter()
+                .any(|text_block| text_is_value(text_block, &value))
         {
             structured = None;
         } else if let Some(collapsed) = collapse_sdk_wrapped_copy(result, &value, usable) {
             if let Some(list) = collapsed {
-                text = list;
-                truncate(&mut text, MAX_RESULT_BYTES);
+                text = truncate_head_tail(&list, max_chars, "MCP RESULT");
             }
             structured = None;
         }
@@ -1296,6 +1731,24 @@ fn render_call_tool_result(result: &Value, server: &str) -> String {
     }
     payload.entry("result").or_insert(json!(text));
     py_json_dumps(&Value::Object(payload))
+}
+
+/// `_capped_structured_content`: return `structuredContent` when it fits `max_chars`, or degrade
+/// it to a head+tail truncated JSON string when it exceeds the hard cap.
+fn capped_structured_content(result: &Value, max_chars: usize) -> Option<Value> {
+    let structured = result
+        .get("structuredContent")
+        .filter(|value| value.is_object())?;
+    let as_json = py_json_dumps(structured);
+    if as_json.chars().count() > max_chars {
+        Some(Value::String(truncate_head_tail(
+            &as_json,
+            max_chars,
+            "MCP RESULT",
+        )))
+    } else {
+        Some(structured.clone())
+    }
 }
 
 /// An `isError` answer: `tool_error(_sanitize_error(<capped text>))`.
@@ -1335,9 +1788,9 @@ fn bound_error_text(text: &str) -> String {
 }
 
 /// `_render_content_blocks`: the text of the blocks and how many of them carry something real.
-/// Images and audio are not cached (the reference saves them to its gateway cache and answers
-/// with a `MEDIA:` path), so the model is told the block was left out.
-fn render_content_blocks(result: &Value, server: &str) -> (String, usize) {
+/// Images and audio are cached under `<profile>/cache/{images,audio}` as `MEDIA:<path>`;
+/// embedded binary resources are cached under `<profile>/cache/documents`.
+fn render_content_blocks(result: &Value, server: &str, profile: Option<&Path>) -> (String, usize) {
     let mut parts: Vec<String> = Vec::new();
     let mut usable = 0;
     for block in result["content"].as_array().into_iter().flatten() {
@@ -1349,16 +1802,19 @@ fn render_content_blocks(result: &Value, server: &str) -> (String, usize) {
             }
             continue;
         }
-        let rendered = match kind {
-            "text" | "" => String::new(),
-            "image" | "audio" => format!("[{kind} content omitted]"),
-            "resource_link" => render_resource_link(block, server),
-            "resource" => render_embedded_resource(&block["resource"]),
-            other => dropped_block_notice(block, other),
+        let (rendered, counts_as_usable) = match kind {
+            "text" | "" => (String::new(), false),
+            "image" => (cache_mcp_image_block(block, profile), true),
+            "audio" => (cache_mcp_audio_block(block, profile), true),
+            "resource_link" => (render_resource_link(block, server), true),
+            "resource" => (render_embedded_resource(&block["resource"], profile), true),
+            other => (dropped_block_notice(block, other), false),
         };
         if !rendered.is_empty() {
             parts.push(rendered);
-            usable += 1;
+            if counts_as_usable {
+                usable += 1;
+            }
         }
     }
     (parts.join("\n"), usable)
@@ -1384,14 +1840,15 @@ fn render_resource_link(block: &Value, server: &str) -> String {
     )
 }
 
-/// An embedded resource: its text, or what `render_read_resource` says of a blob.
-fn render_embedded_resource(resource: &Value) -> String {
+/// An embedded resource: its text, or a cached binary document notice.
+fn render_embedded_resource(resource: &Value, profile: Option<&Path>) -> String {
     if let Some(text) = resource["text"].as_str() {
         return strip_unicode_tags(text);
     }
-    if resource["blob"].is_string() {
-        let text = render_read_resource(&json!({"contents": [resource]}));
-        return text["result"].as_str().unwrap_or("").to_owned();
+    if let Some(blob) = resource["blob"].as_str() {
+        let mime = strip_unicode_tags(resource["mimeType"].as_str().unwrap_or(""));
+        let uri = strip_unicode_tags(resource["uri"].as_str().unwrap_or(""));
+        return cache_mcp_resource_blob(blob, &uri, &mime, profile);
     }
     String::new()
 }
@@ -1692,9 +2149,9 @@ fn render_resource_list(resources: &[Value]) -> Value {
     json!({"resources": entries})
 }
 
-/// `_render_read_resource`: the text of each content block, one per line. A binary block is not
-/// saved anywhere (the reference caches it as a document); the model is told its size.
-fn render_read_resource(result: &Value) -> Value {
+/// `_render_read_resource`: the text of each content block, one per line. Binary blobs are cached
+/// into `<profile>/cache/documents/` when a profile is available.
+fn render_read_resource(result: &Value, profile: Option<&Path>) -> Value {
     let mut parts = Vec::new();
     for block in result["contents"].as_array().into_iter().flatten() {
         if let Some(text) = block["text"].as_str() {
@@ -1702,28 +2159,91 @@ fn render_read_resource(result: &Value) -> Value {
         } else if let Some(blob) = block["blob"].as_str() {
             let mime = strip_unicode_tags(block["mimeType"].as_str().unwrap_or(""));
             let uri = strip_unicode_tags(block["uri"].as_str().unwrap_or(""));
-            parts.push(match decoded_len(blob) {
-                Some(bytes) => format!(
-                    "[MCP embedded resource received ({bytes} bytes, {}) but document cache unavailable in this process]",
-                    if mime.is_empty() { "unknown type" } else { &mime }
-                ),
-                None => format!(
-                    "[MCP embedded resource could not be decoded: {}]",
-                    if mime.is_empty() { &uri } else { &mime }
-                ),
-            });
+            parts.push(cache_mcp_resource_blob(blob, &uri, &mime, profile));
         }
     }
     json!({"result": parts.join("\n")})
 }
 
-/// The size of base64 data once decoded, or `None` when it cannot be decoded.
-fn decoded_len(data: &str) -> Option<usize> {
-    let symbols = data
-        .bytes()
-        .filter(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/'))
-        .count();
-    (symbols % 4 != 1).then_some(symbols * 3 / 4)
+/// `_render_prompt_list`: prompt and argument names stay verbatim; prose descriptions are stripped.
+fn render_prompt_list(prompts: &[Value]) -> Value {
+    let entries: Vec<Value> = prompts
+        .iter()
+        .map(|prompt| {
+            let mut entry = Map::new();
+            if let Some(name) = prompt["name"].as_str() {
+                entry.insert("name".into(), json!(name));
+            }
+            if let Some(desc) = prompt["description"].as_str().filter(|s| !s.is_empty()) {
+                entry.insert("description".into(), json!(strip_unicode_tags(desc)));
+            }
+            if let Some(args) = prompt["arguments"].as_array().filter(|a| !a.is_empty()) {
+                let rendered_args: Vec<Value> = args
+                    .iter()
+                    .map(|arg| {
+                        let mut a = Map::new();
+                        if let Some(name) = arg["name"].as_str() {
+                            a.insert("name".into(), json!(name));
+                        }
+                        if let Some(desc) = arg["description"].as_str().filter(|s| !s.is_empty()) {
+                            a.insert("description".into(), json!(strip_unicode_tags(desc)));
+                        }
+                        if let Some(req) = arg.get("required") {
+                            if !req.is_null() {
+                                a.insert("required".into(), req.clone());
+                            }
+                        }
+                        Value::Object(a)
+                    })
+                    .collect();
+                entry.insert("arguments".into(), Value::Array(rendered_args));
+            }
+            Value::Object(entry)
+        })
+        .collect();
+    json!({"prompts": entries})
+}
+
+/// Public helper for reference-corpus testing.
+pub fn render_prompt_list_json(prompts: &[Value]) -> String {
+    py_json_dumps(&render_prompt_list(prompts))
+}
+
+/// `_render_get_prompt`: messages array followed by optional non-empty description.
+fn render_get_prompt(result: &Value) -> Value {
+    let messages: Vec<Value> = result["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|msg| {
+            let mut entry = Map::new();
+            if let Some(role) = msg["role"].as_str() {
+                entry.insert("role".into(), json!(strip_unicode_tags(role)));
+            }
+            if let Some(content) = msg.get("content") {
+                let text = if let Some(t) = content.get("text").and_then(Value::as_str) {
+                    strip_unicode_tags(t)
+                } else if let Some(s) = content.as_str() {
+                    strip_unicode_tags(s)
+                } else {
+                    strip_unicode_tags(&py_json_dumps(content))
+                };
+                entry.insert("content".into(), json!(text));
+            }
+            Value::Object(entry)
+        })
+        .collect();
+    let mut payload = Map::new();
+    payload.insert("messages".into(), Value::Array(messages));
+    if let Some(desc) = result["description"].as_str().filter(|s| !s.is_empty()) {
+        payload.insert("description".into(), json!(strip_unicode_tags(desc)));
+    }
+    Value::Object(payload)
+}
+
+/// Public helper for reference-corpus testing.
+pub fn render_get_prompt_json(result: &Value) -> String {
+    py_json_dumps(&render_get_prompt(result))
 }
 
 fn spawn_stdio(config: &McpServerConfig) -> Result<Connection, String> {
@@ -1773,17 +2293,6 @@ fn sanitize(name: &str) -> String {
         .collect()
 }
 
-fn truncate(text: &mut String, limit: usize) {
-    if text.len() > limit {
-        let mut end = limit;
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        text.truncate(end);
-        text.push_str("\n[truncated]");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1793,11 +2302,13 @@ mod tests {
     }
 
     #[test]
-    fn names_are_sanitized_and_truncation_respects_characters() {
+    fn names_are_sanitized_and_head_tail_truncation_respects_characters() {
         assert_eq!(sanitize("my-server.v2"), "my_server_v2");
-        let mut text = "ааа".to_owned();
-        truncate(&mut text, 3);
-        assert_eq!(text, "а\n[truncated]");
+        let text = "аааааааааа";
+        let cut = truncate_head_tail(text, 5, "MCP RESULT");
+        assert!(cut.starts_with(
+            "аа\n\n... [MCP RESULT TRUNCATED - 5 chars omitted out of 10 total] ...\n\nааа"
+        ));
     }
 
     #[test]
@@ -1829,14 +2340,14 @@ mod tests {
             cases["empty_list"].as_str().unwrap()
         );
         assert_eq!(
-            py_json_dumps(&render_read_resource(&json!({"contents": []}))),
+            py_json_dumps(&render_read_resource(&json!({"contents": []}), None)),
             cases["empty_read"].as_str().unwrap()
         );
         // Text blocks (also an empty one) join with newlines; a hidden tag is dropped.
         let read = &cases["render_read_cases"];
-        let output = py_json_dumps(&render_read_resource(&read["wire"]));
+        let output = py_json_dumps(&render_read_resource(&read["wire"], None));
         let recorded = read["output"].as_str().unwrap();
-        // The reference saves a binary block to a document cache, which is not ported.
+        // Without a profile dir, binary blobs report document cache unavailable.
         let text = |full: &str| full.split("\\n[MCP").next().unwrap().to_owned();
         assert_eq!(text(&output), text(recorded));
         assert!(
@@ -1853,10 +2364,11 @@ mod tests {
             let output = render_call_tool_result(
                 &serde_json::from_str(entry["wire"].as_str().unwrap()).unwrap(),
                 "fx",
+                None,
             );
             let recorded = entry["output"].as_str().unwrap();
             if case == "resource_blob" {
-                // The reference saves the blob to its document cache; the port has none and says so.
+                // Without a profile dir, binary blobs report document cache unavailable.
                 assert_eq!(
                     output,
                     r#"{"result": "[MCP embedded resource received (3 bytes, x/y) but document cache unavailable in this process]"}"#
@@ -1870,18 +2382,21 @@ mod tests {
     #[test]
     fn answers_to_a_call_are_written_with_python_separators() {
         let block = json!({"content": [{"type": "text", "text": "x"}]});
-        assert_eq!(render_call_tool_result(&block, "s"), r#"{"result": "x"}"#);
-        // An image is left out and the model is told so (the reference's cache is not ported).
+        assert_eq!(
+            render_call_tool_result(&block, "s", None),
+            r#"{"result": "x"}"#
+        );
+        // An image with invalid magic bytes renders empty (matching upstream).
         let image =
             json!({"content": [{"type": "image", "data": "AAAA", "mimeType": "image/png"}]});
         assert_eq!(
-            render_call_tool_result(&image, "s"),
-            r#"{"result": "[image content omitted]"}"#
+            render_call_tool_result(&image, "s", None),
+            r#"{"result": ""}"#
         );
         // A block type nobody knows is named instead of vanishing.
         let odd = json!({"content": [{"type": "hologram", "mimeType": "x/y", "name": "n"}]});
         assert_eq!(
-            render_call_tool_result(&odd, "s"),
+            render_call_tool_result(&odd, "s", None),
             r#"{"result": "[MCP content dropped: unsupported block (type=hologram, mimeType=x/y, name=n)]"}"#
         );
     }

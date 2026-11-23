@@ -100,6 +100,8 @@ pub struct ChatSettings {
     /// `clarify.timeout`, else `agent.clarify_timeout`, else 90; 0 or less waits without limit.
     pub clarify_timeout_secs: u32,
     pub mcp_servers: Vec<McpServerConfig>,
+    /// `tool_budget.mcp_result_size_chars` (default 50,000, capped at 100,000): spillover threshold.
+    pub mcp_result_size_chars: usize,
     pub web: WebSettings,
     pub browser: BrowserSettings,
     pub memory: MemorySettings,
@@ -210,6 +212,7 @@ impl Default for ChatSettings {
             delegation: crate::delegation::DelegationSettings::default(),
             clarify_timeout_secs: 90,
             mcp_servers: Vec::new(),
+            mcp_result_size_chars: crate::mcp_media::DEFAULT_MCP_RESULT_SIZE_CHARS,
             web: WebSettings::default(),
             browser: BrowserSettings::default(),
             memory: MemorySettings::default(),
@@ -627,6 +630,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
         ..AuxiliaryRoute::from_section(&config["delegation"])
     };
     settings.mcp_servers = mcp_servers(&config, &secrets);
+    settings.mcp_result_size_chars = crate::mcp_media::parse_mcp_result_size_chars(&config);
     settings.web = WebSettings::from_config(&config, &secrets);
     settings.browser = BrowserSettings::from_config(&config, &secrets);
     settings.memory = MemorySettings::from_config(&config);
@@ -844,6 +848,11 @@ fn mcp_servers(
                     .filter(|value| *value > 0)
                     .unwrap_or(default)
             };
+            let transport = entry
+                .get("transport")
+                .and_then(serde_yaml::Value::as_str)
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty());
             Some(McpServerConfig {
                 name,
                 command,
@@ -851,6 +860,7 @@ fn mcp_servers(
                 env,
                 url,
                 headers,
+                transport,
                 timeout_secs: tool_timeout,
                 connect_timeout_secs: seconds("connect_timeout", 60),
                 // `tools.resources: false` hides the resource tools of a server that offers them.
@@ -858,6 +868,14 @@ fn mcp_servers(
                     entry
                         .get("tools")
                         .and_then(|tools| tools.get("resources"))
+                        .unwrap_or(&serde_yaml::Value::Null),
+                    true,
+                ),
+                // `tools.prompts: false` hides the prompt tools of a server that offers them.
+                prompts: truthy(
+                    entry
+                        .get("tools")
+                        .and_then(|tools| tools.get("prompts"))
                         .unwrap_or(&serde_yaml::Value::Null),
                     true,
                 ),

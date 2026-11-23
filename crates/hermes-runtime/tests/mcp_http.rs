@@ -62,9 +62,11 @@ impl Fixture {
             env: BTreeMap::new(),
             url: Some(self.url.clone()),
             headers: BTreeMap::from([("Authorization".into(), format!("Bearer {token}"))]),
+            transport: None,
             timeout_secs: timeout_secs as f64,
             connect_timeout_secs: 10,
             resources: true,
+            prompts: true,
         }
     }
 }
