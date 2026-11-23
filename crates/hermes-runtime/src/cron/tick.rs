@@ -77,9 +77,6 @@ pub fn unsupported_reason(job: &Value) -> Option<String> {
     };
     let listed = |key: &str| job[key].as_array().is_some_and(|items| !items.is_empty());
     let feature = [
-        (text("script").is_some(), "a pre-run script"),
-        (job["no_agent"].as_bool() == Some(true), "no_agent mode"),
-        (listed("skills") || text("skill").is_some(), "skills"),
         (
             !job["context_from"].is_null()
                 && job["context_from"]
@@ -88,16 +85,10 @@ pub fn unsupported_reason(job: &Value) -> Option<String> {
                 && job["context_from"].as_array().is_none_or(|v| !v.is_empty()),
             "context_from",
         ),
-        (text("workdir").is_some(), "a workdir"),
-        (
-            text("monitor_script").is_some() || text("monitor_url").is_some(),
-            "a monitor",
-        ),
         (
             text("provider").is_some() || text("base_url").is_some(),
             "a provider override",
         ),
-        (text("interpreter").is_some(), "an interpreter"),
         (listed("enabled_toolsets"), "enabled_toolsets"),
         (text("manual_run_prompt").is_some(), "a manual run prompt"),
     ]
@@ -106,7 +97,11 @@ pub fn unsupported_reason(job: &Value) -> Option<String> {
     if let Some(feature) = feature {
         return Some(format!("uses {feature}, which the Rust tick does not run"));
     }
-    if text("prompt").is_none() {
+    let has_payload = text("prompt").is_some()
+        || text("script").is_some()
+        || listed("skills")
+        || text("skill").is_some();
+    if !has_payload {
         return Some("has no prompt".into());
     }
     let deliver = job["deliver"].as_str().unwrap_or("local");
@@ -851,12 +846,19 @@ mod tests {
     fn jobs_with_unsupported_features_are_named_before_anything_changes() {
         let plain = json!({"prompt": "p", "deliver": "local", "skills": [], "context_from": null});
         assert_eq!(unsupported_reason(&plain), None);
+        // Scripts, skills, monitors, workdir, interpreter, and no_agent are now supported.
+        assert_eq!(
+            unsupported_reason(&json!({"script": "a.py", "no_agent": true, "deliver": "local"})),
+            None
+        );
+        assert_eq!(
+            unsupported_reason(&json!({"skills": ["x"], "workdir": "/tmp", "deliver": "local"})),
+            None
+        );
         for (field, value, needle) in [
-            ("script", json!("a.py"), "pre-run script"),
-            ("skills", json!(["x"]), "skills"),
             ("context_from", json!("other"), "context_from"),
-            ("workdir", json!("/tmp"), "workdir"),
             ("provider", json!("openrouter"), "provider override"),
+            ("enabled_toolsets", json!(["web"]), "enabled_toolsets"),
             ("deliver", json!("telegram"), "only local delivery"),
         ] {
             let mut job = plain.clone();

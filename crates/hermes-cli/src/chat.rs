@@ -942,6 +942,7 @@ pub async fn run_text(
     query: String,
     model: Option<String>,
     platform: &str,
+    workdir: Option<&Path>,
     mut activity: impl FnMut(),
 ) -> Result<(String, u8), String> {
     let env = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
@@ -960,8 +961,16 @@ pub async fn run_text(
         events_json: false,
     };
     let mut request = prepare(home, args)?;
+    if let Some(dir) = workdir.filter(|dir| dir.is_absolute() && dir.is_dir()) {
+        request.root = dir.as_os_str().to_os_string();
+    }
     request.tools = hermes_runtime::config::load_tool_policy(home, platform)?;
     if platform == "cron" {
+        // Loop prevention: cron runs cannot schedule other cron jobs unless explicitly opted in.
+        let allow_scheduling = home.is_some_and(hermes_runtime::cron::allow_agent_scheduling);
+        if !allow_scheduling {
+            request.tools = request.tools.without_tools(&["cronjob_manage"]);
+        }
         // No person answers a cron job: unflagged commands run, flagged ones follow `cron_mode`.
         crate::approval::install(request.approvals().clone());
         if let Some(policy) = hermes_runtime::approval_policy::installed() {

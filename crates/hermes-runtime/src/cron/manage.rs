@@ -175,6 +175,14 @@ impl<'de> Deserialize<'de> for WrapResponse {
     }
 }
 
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 /// What `hermes cron add` was given. Field names follow the reference's argument names.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -190,8 +198,18 @@ pub struct AddParams {
     pub model: Option<String>,
     pub timezone: Option<String>,
     pub grace_minutes: Option<String>,
+    #[serde(deserialize_with = "null_as_default")]
     pub paused: bool,
     pub paused_reason: Option<String>,
+    pub script: Option<String>,
+    #[serde(deserialize_with = "null_as_default")]
+    pub no_agent: bool,
+    pub interpreter: Option<String>,
+    #[serde(deserialize_with = "null_as_default")]
+    pub skills: Vec<String>,
+    pub monitor_script: Option<String>,
+    pub monitor_url: Option<String>,
+    pub workdir: Option<String>,
 }
 
 /// What `hermes cron edit` was given.
@@ -209,6 +227,59 @@ pub struct EditParams {
     pub model: Option<String>,
     pub timezone: Option<String>,
     pub grace_minutes: Option<String>,
+    pub script: Option<String>,
+    pub no_agent: Option<bool>,
+    pub interpreter: Option<String>,
+    pub skills: Option<Vec<String>>,
+    pub monitor_script: Option<String>,
+    pub monitor_url: Option<String>,
+    pub workdir: Option<String>,
+}
+
+fn canonical_skills(raw: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for item in raw {
+        let stripped = py_strip(item);
+        if !stripped.is_empty() && !out.iter().any(|existing: &String| existing == stripped) {
+            out.push(stripped.to_owned());
+        }
+    }
+    out
+}
+
+fn validate_workdir(workdir: Option<&str>) -> Result<Option<String>, String> {
+    let Some(raw) = workdir else { return Ok(None) };
+    let trimmed = py_strip(raw);
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let path = Path::new(trimmed);
+    if !path.is_absolute() {
+        return Err(format!(
+            "workdir must be an absolute path, got {}",
+            py_repr(trimmed)
+        ));
+    }
+    if !path.is_dir() {
+        return Err(format!("workdir directory does not exist: {trimmed}"));
+    }
+    Ok(Some(trimmed.to_owned()))
+}
+
+fn validate_monitor_url_syntax(url: Option<&str>) -> Result<Option<String>, String> {
+    let Some(raw) = url else { return Ok(None) };
+    let trimmed = py_strip(raw);
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let lower = trimmed.to_lowercase();
+    if !lower.starts_with("http://") && !lower.starts_with("https://") {
+        return Err(format!(
+            "monitor_url must start with http:// or https://, got {}",
+            py_repr(trimmed)
+        ));
+    }
+    Ok(Some(trimmed.to_owned()))
 }
 
 /// Create a job with a fresh random ID and save it.
@@ -226,12 +297,52 @@ pub fn add_job_with_id(
     if params.schedule.is_empty() {
         return Err("schedule is required for create".into());
     }
+    let skills = canonical_skills(&params.skills);
+    let script = params
+        .script
+        .as_deref()
+        .map(py_strip)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    let monitor_script = params
+        .monitor_script
+        .as_deref()
+        .map(py_strip)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    let monitor_url = validate_monitor_url_syntax(params.monitor_url.as_deref())?;
+    let interpreter = params
+        .interpreter
+        .as_deref()
+        .map(py_strip)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    let workdir = validate_workdir(params.workdir.as_deref())?;
+
+    if monitor_script.is_some() && monitor_url.is_some() {
+        return Err("Cannot set both monitor_script and monitor_url on the same job.".into());
+    }
+    if params.no_agent && script.is_none() {
+        return Err("no_agent=True requires a script.".into());
+    }
+    if params.no_agent && (monitor_script.is_some() || monitor_url.is_some()) {
+        return Err("monitor cannot be combined with no_agent=True.".into());
+    }
+    if let Some(ref s) = script {
+        super::script::validate_script_path_for_create(home, s)?;
+    }
+    if let Some(ref ms) = monitor_script {
+        super::script::validate_script_path_for_create(home, ms)?;
+    }
+
     let prompt = params.prompt.as_deref().unwrap_or_default();
-    if prompt.is_empty() {
+    if prompt.is_empty() && skills.is_empty() && script.is_none() {
         return Err("create requires either prompt or at least one skill".into());
     }
-    if let Some(threat) = super::scan::scan_cron_prompt(prompt) {
-        return Err(threat);
+    if !prompt.is_empty() {
+        if let Some(threat) = super::scan::scan_cron_prompt(prompt) {
+            return Err(threat);
+        }
     }
     let deliver = match params.deliver.as_deref() {
         Some(value) => local_only(value, "--deliver")?,
@@ -260,13 +371,20 @@ pub fn add_job_with_id(
     let grace = normalize_grace_minutes(params.grace_minutes.as_deref())?;
     validate_grace_kind(Some(&schedule.kind), grace)?;
     let prompt_text = py_strip(prompt);
-    if prompt_text.is_empty() {
+    if prompt_text.is_empty() && skills.is_empty() && script.is_none() {
         return Err(EMPTY_PAYLOAD_ERROR.into());
     }
     let name = match params.name.as_deref().filter(|name| !name.is_empty()) {
         Some(name) => name.to_owned(),
         None => {
-            let label: String = prompt_text.chars().take(50).collect();
+            let source = if !prompt_text.is_empty() {
+                prompt_text
+            } else if let Some(ref s) = script {
+                s.as_str()
+            } else {
+                skills.first().map(String::as_str).unwrap_or(id)
+            };
+            let label: String = source.chars().take(50).collect();
             py_strip(&label).to_owned()
         }
     };
@@ -280,19 +398,20 @@ pub fn add_job_with_id(
 
     let stamp = iso_instant(now);
     let paused = params.paused;
+    let first_skill = skills.first().cloned();
     let mut job = json!({
         "id": id,
         "name": name,
         "prompt": prompt_text,
-        "skills": [],
-        "skill": null,
+        "skills": skills,
+        "skill": first_skill,
         "model": model,
         "provider": null,
         "base_url": null,
-        "script": null,
-        "no_agent": false,
-        "monitor_script": null,
-        "monitor_url": null,
+        "script": script,
+        "no_agent": params.no_agent,
+        "monitor_script": monitor_script,
+        "monitor_url": monitor_url,
         "monitor_state": null,
         "context_from": null,
         "schedule": schedule,
@@ -319,7 +438,7 @@ pub fn add_job_with_id(
         "deliver": deliver.unwrap_or_else(|| "local".to_owned()),
         "origin": null,
         "enabled_toolsets": null,
-        "workdir": null,
+        "workdir": workdir,
     });
     // Optional keys are written only when set, as the reference does.
     let record = job.as_object_mut().ok_or("invalid job record")?;
@@ -329,6 +448,7 @@ pub fn add_job_with_id(
         ("grace_minutes", grace.map(Value::from)),
         ("catch_up", params.catch_up.map(Value::from)),
         ("wrap_response", params.wrap_response.map(Value::from)),
+        ("interpreter", interpreter.map(Value::from)),
     ] {
         if let Some(value) = value {
             record.insert(key.into(), value);
@@ -518,10 +638,132 @@ pub fn edit_job(
                 updates.insert("enabled".into(), json!(true));
             }
         }
+        if let Some(script) = &params.script {
+            let trimmed = py_strip(script);
+            if trimmed.is_empty() {
+                updates.insert("script".into(), Value::Null);
+            } else {
+                super::script::validate_script_path_for_create(home, trimmed)?;
+                updates.insert("script".into(), json!(trimmed));
+            }
+        }
+        if let Some(no_agent) = params.no_agent {
+            updates.insert("no_agent".into(), json!(no_agent));
+        }
+        if let Some(interp) = &params.interpreter {
+            let trimmed = py_strip(interp);
+            updates.insert(
+                "interpreter".into(),
+                if trimmed.is_empty() {
+                    Value::Null
+                } else {
+                    json!(trimmed)
+                },
+            );
+        }
+        if let Some(skills) = &params.skills {
+            let canon = canonical_skills(skills);
+            let first = canon.first().cloned();
+            updates.insert("skills".into(), json!(canon));
+            updates.insert("skill".into(), json!(first));
+        }
+        if let Some(ms) = &params.monitor_script {
+            let trimmed = py_strip(ms);
+            if trimmed.is_empty() {
+                updates.insert("monitor_script".into(), Value::Null);
+            } else {
+                super::script::validate_script_path_for_create(home, trimmed)?;
+                updates.insert("monitor_script".into(), json!(trimmed));
+            }
+            updates.insert("monitor_state".into(), Value::Null);
+        }
+        if let Some(mu) = &params.monitor_url {
+            match validate_monitor_url_syntax(Some(mu))? {
+                Some(valid) => {
+                    updates.insert("monitor_url".into(), json!(valid));
+                }
+                None => {
+                    updates.insert("monitor_url".into(), Value::Null);
+                }
+            }
+            updates.insert("monitor_state".into(), Value::Null);
+        }
+        if let Some(wd) = &params.workdir {
+            match validate_workdir(Some(wd))? {
+                Some(valid) => {
+                    updates.insert("workdir".into(), json!(valid));
+                }
+                None => {
+                    updates.insert("workdir".into(), Value::Null);
+                }
+            }
+        }
         if updates.is_empty() {
             return Err("No updates provided.".into());
         }
+        // Validate post-merge script/no_agent/monitor invariants before mutating store.
+        let eff_script = updates
+            .get("script")
+            .unwrap_or(&jobs[index]["script"])
+            .as_str()
+            .map(py_strip)
+            .filter(|s| !s.is_empty());
+        let eff_no_agent = updates
+            .get("no_agent")
+            .unwrap_or(&jobs[index]["no_agent"])
+            .as_bool()
+            .unwrap_or(false);
+        let eff_mon_script = updates
+            .get("monitor_script")
+            .unwrap_or(&jobs[index]["monitor_script"])
+            .as_str()
+            .map(py_strip)
+            .filter(|s| !s.is_empty());
+        let eff_mon_url = updates
+            .get("monitor_url")
+            .unwrap_or(&jobs[index]["monitor_url"])
+            .as_str()
+            .map(py_strip)
+            .filter(|s| !s.is_empty());
+        if eff_mon_script.is_some() && eff_mon_url.is_some() {
+            return Err("Cannot set both monitor_script and monitor_url on the same job.".into());
+        }
+        if eff_no_agent && eff_script.is_none() {
+            return Err("no_agent=True requires a script.".into());
+        }
+        if eff_no_agent && (eff_mon_script.is_some() || eff_mon_url.is_some()) {
+            return Err("monitor cannot be combined with no_agent=True.".into());
+        }
         update_job(jobs, index, updates, now)?;
+        Ok((jobs[index].clone(), true))
+    })
+}
+
+/// Queue an immediate run for a job by stamping `next_run_at = now` (preserving any future slot in
+/// `manual_run_restore_at`, matching `cron/jobs.py::trigger_job`).
+pub fn trigger_job_now(home: &Path, now: DateTime<Tz>, reference: &str) -> Result<Value, String> {
+    with_jobs(home, now, |jobs| {
+        let index = resolve_for(jobs, reference, "run")?;
+        let job = &jobs[index];
+        let paused_marker = job["state"].as_str() == Some("paused") || truthy(&job["paused_at"]);
+        let runnable = job.get("enabled").is_none_or(truthy) && !paused_marker;
+        if !runnable {
+            return Err("Job is paused/disabled; resume it before running.".into());
+        }
+        if let Some(reason) = unsupported_reason(job) {
+            return Err(format!(
+                "Cannot run job '{}': it {reason}.",
+                job["name"].as_str().unwrap_or_default()
+            ));
+        }
+        let now_iso = iso_instant(now);
+        let stored_next = job["next_run_at"].clone();
+        let record = jobs[index].as_object_mut().ok_or("invalid job record")?;
+        if record.get("manual_run_restore_at").is_none() {
+            record.insert("manual_run_restore_at".into(), stored_next);
+        }
+        record.insert("manual_run_at".into(), json!(now_iso));
+        record.insert("next_run_at".into(), json!(now_iso));
         Ok((jobs[index].clone(), true))
     })
 }

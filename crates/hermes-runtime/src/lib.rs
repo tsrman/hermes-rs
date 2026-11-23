@@ -7,6 +7,7 @@ mod compaction;
 mod compaction_window;
 pub mod config;
 pub mod cron;
+pub mod cronjob_tool;
 pub mod delegation;
 mod difflib;
 #[cfg(unix)]

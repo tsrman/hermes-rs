@@ -22,9 +22,8 @@ pub struct JobSummary {
     pub timezone: Option<String>,
 }
 
-/// Jobs from `<home>/cron/jobs.json`. A missing file is an empty list. The file is never
-/// rewritten, so a damaged shape is reported instead of repaired.
-pub fn read_jobs(home: &Path) -> Result<Vec<JobSummary>, String> {
+/// Raw job records from `<home>/cron/jobs.json`. A missing file is an empty list. Never rewrites.
+pub fn read_raw_jobs(home: &Path) -> Result<Vec<Value>, String> {
     let path = home.join("cron").join("jobs.json");
     let raw = match std::fs::read_to_string(&path) {
         Ok(raw) => raw,
@@ -57,11 +56,13 @@ pub fn read_jobs(home: &Path) -> Result<Vec<JobSummary>, String> {
         },
         _ => return Err("cron jobs.json must contain an object or a list".into()),
     };
-    Ok(records
-        .iter()
-        .filter(|job| job.is_object())
-        .map(summarize)
-        .collect())
+    Ok(records.into_iter().filter(|job| job.is_object()).collect())
+}
+
+/// Jobs from `<home>/cron/jobs.json`. A missing file is an empty list. The file is never
+/// rewritten, so a damaged shape is reported instead of repaired.
+pub fn read_jobs(home: &Path) -> Result<Vec<JobSummary>, String> {
+    Ok(read_raw_jobs(home)?.iter().map(summarize).collect())
 }
 
 fn text(job: &Value, key: &str) -> String {

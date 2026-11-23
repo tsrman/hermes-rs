@@ -4,7 +4,10 @@ use std::path::Path;
 use clap::{Args, Subcommand, ValueEnum};
 use hermes_runtime::cron::manage::{self, AddParams, EditParams, ManualClaim, WrapResponse};
 use hermes_runtime::cron::schedule::{compute_next_run, parse_schedule};
-use hermes_runtime::cron::{now_in, profile_timezone, store, DateTime, Tz};
+use hermes_runtime::cron::{
+    cancel, doctor, executions, incidents, monitor, notepad, now_in, profile_timezone, script,
+    store, DateTime, Tz,
+};
 use serde_json::json;
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -13,29 +16,11 @@ pub enum Toggle {
     Off,
 }
 
-/// Job features of the reference that this version does not run. Each is accepted by the parser
-/// so that it is refused with a reason, instead of being rejected as an unknown flag or, worse,
-/// stored on a job that would never run as intended.
+/// Job features of the reference that this version still does not run. Each is accepted by the
+/// parser so that it is refused with a reason, instead of being rejected as an unknown flag or,
+/// worse, stored on a job that would never run as intended.
 #[derive(Args, Default)]
 pub struct Unsupported {
-    /// Not supported: skills.
-    #[arg(long = "skill", value_name = "SKILL", hide = true)]
-    skill: Vec<String>,
-    /// Not supported: pre-run scripts.
-    #[arg(long, hide = true)]
-    script: Option<String>,
-    /// Not supported: script-only jobs.
-    #[arg(long, hide = true)]
-    no_agent: bool,
-    /// Not supported: monitors.
-    #[arg(long, hide = true)]
-    monitor_script: Option<String>,
-    /// Not supported: monitors.
-    #[arg(long, hide = true)]
-    monitor_url: Option<String>,
-    /// Not supported: a working directory.
-    #[arg(long, hide = true)]
-    workdir: Option<String>,
     /// Not supported: pinning the main model.
     #[arg(long, hide = true)]
     pin: bool,
@@ -45,9 +30,6 @@ pub struct Unsupported {
     /// Not supported: a reasoning effort override.
     #[arg(long, hide = true)]
     reasoning_effort: Option<String>,
-    /// Not supported: an interpreter for scripts.
-    #[arg(long, hide = true)]
-    interpreter: Option<String>,
     /// Not supported: run-to-run continuity (`context_from`).
     #[arg(long, hide = true)]
     continuity: bool,
@@ -56,36 +38,6 @@ pub struct Unsupported {
 impl Unsupported {
     fn refuse(&self) -> Result<(), String> {
         let found = [
-            (
-                !self.skill.is_empty(),
-                "--skill",
-                "skills are not run by this version",
-            ),
-            (
-                self.script.is_some(),
-                "--script",
-                "pre-run scripts are not run by this version",
-            ),
-            (
-                self.no_agent,
-                "--no-agent",
-                "script-only jobs are not run by this version",
-            ),
-            (
-                self.monitor_script.is_some(),
-                "--monitor-script",
-                "monitors are not run by this version",
-            ),
-            (
-                self.monitor_url.is_some(),
-                "--monitor-url",
-                "monitors are not run by this version",
-            ),
-            (
-                self.workdir.is_some(),
-                "--workdir",
-                "a job working directory is not supported by this version",
-            ),
             (
                 self.pin,
                 "--pin",
@@ -100,11 +52,6 @@ impl Unsupported {
                 self.reasoning_effort.is_some(),
                 "--reasoning-effort",
                 "a reasoning effort override is not honoured by this version",
-            ),
-            (
-                self.interpreter.is_some(),
-                "--interpreter",
-                "script interpreters are not supported by this version",
             ),
             (
                 self.continuity,
@@ -126,18 +73,6 @@ impl Unsupported {
 pub struct UnsupportedEdit {
     #[command(flatten)]
     common: Unsupported,
-    /// Not supported: skills.
-    #[arg(long, value_name = "SKILL", hide = true)]
-    add_skill: Vec<String>,
-    /// Not supported: skills.
-    #[arg(long, value_name = "SKILL", hide = true)]
-    remove_skill: Vec<String>,
-    /// Not supported: skills.
-    #[arg(long, hide = true)]
-    clear_skills: bool,
-    /// Not supported: script-only jobs.
-    #[arg(long, hide = true)]
-    agent: bool,
     /// Not supported: run-to-run continuity.
     #[arg(long, hide = true)]
     no_continuity: bool,
@@ -150,20 +85,46 @@ impl UnsupportedEdit {
     fn refuse(&self) -> Result<(), String> {
         self.common.refuse()?;
         let found = [
-            (!self.add_skill.is_empty(), "--add-skill"),
-            (!self.remove_skill.is_empty(), "--remove-skill"),
-            (self.clear_skills, "--clear-skills"),
-            (self.agent, "--agent"),
             (self.no_continuity, "--no-continuity"),
             (self.unpin, "--unpin"),
         ];
         match found.into_iter().find(|(present, _)| *present) {
             Some((_, flag)) => Err(format!(
-                "{flag} is not supported: skills, scripts, continuity and model pins are not handled by this version. Edit this job with the Python agent."
+                "{flag} is not supported: continuity and model pins are not handled by this version. Edit this job with the Python agent."
             )),
             None => Ok(()),
         }
     }
+}
+
+#[derive(Subcommand)]
+pub enum IncidentCommand {
+    /// List recorded failure incidents as JSON.
+    List {
+        /// Filter by state (`detected`, `alerted`, `resolved`, `closed`).
+        #[arg(long)]
+        state: Option<String>,
+        /// Filter by job ID.
+        #[arg(long)]
+        job: Option<String>,
+        /// Maximum number of incidents to return.
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    /// Acknowledge and permanently close an incident by ID.
+    Ack { incident_id: String },
+}
+
+#[derive(Subcommand)]
+pub enum NotepadCommand {
+    /// List all notepad entries for the job as JSON.
+    List,
+    /// Get one notepad value by key.
+    Get { key: String },
+    /// Set one notepad key to a value.
+    Set { key: String, value: String },
+    /// Delete one notepad key.
+    Delete { key: String },
 }
 
 #[derive(Subcommand)]
@@ -183,7 +144,7 @@ pub enum Command {
     Add {
         /// Schedule like '30m', 'every 2h' or '0 9 * * *'.
         schedule: String,
-        /// Self-contained prompt for the agent.
+        /// Self-contained prompt for the agent (optional when --script or --skill is given).
         prompt: Option<String>,
         /// Human-friendly job name.
         #[arg(long)]
@@ -221,6 +182,27 @@ pub enum Command {
         /// Reason recorded with --paused.
         #[arg(long)]
         paused_reason: Option<String>,
+        /// Pre-run script relative to `<profile>/scripts/`.
+        #[arg(long)]
+        script: Option<String>,
+        /// Script-only job (no LLM): runs --script and saves stdout verbatim.
+        #[arg(long)]
+        no_agent: bool,
+        /// Explicit Python interpreter path for `.py` scripts.
+        #[arg(long)]
+        interpreter: Option<String>,
+        /// Skill name(s) to load before the prompt (repeatable).
+        #[arg(long = "skill", value_name = "SKILL")]
+        skill: Vec<String>,
+        /// Change-detecting monitor script relative to `<profile>/scripts/`.
+        #[arg(long, conflicts_with = "monitor_url")]
+        monitor_script: Option<String>,
+        /// Change-detecting monitor HTTP(S) URL.
+        #[arg(long, conflicts_with = "monitor_script")]
+        monitor_url: Option<String>,
+        /// Existing absolute working directory for the job and its scripts.
+        #[arg(long)]
+        workdir: Option<String>,
         #[command(flatten)]
         unsupported: Unsupported,
     },
@@ -266,6 +248,39 @@ pub enum Command {
         /// Catch-up window in minutes (0-1440); '' restores the computed window.
         #[arg(long, allow_hyphen_values = true)]
         grace_minutes: Option<String>,
+        /// Pre-run script relative to `<profile>/scripts/`; '' clears it.
+        #[arg(long)]
+        script: Option<String>,
+        /// Enable script-only mode (no LLM).
+        #[arg(long, conflicts_with = "agent")]
+        no_agent: bool,
+        /// Disable script-only mode (use LLM agent).
+        #[arg(long, conflicts_with = "no_agent")]
+        agent: bool,
+        /// Explicit Python interpreter path; '' clears it.
+        #[arg(long)]
+        interpreter: Option<String>,
+        /// Replace skill list (repeatable).
+        #[arg(long = "skill", value_name = "SKILL")]
+        skill: Vec<String>,
+        /// Append skill(s) to the existing list.
+        #[arg(long = "add-skill", value_name = "SKILL")]
+        add_skill: Vec<String>,
+        /// Remove skill(s) from the existing list.
+        #[arg(long = "remove-skill", value_name = "SKILL")]
+        remove_skill: Vec<String>,
+        /// Clear all skills from the job.
+        #[arg(long)]
+        clear_skills: bool,
+        /// Monitor script relative to `<profile>/scripts/`; '' clears it.
+        #[arg(long)]
+        monitor_script: Option<String>,
+        /// Monitor HTTP(S) URL; '' clears it.
+        #[arg(long)]
+        monitor_url: Option<String>,
+        /// Working directory for the job; '' clears it.
+        #[arg(long)]
+        workdir: Option<String>,
         #[command(flatten)]
         unsupported: UnsupportedEdit,
     },
@@ -290,9 +305,40 @@ pub enum Command {
     /// A run ahead of the job's next slot is an extra fire: the slot and the repeat budget are
     /// left alone. Exits with 1 when the run fails.
     Run { job: String },
+    /// Request cancellation of a job's live execution without touching its schedule.
+    Cancel {
+        job: String,
+        /// Optional human-readable reason for the cancellation.
+        #[arg(long)]
+        reason: Option<String>,
+    },
     /// Remove a job, stopping its run in progress, and delete its saved output.
     #[command(visible_aliases = ["rm", "delete"])]
     Remove { job: String },
+    /// Show cron store health, active/overdue job counts, incidents, and recent runs as JSON.
+    Status,
+    /// Show durable cron execution history from `cron/executions.db` as JSON.
+    #[command(visible_alias = "history")]
+    Runs {
+        /// Optional job ID filter.
+        job: Option<String>,
+        /// Maximum number of runs to return.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Inspect or acknowledge deduplicated failure incidents in `cron/executions.db`.
+    Incidents {
+        #[command(subcommand)]
+        action: Option<IncidentCommand>,
+    },
+    /// Inspect or update a job's persistent key/value notepad (`cron/notepad.db`).
+    Notepad {
+        job: String,
+        #[command(subcommand)]
+        action: Option<NotepadCommand>,
+    },
+    /// Check store writability and every active job's health; exits 1 if issues are found.
+    Doctor,
     /// Run the jobs that are due now, once, and print what happened as JSON.
     ///
     /// Meant for a system crontab or timer (for example every minute). It shares the
@@ -329,6 +375,65 @@ fn new_owner() -> Result<String, String> {
     ))
 }
 
+fn resolve_edit_skills(
+    home: &Path,
+    reference: &str,
+    replace: &[String],
+    add: &[String],
+    remove: &[String],
+    clear: bool,
+) -> Result<Option<Vec<String>>, String> {
+    if clear {
+        return Ok(Some(Vec::new()));
+    }
+    if !replace.is_empty() {
+        return Ok(Some(replace.to_vec()));
+    }
+    if add.is_empty() && remove.is_empty() {
+        return Ok(None);
+    }
+    // Load existing skills to merge cleanly.
+    let jobs = store::read_raw_jobs(home)?;
+    let lower = reference.to_lowercase();
+    let existing = jobs
+        .iter()
+        .find(|j| j["id"].as_str() == Some(reference))
+        .or_else(|| {
+            jobs.iter().find(|j| {
+                j["name"]
+                    .as_str()
+                    .is_some_and(|n| n.to_lowercase() == lower)
+            })
+        });
+    let mut current: Vec<String> = existing
+        .and_then(|job| {
+            if let Some(arr) = job["skills"].as_array() {
+                Some(
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.trim().to_owned()))
+                        .filter(|s| !s.is_empty())
+                        .collect(),
+                )
+            } else {
+                job["skill"]
+                    .as_str()
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| vec![s.to_owned()])
+            }
+        })
+        .unwrap_or_default();
+    let remove_set: std::collections::HashSet<&str> = remove.iter().map(|s| s.trim()).collect();
+    current.retain(|s| !remove_set.contains(s.as_str()));
+    for item in add {
+        let trimmed = item.trim();
+        if !trimmed.is_empty() && !current.iter().any(|s| s == trimmed) {
+            current.push(trimmed.to_owned());
+        }
+    }
+    Ok(Some(current))
+}
+
 pub async fn run(home: Option<&Path>, command: Command) -> Result<u8, String> {
     let mut output = io::stdout().lock();
     let zone = profile_timezone(home);
@@ -358,6 +463,13 @@ pub async fn run(home: Option<&Path>, command: Command) -> Result<u8, String> {
             grace_minutes,
             paused,
             paused_reason,
+            script,
+            no_agent,
+            interpreter,
+            skill,
+            monitor_script,
+            monitor_url,
+            workdir,
             unsupported,
         } => {
             unsupported
@@ -378,6 +490,13 @@ pub async fn run(home: Option<&Path>, command: Command) -> Result<u8, String> {
                 grace_minutes,
                 paused,
                 paused_reason,
+                script,
+                no_agent,
+                interpreter,
+                skills: skill,
+                monitor_script,
+                monitor_url,
+                workdir,
             };
             let job = manage::add_job(home, now_in(zone), &params)
                 .map_err(|error| format!("Failed to create job: {error}"))?;
@@ -398,12 +517,25 @@ pub async fn run(home: Option<&Path>, command: Command) -> Result<u8, String> {
             model,
             timezone,
             grace_minutes,
+            script,
+            no_agent,
+            agent,
+            interpreter,
+            skill,
+            add_skill,
+            remove_skill,
+            clear_skills,
+            monitor_script,
+            monitor_url,
+            workdir,
             unsupported,
         } => {
             unsupported
                 .refuse()
                 .map_err(|error| format!("Failed to update job: {error}"))?;
             let home = home.ok_or("profile root is unavailable")?;
+            let skills =
+                resolve_edit_skills(home, &job, &skill, &add_skill, &remove_skill, clear_skills)?;
             let params = EditParams {
                 schedule,
                 prompt,
@@ -424,6 +556,13 @@ pub async fn run(home: Option<&Path>, command: Command) -> Result<u8, String> {
                 model,
                 timezone,
                 grace_minutes,
+                script,
+                no_agent: tri(no_agent, agent),
+                interpreter,
+                skills,
+                monitor_script,
+                monitor_url,
+                workdir,
             };
             let updated = manage::edit_job(home, now_in(zone), &job, &params).map_err(|error| {
                 // A lookup failure is reported as is, as the reference's edit does.
@@ -479,11 +618,83 @@ pub async fn run(home: Option<&Path>, command: Command) -> Result<u8, String> {
             code = exit;
             value
         }
+        Command::Cancel { job, reason } => {
+            let home = home.ok_or("profile root is unavailable")?;
+            let result = cancel::cancel_run(home, now_in(zone), &job, reason.as_deref())
+                .map_err(|error| format!("Failed to cancel run: {error}"))?;
+            serde_json::to_value(result).map_err(|error| error.to_string())?
+        }
         Command::Remove { job } => {
             let home = home.ok_or("profile root is unavailable")?;
             let id = store::remove_job(home, now_in(zone), &job)
                 .map_err(|error| format!("Failed to remove job: {error}"))?;
             json!({"removed": id})
+        }
+        Command::Status => {
+            let home = home.ok_or("profile root is unavailable")?;
+            let report = doctor::cron_status(home, now_in(zone))?;
+            serde_json::to_value(report).map_err(|error| error.to_string())?
+        }
+        Command::Runs { job, limit } => {
+            let home = home.ok_or("profile root is unavailable")?;
+            let records = executions::list_executions(home, job.as_deref(), limit)?;
+            serde_json::to_value(records).map_err(|error| error.to_string())?
+        }
+        Command::Incidents { action } => {
+            let home = home.ok_or("profile root is unavailable")?;
+            match action.unwrap_or(IncidentCommand::List {
+                state: None,
+                job: None,
+                limit: 50,
+            }) {
+                IncidentCommand::List { state, job, limit } => {
+                    let list =
+                        incidents::list_incidents(home, job.as_deref(), state.as_deref(), limit)?;
+                    serde_json::to_value(list).map_err(|error| error.to_string())?
+                }
+                IncidentCommand::Ack { incident_id } => {
+                    let acked = incidents::ack_incident(home, &incident_id, now_in(zone))?;
+                    if !acked {
+                        return Err(format!("Incident not found: {incident_id}"));
+                    }
+                    json!({"acked": true, "incident_id": incident_id})
+                }
+            }
+        }
+        Command::Notepad { job, action } => {
+            let home = home.ok_or("profile root is unavailable")?;
+            match action.unwrap_or(NotepadCommand::List) {
+                NotepadCommand::List => {
+                    let notes = notepad::list_notes(home, &job)?;
+                    serde_json::to_value(notes).map_err(|error| error.to_string())?
+                }
+                NotepadCommand::Get { key } => match notepad::get_note(home, &job, &key)? {
+                    Some(value) => json!({"job_id": job, "key": key, "value": value}),
+                    None => {
+                        return Err(format!("No notepad key '{key}' for job {job}."));
+                    }
+                },
+                NotepadCommand::Set { key, value } => {
+                    let note = notepad::set_note(home, &job, &key, &value, now_in(zone))
+                        .map_err(|error| format!("Notepad error: {error}"))?;
+                    serde_json::to_value(note).map_err(|error| error.to_string())?
+                }
+                NotepadCommand::Delete { key } => {
+                    let deleted = notepad::delete_note(home, &job, &key)?;
+                    if !deleted {
+                        return Err(format!("No notepad key '{key}' for job {job}."));
+                    }
+                    json!({"deleted": true, "job_id": job, "key": key})
+                }
+            }
+        }
+        Command::Doctor => {
+            let home = home.ok_or("profile root is unavailable")?;
+            let report = doctor::run_doctor(home, now_in(zone))?;
+            if !report.healthy {
+                code = 1;
+            }
+            serde_json::to_value(report).map_err(|error| error.to_string())?
         }
         Command::Preview {
             schedule,
@@ -541,11 +752,46 @@ async fn run_now(
         ManualClaim::Claimed(record) => *record,
     };
     let id = record["id"].as_str().unwrap_or_default().to_owned();
-    let (success, error, status, document) = run_job(home, &record, started, Some(&owner)).await;
+    let exec_id = executions::create_execution(home, &id, "manual", started, None).ok();
+    if let Some(ref eid) = exec_id {
+        let _ = executions::mark_execution_running(home, eid, started);
+    }
+    let (success, error, status, document) =
+        run_job(home, &record, started, Some(&owner), exec_id.as_deref()).await;
     let finished = now_in(zone);
     let output = save_output_if_present(home, &id, finished, &document)
         .ok()
         .flatten();
+    if let Some(ref eid) = exec_id {
+        let exec_status = if status == Some("cancelled") {
+            "cancelled"
+        } else if success {
+            "completed"
+        } else {
+            "failed"
+        };
+        let _ = executions::finish_execution(
+            home,
+            eid,
+            exec_status,
+            error.as_deref(),
+            Some("local"),
+            finished,
+        );
+        cancel::clear_cancel(home, eid);
+    }
+    if success {
+        let _ = incidents::close_incidents_for_recovered_job(home, &id, finished);
+    } else if status != Some("cancelled") {
+        let out_str = output.as_ref().map(|p| p.to_string_lossy().into_owned());
+        let _ = incidents::upsert_incident(
+            home,
+            &id,
+            error.as_deref().unwrap_or("cron job failed"),
+            out_str.as_deref(),
+            finished,
+        );
+    }
     mark_job_run(
         home,
         finished,
@@ -562,6 +808,7 @@ async fn run_now(
     Ok((
         json!({
             "executed": true,
+            "execution_id": exec_id,
             "success": success,
             "status": status.unwrap_or(if success { "ok" } else { "error" }),
             "error": error,
@@ -583,8 +830,25 @@ fn inactivity_limit() -> Option<std::time::Duration> {
     (seconds > 0.0).then(|| std::time::Duration::from_secs_f64(seconds))
 }
 
-/// The prompt a job runs with: the fixed hint, this run's time, and the stored prompt.
-fn job_prompt(job: &serde_json::Value, now: DateTime<Tz>) -> String {
+fn job_skill_names(job: &serde_json::Value) -> Vec<String> {
+    if let Some(items) = job["skills"].as_array() {
+        return items
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.trim().to_owned()))
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+    if let Some(single) = job["skill"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return vec![single.to_owned()];
+    }
+    Vec::new()
+}
+
+fn run_time_line(job: &serde_json::Value, now: DateTime<Tz>) -> String {
     let pinned = job["timezone"]
         .as_str()
         .and_then(|name| name.trim().parse::<Tz>().ok());
@@ -596,44 +860,234 @@ fn job_prompt(job: &serde_json::Value, now: DateTime<Tz>) -> String {
         String::new()
     };
     format!(
-        "{CRON_HINT}[CURRENT RUN TIME: {}{zone}]\n\n{}",
-        shown.format("%A, %Y-%m-%d %H:%M %Z").to_string().trim(),
-        job["prompt"].as_str().unwrap_or_default()
+        "[CURRENT RUN TIME: {}{zone}]\n\n",
+        shown.format("%A, %Y-%m-%d %H:%M %Z").to_string().trim()
     )
+}
+
+fn short_circuit_header(job: &serde_json::Value, now: DateTime<Tz>, mode: &str) -> String {
+    format!(
+        "# Cron Job: {}\n\n**Job ID:** {}\n**Run Time:** {}\n**Mode:** {mode}\n",
+        job["name"]
+            .as_str()
+            .filter(|n| !n.is_empty())
+            .unwrap_or("cron job"),
+        job["id"].as_str().unwrap_or_default(),
+        now.format("%Y-%m-%d %H:%M:%S"),
+    )
+}
+
+/// Assemble the effective prompt for an agent-backed cron job (matching `cron/scheduler_prompt.py`):
+/// user prompt + optional monitor context + optional pre-run script block + notepad section +
+/// cron hint + run time + optional loaded skills.
+fn build_job_prompt(
+    home: &Path,
+    job: &serde_json::Value,
+    now: DateTime<Tz>,
+    workdir: Option<&Path>,
+    script_block: Option<(bool, &str)>,
+    monitor_context: Option<&str>,
+) -> String {
+    let id = job["id"].as_str().unwrap_or_default();
+    let mut prompt = job["prompt"].as_str().unwrap_or_default().to_owned();
+    if let Some(mon) = monitor_context.filter(|m| !m.is_empty()) {
+        if prompt.is_empty() {
+            prompt = format!("## Run Context\n{mon}");
+        } else {
+            prompt = format!("{prompt}\n\n## Run Context\n{mon}");
+        }
+    }
+    if let Some((ok, script_out)) = script_block {
+        let (heading, intro) = if ok {
+            (
+                "Script Output",
+                "The following data was collected by a pre-run script. Use it as context for your analysis.",
+            )
+        } else {
+            (
+                "Script Error",
+                "The data-collection script failed. Report this to the user.",
+            )
+        };
+        prompt = format!("## {heading}\n{intro}\n\n```\n{script_out}\n```\n\n{prompt}");
+    }
+    let notepad_section = notepad::render_notepad_section(home, id);
+    if !notepad_section.is_empty() {
+        prompt = format!("{notepad_section}{prompt}");
+    }
+    prompt = format!("{CRON_HINT}{}{prompt}", run_time_line(job, now));
+
+    let skills = job_skill_names(job);
+    if skills.is_empty() {
+        return prompt;
+    }
+    let cwd = workdir
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| home.to_path_buf());
+    let mut parts = hermes_runtime::cron::load_cron_skill_parts(home, &cwd, &skills);
+    if !prompt.is_empty() {
+        parts.push(String::new());
+        parts.push(prompt);
+    }
+    parts.join("\n")
 }
 
 /// One job's run. Returns the run's outcome and the text of its output document.
 ///
-/// While it runs, the fire claim is kept alive, and the run is stopped when the job is removed
-/// from the store (its output is then not kept) or when the claim has been taken over.
+/// Handles monitors, `no_agent` scripts, pre-run scripts (with wake-gate), notepad injection,
+/// skill loading, `workdir`, fire-claim heartbeats, and cross-process cancellation markers.
 async fn run_job(
     home: &Path,
     job: &serde_json::Value,
     now: DateTime<Tz>,
     owner: Option<&str>,
+    execution_id: Option<&str>,
 ) -> (bool, Option<String>, Option<&'static str>, String) {
     use std::cell::Cell;
     use std::time::{Duration, Instant};
 
     let id = job["id"].as_str().unwrap_or_default();
-    let stored_prompt = job["prompt"].as_str().unwrap_or_default();
-    // The stored prompt is scanned like a freshly created one: a hit stops the run and pauses
-    // the job, because a job left enabled would fail again on every tick.
-    if let Some(threat) = hermes_runtime::cron::scan::scan_cron_prompt(stored_prompt) {
-        let reason = format!("Prompt blocked by the injection scanner: {threat}");
-        let _ = hermes_runtime::cron::tick::block_and_pause(home, now, id, &reason);
-        let document = format!("# Cron Job: {}\n\n**Job ID:** {}\n**Status:** blocked (unrunnable job) — auto-paused\n\n{reason}\n",
-            job["name"].as_str().unwrap_or("cron job"), id);
-        return (false, Some(reason), Some("blocked"), document);
+    let workdir = job["workdir"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(Path::new)
+        .filter(|p| p.is_absolute() && p.is_dir());
+
+    let cancel_check = || {
+        execution_id
+            .filter(|eid| cancel::cancel_requested(home, eid))
+            .and_then(|eid| cancel::cancel_reason(home, eid))
+    };
+
+    // 1. no_agent short-circuit: script IS the job (no LLM tokens).
+    if job["no_agent"].as_bool() == Some(true) {
+        let script_path = job["script"].as_str().map(str::trim).unwrap_or_default();
+        if script_path.is_empty() {
+            let reason = "no-agent job has no script";
+            let _ = hermes_runtime::cron::tick::block_and_pause(home, now, id, reason);
+            let doc = format!(
+                "{}**Status:** blocked (unrunnable job) — auto-paused\n\n{reason}\n",
+                short_circuit_header(job, now, "no_agent (script)")
+            );
+            return (false, Some(reason.to_owned()), Some("blocked"), doc);
+        }
+        let interp = job["interpreter"].as_str();
+        let (ok, output) = script::run_job_script(
+            home,
+            script_path,
+            workdir,
+            interp,
+            script::script_timeout_secs(),
+            cancel_check,
+        )
+        .await;
+        let header = short_circuit_header(job, now, "no_agent (script)");
+        if !ok {
+            if cancel_check().is_some() {
+                let doc = format!("{header}**Status:** cancelled\n\n{output}\n");
+                return (false, Some(output), Some("cancelled"), doc);
+            }
+            let doc = format!("{header}**Status:** script failed\n\n{output}\n");
+            return (false, Some(output), None, doc);
+        }
+        if !script::parse_wake_gate(&output) {
+            let doc = format!("{header}**Status:** silent (wakeAgent=false)\n");
+            return (true, None, None, doc);
+        }
+        if output.trim().is_empty() {
+            let doc = format!("{header}**Status:** silent (empty output)\n");
+            return (true, None, None, doc);
+        }
+        let doc = format!("{header}\n---\n\n{output}\n");
+        return (true, None, None, doc);
     }
-    let prompt = job_prompt(job, now);
+
+    // 2. Monitor gate: run cheap hash check BEFORE any LLM call.
+    let mut monitor_context: Option<String> = None;
+    if monitor::job_has_monitor(job) {
+        let mon = monitor::check_monitor(home, job, now, cancel_check).await;
+        let header = short_circuit_header(job, now, "monitor");
+        if !mon.ok {
+            if cancel_check().is_some() {
+                let err = mon.error.unwrap_or_else(|| "Monitor cancelled".into());
+                let doc = format!("{header}**Status:** cancelled\n\n{err}\n");
+                return (false, Some(err), Some("cancelled"), doc);
+            }
+            let err = mon.error.unwrap_or_else(|| "Monitor source failed".into());
+            let doc = format!("{header}**Status:** monitor source failed\n\n{err}\n");
+            return (false, Some(err), None, doc);
+        }
+        if !mon.changed {
+            let doc = format!("{header}**Status:** no_change (agent run suppressed)\n");
+            return (true, None, None, doc);
+        }
+        monitor_context = Some(mon.context_block);
+    }
+
+    // 3. Stored user prompt scan (before pre-run script or LLM).
+    let stored_prompt = job["prompt"].as_str().unwrap_or_default();
+    if !stored_prompt.is_empty() {
+        if let Some(threat) = hermes_runtime::cron::scan::scan_cron_prompt(stored_prompt) {
+            let reason = format!("Prompt blocked by the injection scanner: {threat}");
+            let _ = hermes_runtime::cron::tick::block_and_pause(home, now, id, &reason);
+            let doc = format!(
+                "# Cron Job: {}\n\n**Job ID:** {}\n**Status:** blocked (unrunnable job) — auto-paused\n\n{reason}\n",
+                job["name"].as_str().unwrap_or("cron job"),
+                id
+            );
+            return (false, Some(reason), Some("blocked"), doc);
+        }
+    }
+
+    // 4. Optional pre-run script (for agent-backed jobs).
+    let mut script_result: Option<(bool, String)> = None;
+    if let Some(script_path) = job["script"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let interp = job["interpreter"].as_str();
+        let (ok, out) = script::run_job_script(
+            home,
+            script_path,
+            workdir,
+            interp,
+            script::script_timeout_secs(),
+            cancel_check,
+        )
+        .await;
+        if !ok && cancel_check().is_some() {
+            let doc = document(job, stored_prompt, &out, now);
+            return (false, Some(out), Some("cancelled"), doc);
+        }
+        if ok && (!script::parse_wake_gate(&out) || out.trim().is_empty()) {
+            let header = short_circuit_header(job, now, "script-gate");
+            let doc = format!("{header}**Status:** silent (agent run suppressed)\n");
+            return (true, None, None, doc);
+        }
+        script_result = Some((ok, out));
+    }
+
+    // 5. Assemble final prompt (with monitor context, script output, notepad, and skills).
+    let prompt = build_job_prompt(
+        home,
+        job,
+        now,
+        workdir,
+        script_result.as_ref().map(|(ok, out)| (*ok, out.as_str())),
+        monitor_context.as_deref(),
+    );
+
+    // 6. Run the agent turn under inactivity watchdog, claim heartbeat, and cancel polling.
     let model = job["model"]
         .as_str()
         .map(str::trim)
         .filter(|m| !m.is_empty())
         .map(str::to_owned);
     let last_event = Cell::new(Instant::now());
-    let turn = crate::chat::run_text(Some(home), prompt.clone(), model, "cron", || {
+    let turn = crate::chat::run_text(Some(home), prompt.clone(), model, "cron", workdir, || {
         last_event.set(Instant::now())
     });
     tokio::pin!(turn);
@@ -650,15 +1104,24 @@ async fn run_job(
                 if limit.is_some_and(|limit| last_event.get().elapsed() >= limit) {
                     break None;
                 }
+                // Check cross-process cancel marker every 100ms.
+                if let Some(reason) = cancel_check() {
+                    let doc = document(job, &prompt, &format!("Run cancelled: {reason}"), now);
+                    return (false, Some(reason), Some("cancelled"), doc);
+                }
                 // Once a second: is the job still there?
                 if ticks.is_multiple_of(10) && !store::job_exists(home, id) {
-                    let document = document(job, &prompt, "Run cancelled: the job was removed.", now);
-                    return (false, Some("job removed while running".to_owned()), Some("cancelled"), document);
+                    let doc = document(job, &prompt, "Run cancelled: the job was removed.", now);
+                    return (false, Some("job removed while running".to_owned()), Some("cancelled"), doc);
                 }
-                // Every ten seconds: keep the fire claim alive.
+                // Every ten seconds: keep the fire claim and execution progress alive.
                 if let Some(owner) = owner.filter(|_| last_heartbeat.elapsed() >= Duration::from_secs(10)) {
                     last_heartbeat = Instant::now();
-                    if !manage::heartbeat(home, now_in(now.timezone()), id, owner)
+                    let beat_now = now_in(now.timezone());
+                    if let Some(eid) = execution_id {
+                        let _ = executions::touch_progress(home, eid, beat_now);
+                    }
+                    if !manage::heartbeat(home, beat_now, id, owner)
                         && store::job_exists(home, id)
                     {
                         break Some(Err("Fire claim ownership lost".to_owned()));
@@ -667,8 +1130,8 @@ async fn run_job(
             }
             signal = tokio::signal::ctrl_c() => {
                 let _ = signal;
-                let document = crate::cron::document(job, &prompt, "Run cancelled.", now);
-                return (false, None, Some("cancelled"), document);
+                let doc = document(job, &prompt, "Run cancelled.", now);
+                return (false, None, Some("cancelled"), doc);
             }
         }
     };
@@ -712,8 +1175,8 @@ async fn run_job(
             }
         }
     };
-    let document = document(job, &prompt, &response, now);
-    (success, error, status, document)
+    let doc = document(job, &prompt, &response, now);
+    (success, error, status, doc)
 }
 
 fn document(job: &serde_json::Value, prompt: &str, response: &str, now: DateTime<Tz>) -> String {
@@ -740,12 +1203,48 @@ async fn tick(home: &Path, zone: Tz) -> Result<serde_json::Value, String> {
             busy.push(due.id);
             continue;
         }
+        let scheduled_instant = due.record["last_dispatch"]["scheduled_at"].as_str();
+        let exec_id =
+            executions::create_execution(home, &due.id, "tick", started, scheduled_instant).ok();
+        if let Some(ref eid) = exec_id {
+            let _ = executions::mark_execution_running(home, eid, started);
+        }
         let (success, error, status, document) =
-            run_job(home, &due.record, started, Some(&owner)).await;
+            run_job(home, &due.record, started, Some(&owner), exec_id.as_deref()).await;
         let finished = now_in(zone);
         let output = save_output_if_present(home, &due.id, finished, &document)
             .ok()
             .flatten();
+        if let Some(ref eid) = exec_id {
+            let exec_status = if status == Some("cancelled") {
+                "cancelled"
+            } else if success {
+                "completed"
+            } else {
+                "failed"
+            };
+            let _ = executions::finish_execution(
+                home,
+                eid,
+                exec_status,
+                error.as_deref(),
+                Some("local"),
+                finished,
+            );
+            cancel::clear_cancel(home, eid);
+        }
+        if success {
+            let _ = incidents::close_incidents_for_recovered_job(home, &due.id, finished);
+        } else if status != Some("cancelled") {
+            let out_str = output.as_ref().map(|p| p.to_string_lossy().into_owned());
+            let _ = incidents::upsert_incident(
+                home,
+                &due.id,
+                error.as_deref().unwrap_or("cron job failed"),
+                out_str.as_deref(),
+                finished,
+            );
+        }
         let outcome = Outcome {
             success,
             error: error.as_deref(),
@@ -756,6 +1255,7 @@ async fn tick(home: &Path, zone: Tz) -> Result<serde_json::Value, String> {
         ran.push(json!({
             "id": due.id,
             "name": due.name,
+            "execution_id": exec_id,
             "success": success,
             "status": status.unwrap_or(if success { "ok" } else { "error" }),
             "error": error,

@@ -1,0 +1,344 @@
+{
+  "notepad": {
+    "empty_render": "",
+    "get_alpha": "first",
+    "get_missing": null,
+    "list_keys": [
+      "alpha",
+      "beta"
+    ],
+    "rendered": "## Job notepad (persistent across runs)\nThis durable scratchpad survives between scheduled runs of this job. Update it via the CLI, e.g.:\n`hermes cron notepad job1 set <key> <value>` (also: get/delete/list; `hermes cron notepad job1 delete <key>` removes an entry).\n\n- alpha: first\n- beta: second\n\n",
+    "delete_alpha": true,
+    "delete_alpha_again": false,
+    "errors": {
+      "long_key": "key too long (max 128 characters)",
+      "big_value": "value too large (max 16384 bytes per key)",
+      "total_budget": "notepad full: job 'budget' would exceed 65536 bytes total; delete unused keys first"
+    }
+  },
+  "incidents": {
+    "normalize_and_sig": [
+      {
+        "job_id": "abcdef123456",
+        "error": "Timed out after 30.5s waiting for response",
+        "normalized": "timed out after 30.5s waiting for response",
+        "sig": "8e9446d3b3bc",
+        "incident_id": "abcdef_8e9446d3b3bc"
+      },
+      {
+        "job_id": "abcdef123456",
+        "error": "Timed out after 120s waiting for response",
+        "normalized": "timed out after 120s waiting for response",
+        "sig": "8e9446d3b3bc",
+        "incident_id": "abcdef_8e9446d3b3bc"
+      },
+      {
+        "job_id": "job99",
+        "error": "  HTTP 429   Too Many Requests  in  500ms  ",
+        "normalized": "http 429 too many requests in 500ms",
+        "sig": "e8d869705064",
+        "incident_id": "job99_e8d869705064"
+      },
+      {
+        "job_id": "job99",
+        "error": "Script exited with code 2\nstderr: boom after 2 mins",
+        "normalized": "script exited with code 2 stderr: boom after 2 mins",
+        "sig": "d12fd98a46da",
+        "incident_id": "job99_d12fd98a46da"
+      }
+    ],
+    "classify": [
+      {
+        "error": "HTTP 429 Too Many Requests",
+        "failure_type": "rate_limit"
+      },
+      {
+        "error": "quota exceeded for plan",
+        "failure_type": "rate_limit"
+      },
+      {
+        "error": "Request timed out after 60s",
+        "failure_type": "timeout"
+      },
+      {
+        "error": "401 Unauthorized: invalid api key",
+        "failure_type": "auth"
+      },
+      {
+        "error": "Failed to deliver to telegram",
+        "failure_type": "delivery"
+      },
+      {
+        "error": "Invalid cron schedule config",
+        "failure_type": "config"
+      },
+      {
+        "error": "Script exited with code 1",
+        "failure_type": "script"
+      },
+      {
+        "error": "Agent loop error: tool failed",
+        "failure_type": "agent"
+      },
+      {
+        "error": "Something completely unexpected happened",
+        "failure_type": "unknown"
+      }
+    ],
+    "lifecycle": {
+      "first": {
+        "id": "incjob_1dba7559e5f1",
+        "is_new": true,
+        "state": "detected"
+      },
+      "dedup": {
+        "id": "incjob_1dba7559e5f1",
+        "is_new": false,
+        "state": "detected"
+      },
+      "after_alert": "alerted",
+      "resolved_count": 1,
+      "after_recover": "resolved",
+      "reopened": {
+        "id": "incjob_1dba7559e5f1",
+        "is_new": true,
+        "state": "detected"
+      },
+      "acked": true,
+      "after_ack": "closed",
+      "after_ack_recur": {
+        "id": "incjob_1dba7559e5f1",
+        "is_new": false,
+        "state": "closed"
+      }
+    }
+  },
+  "monitor": {
+    "hashes": [
+      {
+        "input": "",
+        "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "input": "status: ok\n",
+        "hash": "43cb7d808205b5f809a6988c15d75f09afcd75607ea0c69c7e85110d7f4e3022"
+      },
+      {
+        "input": "привет мир",
+        "hash": "527c01ee137e87eaba739dc590ea562e9114057d3f7aba84ff429ba8ccf3b6ad"
+      }
+    ],
+    "diff_simple": "--- previous\n+++ current\n@@ -1,2 +1,2 @@\n line1\n-line2\n+line2-changed",
+    "diff_truncated": "--- previous\n+++ current\n@@ -1,400 +1,400 @@\n-old-0000\n-old-0001\n-old-0002\n-old-0003\n-old-0004\n-old-0005\n-old-0006\n-old-0007\n-old-0008\n-old-0009\n-old-0010\n-old-0011\n-old-0012\n-old-0013\n-old-0014\n-old-0015\n-old-0016\n-old-0017\n-old-0018\n-old-0019\n-old-0020\n-old-0021\n-old-0022\n-old-0023\n-old-0024\n-old-0025\n-old-0026\n-old-0027\n-old-0028\n-old-0029\n-old-0030\n-old-0031\n-old-0032\n-old-0033\n-old-0034\n-old-0035\n-old-0036\n-old-0037\n-old-0038\n-old-0039\n-old-0040\n-old-0041\n-old-0042\n-old-0043\n-old-0044\n-old-0045\n-old-0046\n-old-0047\n-old-0048\n-old-0049\n-old-0050\n-old-0051\n-old-0052\n-old-0053\n-old-0054\n-old-0055\n-old-0056\n-old-0057\n-old-0058\n-old-0059\n-old-0060\n-old-0061\n-old-0062\n-old-0063\n-old-0064\n-old-0065\n-old-0066\n-old-0067\n-old-0068\n-old-0069\n-old-0070\n-old-0071\n-old-0072\n-old-0073\n-old-0074\n-old-0075\n-old-0076\n-old-0077\n-old-0078\n-old-0079\n-old-0080\n-old-0081\n-old-0082\n-old-0083\n-old-0084\n-old-0085\n-old-0086\n-old-0087\n-old-0088\n-old-0089\n-old-0090\n-old-0091\n-old-0092\n-old-0093\n-old-0094\n-old-0095\n-old-0096\n-old-0097\n-old-0098\n-old-0099\n-old-0100\n-old-0101\n-old-0102\n-old-0103\n-old-0104\n-old-0105\n-old-0106\n-old-0107\n-old-0108\n-old-0109\n-old-0110\n-old-0111\n-old-0112\n-old-0113\n-old-0114\n-old-0115\n-old-0116\n-old-0117\n-old-0118\n-old-0119\n-old-0120\n-old-0121\n-old-0122\n-old-0123\n-old-0124\n-old-0125\n-old-0126\n-old-0127\n-old-0128\n-old-0129\n-old-0130\n-old-0131\n-old-0132\n-old-0133\n-old-0134\n-old-0135\n-old-0136\n-old-0137\n-old-0138\n-old-0139\n-old-0140\n-old-0141\n-old-0142\n-old-0143\n-old-0144\n-old-0145\n-old-0146\n-old-0147\n-old-0148\n-old-0149\n-old-0150\n-old-0151\n-old-0152\n-old-0153\n-old-0154\n-old-0155\n-old-0156\n-old-0157\n-old-0158\n-old-0159\n-old-0160\n-old-0161\n-old-0162\n-old-0163\n-old-0164\n-old-0165\n-old-0166\n-old-0167\n-old-0168\n-old-0169\n-old-0170\n-old-0171\n-old-0172\n-old-0173\n-old-0174\n-old-0175\n-old-0176\n-old-0177\n-old-0178\n-old-0179\n-old-0180\n-old-0181\n-old-0182\n-old-0183\n-old-0184\n-old-0185\n-old-0186\n-old-0187\n-old-0188\n-old-0189\n-old-0190\n-old-0191\n-old-0192\n-old-0193\n-old-0194\n-old-0195\n-old-0196\n-old-0197\n-old-0198\n-old-0199\n-old-0200\n-old-0201\n-old-0202\n-old-0203\n-old-0204\n-old-0205\n-old-0206\n-old-0207\n-old-0208\n-old-0209\n-old-0210\n-old-0211\n-old-0212\n-old-0213\n-old-0214\n-old-0215\n-old-0216\n-old-0217\n-old-0218\n-old-0219\n-old-0220\n-old-0221\n-old-0222\n-old-0223\n-old-0224\n-old-0225\n-old-0226\n-old-0227\n-old-0228\n-old-0229\n-old-0230\n-old-0231\n-old-0232\n-old-0233\n-old-0234\n-old-0235\n-old-0236\n-old-0237\n-old-0238\n-old-0239\n-old-0240\n-old-0241\n-old-0242\n-old-0243\n-old-0244\n-old-0245\n-old-0246\n-old-0247\n-old-0248\n-old-0249\n-old-0250\n-old-0251\n-old-0252\n-old-0253\n-old-0254\n-old-0255\n-old-0256\n-old-0257\n-old-0258\n-old-0259\n-old-0260\n-old-0261\n-old-0262\n-old-0263\n-old-0264\n-old-0265\n-old-0266\n-old-0267\n-old-0268\n-old-0269\n-old-0270\n-old-0271\n-old-0272\n-old-0273\n-old-0274\n-old-0275\n-old-0276\n-old-0277\n-old-0278\n-old-0279\n-old-0280\n-old-0281\n-old-0282\n-old-0283\n-old-0284\n-old-0285\n-old-0286\n-old-0287\n-old-0288\n-old-0289\n-old-0290\n-old-0291\n-old-0292\n-old-0293\n-old-0294\n-old-0295\n-old-0296\n-old-0297\n-old-0298\n-old-0299\n-old-0300\n-old-0301\n-old-0302\n-old-0303\n-old-0304\n-old-0305\n-old-0306\n-old-0307\n-old-0308\n-old-0309\n-old-0310\n-old-0311\n-old-0312\n-old-0313\n-old-0314\n-old-0315\n-old-0316\n-old-0317\n-old-0318\n-old-0319\n-old-0320\n-old-0321\n-old-0322\n-old-0323\n-old-0324\n-old-0325\n-old-0326\n-old-0327\n-old-0328\n-old-0329\n-old-0330\n-old-0331\n-old-0332\n-old-0333\n-old-0334\n-old-0335\n-old-0336\n-old-0337\n-old-0338\n-old-0339\n-old-0340\n-old-0341\n-old-0342\n-old-0343\n-old-0344\n-old-0345\n-old-0346\n-old-0347\n-old-0348\n-old-0349\n-old-0350\n-old-0351\n-old-0352\n-old-0353\n-old-0354\n-old-0355\n-old-0356\n-old-0357\n-old-0358\n-old-0359\n-old-0360\n-old-0361\n-old-0362\n-old-0363\n-old-0364\n-old-0365\n-old-0366\n-old-0367\n-old-0368\n-old-0369\n-old-0370\n-old-0371\n-old-0372\n-old-0373\n-old-0374\n-old-0375\n-old-0376\n-old-0377\n-old-0378\n-old-0379\n-old-0380\n-old-0381\n-old-0382\n-old-0383\n-old-0384\n-old-0385\n-old-0386\n-old-0387\n-old-0388\n-old-0389\n-old-0390\n-old-0391\n-old-0392\n-old-0393\n-old-0394\n-old-\n... [diff truncated]"
+  },
+  "wake_gate": [
+    {
+      "input": "",
+      "wake": true
+    },
+    {
+      "input": "hello world",
+      "wake": true
+    },
+    {
+      "input": "{\"wakeAgent\": false}",
+      "wake": false
+    },
+    {
+      "input": "log line\n{\"wakeAgent\": false}\n  ",
+      "wake": false
+    },
+    {
+      "input": "{\"wakeAgent\": true}",
+      "wake": true
+    },
+    {
+      "input": "{\"wakeAgent\": 0}",
+      "wake": true
+    },
+    {
+      "input": "{\"wakeAgent\": false}\nextra line",
+      "wake": true
+    },
+    {
+      "input": "[1, 2, 3]",
+      "wake": true
+    }
+  ],
+  "split_monitor": [
+    {
+      "args": [
+        null,
+        null,
+        null
+      ],
+      "monitor_script": null,
+      "monitor_url": null
+    },
+    {
+      "args": [
+        null,
+        "a.py",
+        null
+      ],
+      "monitor_script": "a.py",
+      "monitor_url": null
+    },
+    {
+      "args": [
+        "",
+        "a.py",
+        "https://example.com"
+      ],
+      "monitor_script": "",
+      "monitor_url": ""
+    },
+    {
+      "args": [
+        "https://example.com/status",
+        null,
+        null
+      ],
+      "monitor_script": "",
+      "monitor_url": "https://example.com/status"
+    },
+    {
+      "args": [
+        "HTTP://example.com/status",
+        "old.py",
+        null
+      ],
+      "monitor_script": "",
+      "monitor_url": "HTTP://example.com/status"
+    },
+    {
+      "args": [
+        "check.sh",
+        null,
+        "https://old.example"
+      ],
+      "monitor_script": "check.sh",
+      "monitor_url": ""
+    }
+  ],
+  "script_validation": {
+    "valid": null,
+    "abs": "Script path must be relative to <HOME>/scripts/. Got absolute or home-relative path: '/etc/passwd'. Place scripts in <HOME>/scripts/ and use just the filename.",
+    "tilde": "Script path must be relative to <HOME>/scripts/. Got absolute or home-relative path: '~/foo.py'. Place scripts in <HOME>/scripts/ and use just the filename.",
+    "drive": "Script path must be relative to <HOME>/scripts/. Got absolute or home-relative path: 'C:\\\\foo.py'. Place scripts in <HOME>/scripts/ and use just the filename.",
+    "traversal": "Script path escapes the scripts directory via traversal: '../outside.py'",
+    "missing": "Script file not found: <HOME>/scripts/nope.py. Create it in <HOME>/scripts/ first."
+  },
+  "doctor": {
+    "now": "2026-11-23T09:45:37.415483+00:00",
+    "cases": [
+      {
+        "label": "healthy",
+        "job": {
+          "id": "j1",
+          "name": "Healthy",
+          "prompt": "hi",
+          "enabled": true,
+          "state": "scheduled",
+          "schedule": {
+            "kind": "cron",
+            "expr": "0 9 * * *"
+          },
+          "next_run_at": "2026-11-23T10:45:37.415483+00:00",
+          "last_status": "ok"
+        },
+        "issues": []
+      },
+      {
+        "label": "failed_and_overdue",
+        "job": {
+          "id": "j2",
+          "name": "Broken",
+          "prompt": "hi",
+          "enabled": true,
+          "state": "scheduled",
+          "schedule": {
+            "kind": "cron",
+            "expr": "0 9 * * *"
+          },
+          "next_run_at": "2026-11-23T09:15:37.415483+00:00",
+          "last_status": "error",
+          "last_error": "boom",
+          "last_delivery_error": "send failed",
+          "last_fire_error": {
+            "at": "2026-11-23T11:00:00+00:00",
+            "detail": "fire boom"
+          }
+        },
+        "issues": [
+          "last run failed: boom",
+          "last run finished but the result was not delivered (send failed). Check the target with `hermes cron status` or change it with `hermes cron edit j2 --deliver <target>`.",
+          "missed scheduled fire at 2026-11-23T11:00:00+00:00: fire boom. The messaging gateway was unreachable. Run `hermes gateway restart`, then `hermes cron run j2` to run it now.",
+          "next_run_at is 30m overdue — job is not firing (is the scheduler running?)"
+        ]
+      },
+      {
+        "label": "no_agent_no_script",
+        "job": {
+          "id": "j3",
+          "name": "NoScript",
+          "prompt": "",
+          "enabled": true,
+          "state": "scheduled",
+          "no_agent": true,
+          "schedule": {
+            "kind": "interval",
+            "minutes": 5
+          },
+          "next_run_at": "2026-11-23T09:50:37.415483+00:00"
+        },
+        "issues": [
+          "no-agent job has no script"
+        ]
+      },
+      {
+        "label": "bad_workdir_and_tz",
+        "job": {
+          "id": "j4",
+          "name": "BadCfg",
+          "prompt": "hi",
+          "enabled": true,
+          "state": "scheduled",
+          "workdir": "<HOME>/does_not_exist",
+          "timezone": "Mars/Base",
+          "grace_minutes": 10,
+          "schedule": {
+            "kind": "interval",
+            "minutes": 5
+          },
+          "next_run_at": null
+        },
+        "issues": [
+          "active job has no next_run_at",
+          "workdir not found: <HOME>/does_not_exist",
+          "timezone 'Mars/Base' is not a valid IANA zone; the job falls back to the profile timezone",
+          "grace_minutes has no effect on a non-cron schedule"
+        ]
+      },
+      {
+        "label": "script_missing",
+        "job": {
+          "id": "j5",
+          "name": "MissingScript",
+          "prompt": "hi",
+          "enabled": true,
+          "state": "scheduled",
+          "script": "missing_script.py",
+          "schedule": {
+            "kind": "cron",
+            "expr": "0 9 * * *"
+          },
+          "next_run_at": "2026-11-23T10:45:37.415483+00:00"
+        },
+        "issues": [
+          "script not found: <HOME>/scripts/missing_script.py"
+        ]
+      }
+    ]
+  }
+}

@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 
 use crate::browser_cdp::{self, BrowserSettings, BROWSER_CDP};
 use crate::clarify::{self, CLARIFY};
+use crate::cronjob_tool::{self, CRONJOB_MANAGE};
 use crate::delegation::{self, DELEGATE_TASK};
 use crate::execute_code::{self, EXECUTE_CODE};
 use crate::file_tools::{
@@ -221,6 +222,15 @@ fn clarify_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture
     Box::pin(async move { ask_questions(args, cx.options, &mut cx.approve).await })
 }
 
+fn cronjob_manage_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
+    Box::pin(async move {
+        let Some(home) = cx.options.profile else {
+            return json!({"error": format!("Unknown tool: {CRONJOB_MANAGE}")});
+        };
+        cronjob_tool::call(home, args)
+    })
+}
+
 fn todo_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
     Box::pin(async move { todo_tool::call(cx.todo, args) })
 }
@@ -349,6 +359,13 @@ static TOOLS: &[ToolDef] = &[
         name: CLARIFY,
         offered: |_| Some(clarify::schema()),
         call: clarify_call,
+    },
+    ToolDef {
+        name: CRONJOB_MANAGE,
+        offered: |env| {
+            (env.has_profile && !env.policy.is_deferred(CRONJOB_MANAGE)).then(cronjob_tool::schema)
+        },
+        call: cronjob_manage_call,
     },
     ToolDef {
         name: DELEGATE_TASK,
@@ -618,6 +635,7 @@ mod tests {
             names(&env),
             [
                 "clarify",
+                "cronjob_manage",
                 "memory",
                 "read_file",
                 "search_files",
@@ -636,6 +654,7 @@ mod tests {
             names(&env),
             [
                 "clarify",
+                "cronjob_manage",
                 "execute_code",
                 "memory",
                 "patch",

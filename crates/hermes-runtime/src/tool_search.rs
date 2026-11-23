@@ -1091,7 +1091,8 @@ mod tests {
                 extract: Backend::Tavily,
                 ..WebSettings::default()
             }),
-            policy: ToolPolicy::from_config(&config),
+            // Exclude cronjob_manage from the 17-tool fixture recorded before it was added.
+            policy: ToolPolicy::from_config(&config).without_tools(&["cronjob_manage"]),
             ..ToolEnv::default()
         }
     }

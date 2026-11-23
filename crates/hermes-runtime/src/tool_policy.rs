@@ -209,7 +209,7 @@ impl ToolPolicy {
     }
 
     /// A copy without `tools`: offered to nobody, callable by nobody, bridge included.
-    pub(crate) fn without_tools(&self, tools: &[&str]) -> Self {
+    pub fn without_tools(&self, tools: &[&str]) -> Self {
         let mut copy = self.clone();
         copy.denied
             .extend(tools.iter().map(|tool| (*tool).to_owned()));

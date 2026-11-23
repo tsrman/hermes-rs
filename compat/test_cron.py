@@ -246,11 +246,8 @@ class CronWriteTest(CronCliTest):
                                    "enabled": True, "state": "scheduled", "next_run_at": "2030-01-01T00:00:00+00:00"}]})
         before = (self.home / "cron" / "jobs.json").read_bytes()
         refused = [
-            (("--skill", "web"), "--skill"), (("--script", "x.py"), "--script"), (("--no-agent",), "--no-agent"),
-            (("--monitor-script", "m.py"), "--monitor-script"), (("--monitor-url", "http://x"), "--monitor-url"),
-            (("--workdir", "/tmp"), "--workdir"), (("--pin",), "--pin"), (("--provider", "nous"), "--provider"),
+            (("--pin",), "--pin"), (("--provider", "nous"), "--provider"),
             (("--reasoning-effort", "high"), "--reasoning-effort"),
-            (("--interpreter", "/usr/bin/python3"), "--interpreter"),
             (("--continuity",), "--continuity"), (("--deliver", "telegram"), "--deliver"),
             (("--failure-deliver", "discord"), "--failure-deliver"),
         ]
@@ -261,9 +258,7 @@ class CronWriteTest(CronCliTest):
                 self.assertIn(name, result.stderr)
                 self.assertIn("not supported", result.stderr)
                 self.assertEqual(result.stdout, "")
-        for flag in ("--add-skill", "--remove-skill"):
-            self.assertIn("not supported", self.hermes("edit", "job", flag, "x").stderr)
-        for flag in ("--clear-skills", "--agent", "--no-continuity", "--unpin"):
+        for flag in ("--no-continuity", "--unpin"):
             self.assertIn("not supported", self.hermes("edit", "job", flag).stderr)
         self.assertEqual((self.home / "cron" / "jobs.json").read_bytes(), before)
 
@@ -409,6 +404,7 @@ class CronTickTest(unittest.TestCase):
         "test_removing_a_job_stops_its_manual_run_and_leaves_no_output": "stall",
         "test_removing_a_job_stops_its_run_inside_a_tick": "stall",
         "test_a_long_run_keeps_its_claim_alive": "stall",
+        "test_cancel_stops_a_live_run_and_records_cancelled_execution": "stall",
     }
 
     def setUp(self):
@@ -492,17 +488,17 @@ class CronTickTest(unittest.TestCase):
 
     def test_jobs_that_are_not_due_or_not_runnable_are_left_alone(self):
         interval = {"kind": "interval", "minutes": 30}
-        unsupported = self.job("scripted", interval, next_run_at=self.when(-1), script="check.py")
+        unsupported = self.job("chained", interval, next_run_at=self.when(-1), context_from="upstream")
         half_paused = self.job("half", interval, next_run_at=self.when(-1), paused_at="2026-01-01T00:00:00+00:00")
         self.write(self.job("off", interval, next_run_at=self.when(-1), enabled=False), unsupported, half_paused,
                    self.job("done", interval, next_run_at=self.when(-1), state="completed"),
                    self.job("mail", interval, next_run_at=self.when(-1), deliver="telegram"))
         report = self.tick()
         self.assertEqual(report["ran"], [])
-        self.assertEqual({item["id"] for item in report["unsupported"]}, {"scripted", "mail"})
-        self.assertIn("a pre-run script", [i["reason"] for i in report["unsupported"] if i["id"] == "scripted"][0])
+        self.assertEqual({item["id"] for item in report["unsupported"]}, {"chained", "mail"})
+        self.assertIn("context_from", [i["reason"] for i in report["unsupported"] if i["id"] == "chained"][0])
         jobs = self.read()
-        self.assertEqual(jobs["scripted"], unsupported)  # the slot is not consumed
+        self.assertEqual(jobs["chained"], unsupported)  # the slot is not consumed
         self.assertEqual((jobs["half"]["enabled"], jobs["half"]["state"]), (False, "paused"))
         self.assertEqual(self.requests(), [])
 
@@ -668,10 +664,10 @@ class CronTickTest(unittest.TestCase):
 
     def test_a_run_refuses_a_job_it_cannot_run_and_leaves_it_alone(self):
         interval = {"kind": "interval", "minutes": 30}
-        self.write(self.job("scripted", interval, next_run_at=self.when(20), script="check.py"))
+        self.write(self.job("chained", interval, next_run_at=self.when(20), context_from="upstream"))
         before = self.read()
-        result = self.run_cli("scripted", expect=1)
-        self.assertIn("Failed to run job: Cannot run job 'scripted': it uses a pre-run script", result.stderr)
+        result = self.run_cli("chained", expect=1)
+        self.assertIn("Failed to run job: Cannot run job 'chained': it uses context_from", result.stderr)
         self.assertEqual(self.read(), before)
         self.assertEqual(self.requests(), [])
 
@@ -752,6 +748,144 @@ class CronTickTest(unittest.TestCase):
         subprocess.run([str(BINARY), "cron", "remove", "brief"], env=self.env, check=True, capture_output=True,
                        timeout=15)
         process.communicate(timeout=10)
+
+    def test_cancel_stops_a_live_run_and_records_cancelled_execution(self):
+        self.write(self.job("brief", {"kind": "interval", "minutes": 30}, next_run_at=self.when(20)))
+        process = self.start_slow_run("run", "brief")
+        cancel_res = subprocess.run(
+            [str(BINARY), "cron", "cancel", "brief", "--reason", "user abort"],
+            env=self.env, capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(cancel_res.returncode, 0, cancel_res.stderr)
+        cancel_payload = json.loads(cancel_res.stdout)
+        self.assertTrue(cancel_payload["cancelled"])
+        stdout, _ = process.communicate(timeout=10)
+        self.assertEqual(process.returncode, 0)
+        report = json.loads(stdout)
+        self.assertEqual((report["executed"], report["success"], report["status"]), (True, False, "cancelled"))
+        runs = json.loads(subprocess.run(
+            [str(BINARY), "cron", "runs", "brief"], env=self.env, check=True, capture_output=True, text=True
+        ).stdout)
+        self.assertEqual(runs[0]["status"], "cancelled")
+
+    def test_no_agent_script_runs_without_calling_the_model(self):
+        scripts = self.home / "scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        (scripts / "ping.sh").write_text("#!/bin/sh\necho 'service ok'\n", encoding="utf-8")
+        add = subprocess.run(
+            [str(BINARY), "cron", "add", "30m", "--name", "Ping", "--script", "ping.sh", "--no-agent"],
+            env=self.env, check=True, capture_output=True, text=True,
+        )
+        job_id = json.loads(add.stdout)["id"]
+        report = json.loads(self.run_cli(job_id).stdout)
+        self.assertTrue(report["success"])
+        self.assertEqual(self.requests(), [])
+        text = Path(report["output"]).read_text(encoding="utf-8")
+        self.assertIn("service ok", text)
+
+    def test_monitor_script_suppresses_unchanged_and_wakes_on_change(self):
+        scripts = self.home / "scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        state = self.home / "watched.txt"
+        state.write_text("alpha", encoding="utf-8")
+        (scripts / "watch.sh").write_text(f"cat '{state}'\n", encoding="utf-8")
+        add = subprocess.run(
+            [str(BINARY), "cron", "add", "30m", "Report changes", "--name", "Watcher", "--monitor-script", "watch.sh"],
+            env=self.env, check=True, capture_output=True, text=True,
+        )
+        job_id = json.loads(add.stdout)["id"]
+        # First run: baseline wakes the agent.
+        self.assertTrue(json.loads(self.run_cli(job_id).stdout)["success"])
+        self.assertEqual(len(self.requests()), 1)
+        self.assertIn("Monitor Baseline (first run)", self.requests()[0]["messages"][1]["content"])
+        # Second run with unchanged output: suppressed (no new LLM call).
+        self.assertTrue(json.loads(self.run_cli(job_id).stdout)["success"])
+        self.assertEqual(len(self.requests()), 1)
+        # Third run after mutation: wakes agent with unified diff.
+        state.write_text("beta", encoding="utf-8")
+        self.assertTrue(json.loads(self.run_cli(job_id).stdout)["success"])
+        self.assertEqual(len(self.requests()), 2)
+        self.assertIn("MONITOR CHANGE DETECTED", self.requests()[1]["messages"][1]["content"])
+
+    def test_notepad_skill_script_and_workdir_are_injected_into_the_run(self):
+        scripts = self.home / "scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        work = self.home / "work"
+        work.mkdir(parents=True, exist_ok=True)
+        (scripts / "pwd.sh").write_text("pwd\n", encoding="utf-8")
+        skill_dir = self.home / "skills" / "digest"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: digest\ndescription: Digest helper\n---\nAlways summarize concisely.\n",
+            encoding="utf-8",
+        )
+        add = subprocess.run(
+            [str(BINARY), "cron", "add", "30m", "Do digest", "--name", "Digest",
+             "--script", "pwd.sh", "--skill", "digest", "--workdir", str(work)],
+            env=self.env, check=True, capture_output=True, text=True,
+        )
+        job_id = json.loads(add.stdout)["id"]
+        subprocess.run(
+            [str(BINARY), "cron", "notepad", job_id, "set", "cursor", "42"],
+            env=self.env, check=True, capture_output=True, text=True,
+        )
+        got = json.loads(subprocess.run(
+            [str(BINARY), "cron", "notepad", job_id, "get", "cursor"],
+            env=self.env, check=True, capture_output=True, text=True,
+        ).stdout)
+        self.assertEqual(got["value"], "42")
+        self.assertTrue(json.loads(self.run_cli(job_id).stdout)["success"])
+        prompt = self.requests()[0]["messages"][1]["content"]
+        self.assertIn("Always summarize concisely.", prompt)
+        self.assertIn("- cursor: 42", prompt)
+        self.assertIn(str(work.resolve()), prompt)
+
+    def test_incidents_status_and_doctor_subcommands(self):
+        # Healthy job -> doctor exits 0
+        self.write(self.job("okjob", {"kind": "interval", "minutes": 30}, next_run_at=self.when(20)))
+        doc_ok = subprocess.run([str(BINARY), "cron", "doctor"], env=self.env, capture_output=True, text=True)
+        self.assertEqual(doc_ok.returncode, 0, doc_ok.stderr)
+        self.assertTrue(json.loads(doc_ok.stdout)["healthy"])
+
+        # Trigger a failing script job -> creates an incident, doctor exits 1, ack closes it
+        scripts = self.home / "scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        (scripts / "fail.sh").write_text("echo 'boom' >&2; exit 2\n", encoding="utf-8")
+        add = subprocess.run(
+            [str(BINARY), "cron", "add", "30m", "--name", "Failer", "--script", "fail.sh", "--no-agent"],
+            env=self.env, check=True, capture_output=True, text=True,
+        )
+        fail_id = json.loads(add.stdout)["id"]
+        self.run_cli(fail_id, expect=1)
+
+        incs = json.loads(subprocess.run(
+            [str(BINARY), "cron", "incidents", "list"], env=self.env, check=True, capture_output=True, text=True
+        ).stdout)
+        self.assertEqual(len(incs), 1)
+        self.assertEqual(incs[0]["state"], "detected")
+        self.assertEqual(incs[0]["failure_type"], "script")
+
+        status = json.loads(subprocess.run(
+            [str(BINARY), "cron", "status"], env=self.env, check=True, capture_output=True, text=True
+        ).stdout)
+        self.assertEqual(status["open_incidents"], 1)
+        self.assertGreaterEqual(len(status["recent_executions"]), 1)
+
+        doc_bad = subprocess.run([str(BINARY), "cron", "doctor"], env=self.env, capture_output=True, text=True)
+        self.assertEqual(doc_bad.returncode, 1)
+        self.assertFalse(json.loads(doc_bad.stdout)["healthy"])
+
+        ack = json.loads(subprocess.run(
+            [str(BINARY), "cron", "incidents", "ack", incs[0]["id"]],
+            env=self.env, check=True, capture_output=True, text=True,
+        ).stdout)
+        self.assertTrue(ack["acked"])
+        closed = json.loads(subprocess.run(
+            [str(BINARY), "cron", "incidents", "list", "--state", "closed"],
+            env=self.env, check=True, capture_output=True, text=True,
+        ).stdout)
+        self.assertEqual(len(closed), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
