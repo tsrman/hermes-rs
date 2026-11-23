@@ -28,6 +28,7 @@ class CliTest(unittest.TestCase):
             "test_invalid_compaction_summary_keeps_the_original_context": "compact_failure",
             "test_compaction_write_failure_rolls_back_archive_and_turn": "compact",
             "test_cancel_after_summary_leaves_no_compaction": "compact",
+            "test_a_compaction_that_starts_at_an_assistant_row_is_stored_and_replayed_in_order": "compact",
             "test_context_overflow_compresses_history_and_retries_once": "overflow",
             "test_context_overflow_after_a_tool_call_is_not_retried": "overflow_tools",
             "test_context_overflow_after_tool_calls_compresses_the_turns_earlier_steps": "overflow_midturn",
@@ -303,7 +304,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(messages[1]["content"], "Keep this first exchange")
         self.assertIn("[CONTEXT SUMMARY]:", messages[3]["content"])
         # The tail is the reference's: with so short a history the whole conversation fits the token
-        # budget, so `_find_tail_cut_by_tokens` forces a cut that keeps the last `max(3, protect_last_n)`
+        # budget, so `_find_tail_cut_by_tokens` forces a cut that keeps the last `max(3, min(protect_last_n, 8))`
         # rows (here the tool exchange, the reply and the new query), and the request "Keep this recent
         # exchange" goes into the summary with the older rows (recorded in `compression_window_cases.json`).
         self.assertIn("Keep this recent exchange", summary_input)
@@ -328,6 +329,33 @@ class CliTest(unittest.TestCase):
             self.assertEqual(db.execute("SELECT count(*) FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid "
                                         "WHERE messages_fts MATCH 'archiveword' AND (m.active OR m.compacted)")
                              .fetchone(), (1,))
+        resumed, all_requests = self.chat_with_profile(args=("--resume", session), query="Second task")
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertEqual(all_requests[-1]["messages"], messages +
+                         [{"role": "assistant", "content": "Ответ модели"}, {"role": "user", "content": "Second task"}])
+
+    def test_a_compaction_that_starts_at_an_assistant_row_is_stored_and_replayed_in_order(self):
+        # With `protect_first_n: 1` the head ends after the first user row, so the summarized span starts at an
+        # assistant reply (the old selector always started at a user row).
+        session, database, original, _ = self.seed_compression_history()
+        config = "compression:\n  threshold_tokens: '450'\n  protect_first_n: 1\n  protect_last_n: 2\n"
+        result, recorded = self.chat_with_profile(extra_config=config, args=("--resume", session), query="New task")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summary, answer = recorded[len(original):]
+        messages = answer["messages"]
+        self.assertEqual([m["role"] for m in messages],
+                         ["system", "user", "user", "assistant", "tool", "assistant", "user"])
+        self.assertEqual(messages[1]["content"], "Keep this first exchange")
+        self.assertIn("[CONTEXT SUMMARY]:", messages[2]["content"])
+        self.assertIn("Old response", json.dumps(summary["messages"]))
+        with sqlite3.connect(database) as db:
+            active = db.execute("SELECT role, content FROM messages WHERE session_id = ? AND active = 1 "
+                                "ORDER BY display_order", (session,)).fetchall()
+        self.assertEqual([role for role, _ in active],
+                         ["user", "user", "assistant", "tool", "assistant", "user", "assistant"])
+        self.assertEqual(active[0][1], "Keep this first exchange")
+        self.assertTrue(active[1][1].startswith("[CONTEXT SUMMARY]:"))
+        self.assertEqual(active[-2][1], "New task")
         resumed, all_requests = self.chat_with_profile(args=("--resume", session), query="Second task")
         self.assertEqual(resumed.returncode, 0, resumed.stderr)
         self.assertEqual(all_requests[-1]["messages"], messages +

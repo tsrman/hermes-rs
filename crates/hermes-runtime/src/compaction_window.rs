@@ -649,6 +649,15 @@ impl Planner<'_> {
 
 /// The span `compress()` would summarize, or `None` when it would leave the history alone.
 pub(crate) fn plan(messages: &[Value], rules: &WindowRules) -> Option<Range<usize>> {
+    plan_counted(messages, rules).map(|(span, _)| span)
+}
+
+/// `plan` and the number of rows the summarizer would read: handoffs inside the span are not read, a
+/// merged one contributes the content it carried.
+pub(crate) fn plan_counted(
+    messages: &[Value],
+    rules: &WindowRules,
+) -> Option<(Range<usize>, usize)> {
     let planner = Planner { messages, rules };
     if messages.len() <= planner.head_size() + 4 {
         return None;
@@ -664,7 +673,7 @@ pub(crate) fn plan(messages: &[Value], rules: &WindowRules) -> Option<Range<usiz
         .rev()
         .find(|&i| is_summary_message(&messages[i]));
     let Some(newest) = newest else {
-        return Some(start..end);
+        return Some((start..end, end - start));
     };
     let live = |index: usize| {
         let row = &messages[index];
@@ -676,7 +685,7 @@ pub(crate) fn plan(messages: &[Value], rules: &WindowRules) -> Option<Range<usiz
     if rows == 0 {
         return None;
     }
-    Some(start..if newest >= end { newest + 1 } else { end })
+    Some((start..if newest >= end { newest + 1 } else { end }, rows))
 }
 
 #[cfg(test)]

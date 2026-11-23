@@ -29,6 +29,7 @@ fn expand(content: &Value, markers: &Value) -> Value {
             "port" => format!("[CONTEXT SUMMARY]:\nUse this handoff as historical context. {text}"),
             "merged" => merged("kept request".into()),
             "merged_header" => merged(format!("{}\nkept request", marker("header"))),
+            "merged_empty" => merged(marker("header")),
             "ended" => format!("{body} {text}\n\n{}", marker("end")),
             "ended_live" => format!("{body} {text}\n\n{}\nlive follow-up", marker("end")),
             _ => format!("{body} {text}"),
@@ -129,6 +130,14 @@ fn the_window_matches_the_reference_on_every_recorded_history() {
         let after_pass = case["after_pass"].as_bool().unwrap();
         let want = expected(case);
         let got = ours.plan_window(&rows, after_pass);
+        let got_rows = ours.plan_window_rows(&rows, after_pass);
+        if let (Some((_, count)), Some(want)) = (&got_rows, case["window_rows"].as_u64()) {
+            if *count as u64 != want {
+                wrong.push(format!(
+                    "{label}: summarizer reads {count} rows, reference {want}"
+                ));
+            }
+        }
         checked += 1;
         if got != want {
             wrong.push(format!("{label}: ours {got:?}, reference {want:?}"));

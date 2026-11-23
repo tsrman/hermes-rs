@@ -239,6 +239,12 @@ def history(builder, shape, budget_chars):
         rows.append(b.summary(rng.choice(["port", "current"])))
         for _ in range(rng.randint(0, 3)):
             turn(tools=rng.randint(0, 1))
+    elif shape == "handoffs_only":
+        # Nothing but handoffs before a short live tail: the window the cut leaves may hold only handoffs.
+        for _ in range(rng.randint(3, 6)):
+            rows.append(b.summary(rng.choice(["port", "current", "ended", "metadata", "historical", "merged_empty", "merged_header"])))
+        for _ in range(rng.randint(1, 3)):
+            rows.append(rng.choice([b.user, b.assistant])(rng.randint(5, unit), cyr))
     elif shape == "tool_user_gap":
         # A user message in the middle of a tool run (an interjection) and tool rows that end the list.
         for _ in range(rng.randint(2, 5)):
@@ -250,7 +256,7 @@ def history(builder, shape, budget_chars):
 
 SHAPES = ["chat", "tools", "parallel", "long_user", "long_tail_assistant", "many_small", "summary_head",
           "summary_middle", "summary_tail", "developer_row", "assistant_first", "orphan_tool_head", "nudges",
-          "tool_user_gap", "big_results", "long_agentic", "agentic_text", "summary_then_tools", "summary_sandwich", "fuzz", "chat_cyr", "tools_cyr", "parallel_cyr"]
+          "tool_user_gap", "big_results", "long_agentic", "agentic_text", "summary_then_tools", "summary_sandwich", "handoffs_only", "fuzz", "chat_cyr", "tools_cyr", "parallel_cyr"]
 
 # How a case ends: a pending user query (preflight, the query is the last row), the user's query followed by
 # tool exchanges (mid-turn), or the history as it stands.
@@ -264,7 +270,8 @@ def expand(content):
             return SUMMARY_PORT + text
         body = m["historical"] if kind == "historical" else m["current"]
         if kind.startswith("merged"):
-            prior = ("kept request" if kind == "merged" else m["header"] + "\nkept request")
+            prior = {"merged": "kept request", "merged_header": m["header"] + "\nkept request",
+                     "merged_empty": m["header"]}[kind]
             return prior + "\n\n" + m["delimiter"] + "\n" + body + " " + text
         if kind == "ended":
             return body + " " + text + "\n\n" + m["end"]
@@ -367,7 +374,7 @@ def main():
         budget = probe.tail_token_budget
         budget_chars = budget * 4
         for shape in SHAPES:
-            for repeat in range({"fuzz": 8, "summary_sandwich": 6}.get(shape, 2)):
+            for repeat in range({"fuzz": 8, "summary_sandwich": 6, "handoffs_only": 6}.get(shape, 2)):
                 builder = Builder(rng)
                 rows = history(builder, shape, budget_chars)
                 ending = rng.choice(ENDINGS)

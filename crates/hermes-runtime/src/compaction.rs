@@ -294,6 +294,15 @@ impl CompactionSettings {
         compaction_window::plan(messages, &self.rules(after_pass)?)
     }
 
+    /// `plan_window` and the number of rows the summarizer would read (recorded as `window_rows`).
+    pub fn plan_window_rows(
+        &self,
+        messages: &[Value],
+        after_pass: bool,
+    ) -> Option<(Range<usize>, usize)> {
+        compaction_window::plan_counted(messages, &self.rules(after_pass)?)
+    }
+
     /// The span of a saved history to summarize before a turn that starts with `query`, once the
     /// estimated request of `input_bytes` has reached the threshold.
     pub(crate) fn select(
