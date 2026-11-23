@@ -1,0 +1,1630 @@
+{
+  "observe_sequences": [
+    {
+      "name": "short_consecutive_streak_4",
+      "calls": [
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "a.txt"
+          },
+          "result": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "id": "c1",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "a.txt"
+          },
+          "result": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "id": "c2",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "a.txt"
+          },
+          "result": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "id": "c3",
+          "failed": false,
+          "notice": "[hermes note: this is the 3rd consecutive identical call to read_file with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_call_streak"
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "a.txt"
+          },
+          "result": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "id": "c4",
+          "failed": false,
+          "notice": "[hermes note: this is the 4th consecutive identical call to read_file with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_call_streak"
+        }
+      ]
+    },
+    {
+      "name": "long_consecutive_streak_stubs_from_2nd",
+      "calls": [
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "a.txt"
+          },
+          "result": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "id": "c1",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "a.txt"
+          },
+          "result": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "id": "c2",
+          "failed": false,
+          "notice": null,
+          "stub": "[hermes note: this result is byte-identical to the read_file result earlier this turn (tool_call_id c1). Refer to that result; it has not changed. Args: {\"path\":\"a.txt\"}]",
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "a.txt"
+          },
+          "result": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "id": "c3",
+          "failed": false,
+          "notice": "[hermes note: this is the 3rd consecutive identical call to read_file with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": "[hermes note: this result is byte-identical to the read_file result earlier this turn (tool_call_id c1). Refer to that result; it has not changed. Args: {\"path\":\"a.txt\"}]",
+          "kind": "identical_call_streak"
+        }
+      ]
+    },
+    {
+      "name": "long_failed_result_not_stubbed_but_noticed",
+      "calls": [
+        {
+          "tool": "terminal",
+          "args": {
+            "command": "false"
+          },
+          "result": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "id": "c1",
+          "failed": true,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "terminal",
+          "args": {
+            "command": "false"
+          },
+          "result": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "id": "c2",
+          "failed": true,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "terminal",
+          "args": {
+            "command": "false"
+          },
+          "result": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "id": "c3",
+          "failed": true,
+          "notice": "[hermes note: this is the 3rd consecutive identical call to terminal with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_call_streak"
+        }
+      ]
+    },
+    {
+      "name": "poller_exempt_from_notice_not_stub",
+      "calls": [
+        {
+          "tool": "process_manage",
+          "args": {
+            "action": "poll",
+            "session_id": "p1"
+          },
+          "result": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "id": "p1",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "process_manage",
+          "args": {
+            "action": "poll",
+            "session_id": "p1"
+          },
+          "result": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "id": "p2",
+          "failed": false,
+          "notice": null,
+          "stub": "[hermes note: this result is byte-identical to the process_manage result earlier this turn (tool_call_id p1). Refer to that result; it has not changed. Args: {\"action\":\"poll\",\"session_id\":\"p1\"}]",
+          "kind": null
+        },
+        {
+          "tool": "process_manage",
+          "args": {
+            "action": "poll",
+            "session_id": "p1"
+          },
+          "result": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "id": "p3",
+          "failed": false,
+          "notice": null,
+          "stub": "[hermes note: this result is byte-identical to the process_manage result earlier this turn (tool_call_id p1). Refer to that result; it has not changed. Args: {\"action\":\"poll\",\"session_id\":\"p1\"}]",
+          "kind": null
+        },
+        {
+          "tool": "mcp__svc__job_poll",
+          "args": {
+            "id": 1
+          },
+          "result": "running",
+          "id": "m1",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "mcp__svc__job_poll",
+          "args": {
+            "id": 1
+          },
+          "result": "running",
+          "id": "m2",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "mcp__svc__job_poll",
+          "args": {
+            "id": 1
+          },
+          "result": "running",
+          "id": "m3",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "mcp__svc__fetch_get_result",
+          "args": {
+            "id": 1
+          },
+          "result": "pending",
+          "id": "g1",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "mcp__svc__fetch_get_result",
+          "args": {
+            "id": 1
+          },
+          "result": "pending",
+          "id": "g2",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "mcp__svc__fetch_get_result",
+          "args": {
+            "id": 1
+          },
+          "result": "pending",
+          "id": "g3",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        }
+      ]
+    },
+    {
+      "name": "canonical_args_and_json_result_hash",
+      "calls": [
+        {
+          "tool": "search_files",
+          "args": {
+            "b": 2,
+            "a": 1
+          },
+          "result": "{\"b\": 2, \"a\": \"vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\"}",
+          "id": "s1",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "search_files",
+          "args": {
+            "a": 1,
+            "b": 2
+          },
+          "result": "{\n  \"a\": \"vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\",\n  \"b\": 2\n}",
+          "id": "s2",
+          "failed": false,
+          "notice": null,
+          "stub": "[hermes note: this result is byte-identical to the search_files result earlier this turn (tool_call_id s1). Refer to that result; it has not changed. Args: {\"a\":1,\"b\":2}]",
+          "kind": null
+        },
+        {
+          "tool": "search_files",
+          "args": {
+            "b": 2,
+            "a": 1
+          },
+          "result": "{\"b\": 2, \"a\": \"vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\"}",
+          "id": "s3",
+          "failed": false,
+          "notice": "[hermes note: this is the 3rd consecutive identical call to search_files with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": "[hermes note: this result is byte-identical to the search_files result earlier this turn (tool_call_id s1). Refer to that result; it has not changed. Args: {\"a\":1,\"b\":2}]",
+          "kind": "identical_call_streak"
+        }
+      ]
+    },
+    {
+      "name": "execute_code_strips_volatile_metadata",
+      "calls": [
+        {
+          "tool": "execute_code",
+          "args": {
+            "code": "print(1)"
+          },
+          "result": "{\"status\": \"success\", \"output\": \"1\\n\", \"duration_seconds\": 0.11, \"kernel\": {\"pid\": 1, \"execution_count\": 1}}",
+          "id": "e1",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "execute_code",
+          "args": {
+            "code": "print(1)"
+          },
+          "result": "{\"status\": \"success\", \"output\": \"1\\n\", \"duration_seconds\": 0.25, \"kernel\": {\"pid\": 1, \"execution_count\": 2}}",
+          "id": "e2",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "execute_code",
+          "args": {
+            "code": "print(1)"
+          },
+          "result": "{\"status\": \"success\", \"output\": \"1\\n\", \"duration_seconds\": 0.39, \"kernel\": {\"pid\": 1, \"execution_count\": 3}}",
+          "id": "e3",
+          "failed": false,
+          "notice": "[hermes note: this is the 3rd consecutive identical call to execute_code with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_call_streak"
+        }
+      ]
+    },
+    {
+      "name": "other_tool_keeps_duration_seconds",
+      "calls": [
+        {
+          "tool": "terminal",
+          "args": {
+            "command": "echo 1"
+          },
+          "result": "{\"output\": \"1\", \"duration_seconds\": 0.1}",
+          "id": "t1",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "terminal",
+          "args": {
+            "command": "echo 1"
+          },
+          "result": "{\"output\": \"1\", \"duration_seconds\": 0.2}",
+          "id": "t2",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "terminal",
+          "args": {
+            "command": "echo 1"
+          },
+          "result": "{\"output\": \"1\", \"duration_seconds\": 0.3}",
+          "id": "t3",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        }
+      ]
+    },
+    {
+      "name": "long_args_preview_truncated_and_empty_id",
+      "calls": [
+        {
+          "tool": "read_file",
+          "args": {
+            "key_00": "value_00",
+            "key_01": "value_01",
+            "key_02": "value_02",
+            "key_03": "value_03",
+            "key_04": "value_04",
+            "key_05": "value_05",
+            "key_06": "value_06",
+            "key_07": "value_07",
+            "key_08": "value_08",
+            "key_09": "value_09",
+            "key_10": "value_10",
+            "key_11": "value_11"
+          },
+          "result": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "id": "",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "key_00": "value_00",
+            "key_01": "value_01",
+            "key_02": "value_02",
+            "key_03": "value_03",
+            "key_04": "value_04",
+            "key_05": "value_05",
+            "key_06": "value_06",
+            "key_07": "value_07",
+            "key_08": "value_08",
+            "key_09": "value_09",
+            "key_10": "value_10",
+            "key_11": "value_11"
+          },
+          "result": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "id": "second",
+          "failed": false,
+          "notice": null,
+          "stub": "[hermes note: this result is byte-identical to the read_file result earlier this turn. Refer to that result; it has not changed. Args: {\"key_00\":\"value_00\",\"key_01\":\"value_01\",\"key_02\":\"value_02\",\"key_03\":\"value_03\",\"key_04\":\"value_04\",\"key_05\":\"value_05\"…]",
+          "kind": null
+        }
+      ]
+    },
+    {
+      "name": "cycle_period_2_fires_at_3_laps",
+      "calls": [
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "a"
+          },
+          "result": "ra",
+          "id": "1",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "b"
+          },
+          "result": "rb",
+          "id": "2",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "a"
+          },
+          "result": "ra",
+          "id": "3",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "b"
+          },
+          "result": "rb",
+          "id": "4",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "a"
+          },
+          "result": "ra",
+          "id": "5",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "b"
+          },
+          "result": "rb",
+          "id": "6",
+          "failed": false,
+          "notice": "[hermes note: the last 3 rounds repeated the same cycle of 2 tool calls (ending with read_file) with identical arguments and identical results. Do not repeat the batch — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_cycle"
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "a"
+          },
+          "result": "ra",
+          "id": "7",
+          "failed": false,
+          "notice": "[hermes note: the last 3 rounds repeated the same cycle of 2 tool calls (ending with read_file) with identical arguments and identical results. Do not repeat the batch — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_cycle"
+        }
+      ]
+    },
+    {
+      "name": "cycle_period_3_and_period_5_ignored",
+      "calls": [
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 1
+          },
+          "result": "r1",
+          "id": "p3-0",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 2
+          },
+          "result": "r2",
+          "id": "p3-1",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 3
+          },
+          "result": "r3",
+          "id": "p3-2",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 1
+          },
+          "result": "r1",
+          "id": "p3-3",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 2
+          },
+          "result": "r2",
+          "id": "p3-4",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 3
+          },
+          "result": "r3",
+          "id": "p3-5",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 1
+          },
+          "result": "r1",
+          "id": "p3-6",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 2
+          },
+          "result": "r2",
+          "id": "p3-7",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 3
+          },
+          "result": "r3",
+          "id": "p3-8",
+          "failed": false,
+          "notice": "[hermes note: the last 3 rounds repeated the same cycle of 3 tool calls (ending with read_file) with identical arguments and identical results. Do not repeat the batch — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_cycle"
+        }
+      ]
+    },
+    {
+      "name": "cycle_period_5_not_detected",
+      "calls": [
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 1
+          },
+          "result": "r1",
+          "id": "p5-0",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 2
+          },
+          "result": "r2",
+          "id": "p5-1",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 3
+          },
+          "result": "r3",
+          "id": "p5-2",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 4
+          },
+          "result": "r4",
+          "id": "p5-3",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 5
+          },
+          "result": "r5",
+          "id": "p5-4",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 1
+          },
+          "result": "r1",
+          "id": "p5-5",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 2
+          },
+          "result": "r2",
+          "id": "p5-6",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 3
+          },
+          "result": "r3",
+          "id": "p5-7",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 4
+          },
+          "result": "r4",
+          "id": "p5-8",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 5
+          },
+          "result": "r5",
+          "id": "p5-9",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 1
+          },
+          "result": "r1",
+          "id": "p5-10",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 2
+          },
+          "result": "r2",
+          "id": "p5-11",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 3
+          },
+          "result": "r3",
+          "id": "p5-12",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 4
+          },
+          "result": "r4",
+          "id": "p5-13",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "p": 5
+          },
+          "result": "r5",
+          "id": "p5-14",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        }
+      ]
+    },
+    {
+      "name": "cycle_all_pollers_exempt_mixed_not_exempt",
+      "calls": [
+        {
+          "tool": "process_manage",
+          "args": {
+            "id": "a"
+          },
+          "result": "ok",
+          "id": "1",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "mcp__x__status_poll",
+          "args": {
+            "id": "b"
+          },
+          "result": "ok",
+          "id": "2",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "process_manage",
+          "args": {
+            "id": "a"
+          },
+          "result": "ok",
+          "id": "3",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "mcp__x__status_poll",
+          "args": {
+            "id": "b"
+          },
+          "result": "ok",
+          "id": "4",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "process_manage",
+          "args": {
+            "id": "a"
+          },
+          "result": "ok",
+          "id": "5",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "mcp__x__status_poll",
+          "args": {
+            "id": "b"
+          },
+          "result": "ok",
+          "id": "6",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "process_manage",
+          "args": {
+            "id": "a"
+          },
+          "result": "ok",
+          "id": "7",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "c"
+          },
+          "result": "rc",
+          "id": "8",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "process_manage",
+          "args": {
+            "id": "a"
+          },
+          "result": "ok",
+          "id": "9",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "c"
+          },
+          "result": "rc",
+          "id": "10",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "process_manage",
+          "args": {
+            "id": "a"
+          },
+          "result": "ok",
+          "id": "11",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "c"
+          },
+          "result": "rc",
+          "id": "12",
+          "failed": false,
+          "notice": "[hermes note: the last 3 rounds repeated the same cycle of 2 tool calls (ending with read_file) with identical arguments and identical results. Do not repeat the batch — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_cycle"
+        }
+      ]
+    },
+    {
+      "name": "ordinals_through_14",
+      "calls": [
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "x"
+          },
+          "result": "same",
+          "id": "o1",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "x"
+          },
+          "result": "same",
+          "id": "o2",
+          "failed": false,
+          "notice": null,
+          "stub": null,
+          "kind": null
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "x"
+          },
+          "result": "same",
+          "id": "o3",
+          "failed": false,
+          "notice": "[hermes note: this is the 3rd consecutive identical call to read_file with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_call_streak"
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "x"
+          },
+          "result": "same",
+          "id": "o4",
+          "failed": false,
+          "notice": "[hermes note: this is the 4th consecutive identical call to read_file with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_call_streak"
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "x"
+          },
+          "result": "same",
+          "id": "o5",
+          "failed": false,
+          "notice": "[hermes note: this is the 5th consecutive identical call to read_file with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_call_streak"
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "x"
+          },
+          "result": "same",
+          "id": "o6",
+          "failed": false,
+          "notice": "[hermes note: this is the 6th consecutive identical call to read_file with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_call_streak"
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "x"
+          },
+          "result": "same",
+          "id": "o7",
+          "failed": false,
+          "notice": "[hermes note: this is the 7th consecutive identical call to read_file with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_call_streak"
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "x"
+          },
+          "result": "same",
+          "id": "o8",
+          "failed": false,
+          "notice": "[hermes note: this is the 8th consecutive identical call to read_file with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_call_streak"
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "x"
+          },
+          "result": "same",
+          "id": "o9",
+          "failed": false,
+          "notice": "[hermes note: this is the 9th consecutive identical call to read_file with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_call_streak"
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "x"
+          },
+          "result": "same",
+          "id": "o10",
+          "failed": false,
+          "notice": "[hermes note: this is the 10th consecutive identical call to read_file with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_call_streak"
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "x"
+          },
+          "result": "same",
+          "id": "o11",
+          "failed": false,
+          "notice": "[hermes note: this is the 11th consecutive identical call to read_file with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_call_streak"
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "x"
+          },
+          "result": "same",
+          "id": "o12",
+          "failed": false,
+          "notice": "[hermes note: this is the 12th consecutive identical call to read_file with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_call_streak"
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "x"
+          },
+          "result": "same",
+          "id": "o13",
+          "failed": false,
+          "notice": "[hermes note: this is the 13th consecutive identical call to read_file with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_call_streak"
+        },
+        {
+          "tool": "read_file",
+          "args": {
+            "path": "x"
+          },
+          "result": "same",
+          "id": "o14",
+          "failed": false,
+          "notice": "[hermes note: this is the 14th consecutive identical call to read_file with identical arguments returning the same result. Do not repeat it — change arguments, use a different tool, or proceed with what you have.]",
+          "stub": null,
+          "kind": "identical_call_streak"
+        }
+      ]
+    }
+  ],
+  "continue_intent_cases": [
+    {
+      "text": "",
+      "expected": false
+    },
+    {
+      "text": "   ",
+      "expected": false
+    },
+    {
+      "text": "Let me now inspect the config file.",
+      "expected": true
+    },
+    {
+      "text": "Let me now inspect the config file:",
+      "expected": true
+    },
+    {
+      "text": "Let me now inspect the config file…",
+      "expected": true
+    },
+    {
+      "text": "I'll now run the unit tests.",
+      "expected": true
+    },
+    {
+      "text": "I’ll now check the logs",
+      "expected": true
+    },
+    {
+      "text": "I will now patch src/main.rs.",
+      "expected": false
+    },
+    {
+      "text": "Now I'll inspect the output.",
+      "expected": true
+    },
+    {
+      "text": "Now I’ll inspect the output.",
+      "expected": true
+    },
+    {
+      "text": "Now I will check the database.",
+      "expected": true
+    },
+    {
+      "text": "Next, I inspect the schema.",
+      "expected": true
+    },
+    {
+      "text": "Next: I run cargo test.",
+      "expected": true
+    },
+    {
+      "text": "Good progress. Let me now verify the build.",
+      "expected": true
+    },
+    {
+      "text": "Let me now check the file. And here is the final answer.",
+      "expected": false
+    },
+    {
+      "text": "Let me check the file.",
+      "expected": false
+    },
+    {
+      "text": "I'll check it later.",
+      "expected": false
+    },
+    {
+      "text": "Next I will do it.",
+      "expected": false
+    },
+    {
+      "text": "Let me now aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.",
+      "expected": false
+    },
+    {
+      "text": "Let me now aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.",
+      "expected": false
+    },
+    {
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx Let me now run it.",
+      "expected": true
+    },
+    {
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx Let me now run it.",
+      "expected": false
+    },
+    {
+      "text": "Done.\nLet me now check the status.",
+      "expected": true
+    },
+    {
+      "text": "Let me now check\nsecond line",
+      "expected": false
+    },
+    {
+      "text": "LET ME NOW RUN THE TESTS.",
+      "expected": true
+    },
+    {
+      "text": "The user asked: let me now explain?",
+      "expected": false
+    }
+  ],
+  "degenerate_final_cases": [
+    {
+      "text": "",
+      "user_message": "hello",
+      "expected": false
+    },
+    {
+      "text": "   ",
+      "user_message": "hello",
+      "expected": false
+    },
+    {
+      "text": "?warming",
+      "user_message": "Check the server status",
+      "expected": true
+    },
+    {
+      "text": "!oops",
+      "user_message": "Check the server status",
+      "expected": true
+    },
+    {
+      "text": ",then",
+      "user_message": "Check the server status",
+      "expected": true
+    },
+    {
+      "text": ";next",
+      "user_message": "Check the server status",
+      "expected": true
+    },
+    {
+      "text": ":abc",
+      "user_message": "Check the server status",
+      "expected": true
+    },
+    {
+      "text": ":8080",
+      "user_message": "What port?",
+      "expected": false
+    },
+    {
+      "text": ")tail",
+      "user_message": "hello",
+      "expected": true
+    },
+    {
+      "text": "]tail",
+      "user_message": "hello",
+      "expected": true
+    },
+    {
+      "text": "}tail",
+      "user_message": "hello",
+      "expected": true
+    },
+    {
+      "text": "?warming.",
+      "user_message": "Check the server status",
+      "expected": false
+    },
+    {
+      "text": "?warming!",
+      "user_message": "Check the server status",
+      "expected": false
+    },
+    {
+      "text": "$5",
+      "user_message": "How much?",
+      "expected": false
+    },
+    {
+      "text": "#123",
+      "user_message": "Which issue?",
+      "expected": false
+    },
+    {
+      "text": "-1",
+      "user_message": "What exit code?",
+      "expected": false
+    },
+    {
+      "text": "/tmp",
+      "user_message": "Where?",
+      "expected": false
+    },
+    {
+      "text": ".env",
+      "user_message": "Which file?",
+      "expected": false
+    },
+    {
+      "text": "(a)",
+      "user_message": "Which option?",
+      "expected": false
+    },
+    {
+      "text": ":)",
+      "user_message": "Thanks",
+      "expected": false
+    },
+    {
+      "text": ";;",
+      "user_message": "What separator?",
+      "expected": false
+    },
+    {
+      "text": "42",
+      "user_message": "What is the answer?",
+      "expected": false
+    },
+    {
+      "text": "SQLite",
+      "user_message": "Which DB?",
+      "expected": false
+    },
+    {
+      "text": "Done.",
+      "user_message": "Run it",
+      "expected": false
+    },
+    {
+      "text": "пар",
+      "user_message": "Run the build",
+      "expected": true
+    },
+    {
+      "text": "пар",
+      "user_message": "Запусти сборку",
+      "expected": false
+    },
+    {
+      "text": "пар.",
+      "user_message": "Run the build",
+      "expected": false
+    },
+    {
+      "text": "你好",
+      "user_message": "Check status",
+      "expected": true
+    },
+    {
+      "text": "你好",
+      "user_message": "检查状态",
+      "expected": false
+    },
+    {
+      "text": "你好。",
+      "user_message": "Check status",
+      "expected": false
+    },
+    {
+      "text": "пар1",
+      "user_message": "Run the build",
+      "expected": false
+    },
+    {
+      "text": "аааааааааааааааааааааааа",
+      "user_message": "Run the build",
+      "expected": true
+    },
+    {
+      "text": "ааааааааааааааааааааааааа",
+      "user_message": "Run the build",
+      "expected": false
+    }
+  ],
+  "config_cases": [
+    {
+      "label": "absent",
+      "present": false,
+      "value": null,
+      "expected": true
+    },
+    {
+      "label": "bool_true",
+      "present": true,
+      "value": true,
+      "expected": true
+    },
+    {
+      "label": "bool_false",
+      "present": true,
+      "value": false,
+      "expected": false
+    },
+    {
+      "label": "null",
+      "present": true,
+      "value": null,
+      "expected": false
+    },
+    {
+      "label": "int_0",
+      "present": true,
+      "value": 0,
+      "expected": false
+    },
+    {
+      "label": "int_1",
+      "present": true,
+      "value": 1,
+      "expected": true
+    },
+    {
+      "label": "str_empty",
+      "present": true,
+      "value": "",
+      "expected": false
+    },
+    {
+      "label": "str_false",
+      "present": true,
+      "value": "false",
+      "expected": true
+    },
+    {
+      "label": "list_empty",
+      "present": true,
+      "value": [],
+      "expected": false
+    }
+  ],
+  "intent_ack_cases": [
+    {
+      "label": "absent_chat",
+      "present": false,
+      "value": null,
+      "model": "gpt-4o",
+      "is_responses": false,
+      "expected": "off"
+    },
+    {
+      "label": "absent_responses",
+      "present": false,
+      "value": null,
+      "model": "gpt-5.2-codex",
+      "is_responses": true,
+      "expected": "codex_only"
+    },
+    {
+      "label": "auto_chat",
+      "present": true,
+      "value": "auto",
+      "model": "gpt-4o",
+      "is_responses": false,
+      "expected": "off"
+    },
+    {
+      "label": "auto_responses",
+      "present": true,
+      "value": "auto",
+      "model": "gpt-5.2-codex",
+      "is_responses": true,
+      "expected": "codex_only"
+    },
+    {
+      "label": "bool_true",
+      "present": true,
+      "value": true,
+      "model": "gpt-4o",
+      "is_responses": false,
+      "expected": "all"
+    },
+    {
+      "label": "bool_false",
+      "present": true,
+      "value": false,
+      "model": "gpt-5.2-codex",
+      "is_responses": true,
+      "expected": "off"
+    },
+    {
+      "label": "str_always",
+      "present": true,
+      "value": "always",
+      "model": "gpt-4o",
+      "is_responses": false,
+      "expected": "all"
+    },
+    {
+      "label": "str_yes",
+      "present": true,
+      "value": "YES",
+      "model": "gpt-4o",
+      "is_responses": false,
+      "expected": "all"
+    },
+    {
+      "label": "str_on",
+      "present": true,
+      "value": "on",
+      "model": "gpt-4o",
+      "is_responses": false,
+      "expected": "all"
+    },
+    {
+      "label": "str_never",
+      "present": true,
+      "value": "never",
+      "model": "gpt-5.2-codex",
+      "is_responses": true,
+      "expected": "off"
+    },
+    {
+      "label": "str_no",
+      "present": true,
+      "value": "no",
+      "model": "gpt-5.2-codex",
+      "is_responses": true,
+      "expected": "off"
+    },
+    {
+      "label": "str_off",
+      "present": true,
+      "value": "OFF",
+      "model": "gpt-5.2-codex",
+      "is_responses": true,
+      "expected": "off"
+    },
+    {
+      "label": "str_unknown_chat",
+      "present": true,
+      "value": "weird",
+      "model": "gpt-4o",
+      "is_responses": false,
+      "expected": "off"
+    },
+    {
+      "label": "str_unknown_responses",
+      "present": true,
+      "value": "weird",
+      "model": "gpt-5.2-codex",
+      "is_responses": true,
+      "expected": "codex_only"
+    },
+    {
+      "label": "list_match",
+      "present": true,
+      "value": [
+        "deepseek",
+        "qwen"
+      ],
+      "model": "DeepSeek-V3",
+      "is_responses": false,
+      "expected": "all"
+    },
+    {
+      "label": "list_miss",
+      "present": true,
+      "value": [
+        "deepseek",
+        "qwen"
+      ],
+      "model": "gpt-5.2-codex",
+      "is_responses": true,
+      "expected": "off"
+    },
+    {
+      "label": "list_empty",
+      "present": true,
+      "value": [],
+      "model": "gpt-5.2-codex",
+      "is_responses": true,
+      "expected": "off"
+    },
+    {
+      "label": "null_chat",
+      "present": true,
+      "value": null,
+      "model": "gpt-4o",
+      "is_responses": false,
+      "expected": "off"
+    },
+    {
+      "label": "null_responses",
+      "present": true,
+      "value": null,
+      "model": "gpt-5.2-codex",
+      "is_responses": true,
+      "expected": "codex_only"
+    }
+  ]
+}

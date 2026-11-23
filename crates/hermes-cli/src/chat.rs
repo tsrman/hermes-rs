@@ -239,6 +239,10 @@ pub struct ChatRequest {
     compression: CompactionSettings,
     #[serde(default)]
     keep_phone_numbers: bool,
+    #[serde(default = "default_stall_guards")]
+    stall_guards: bool,
+    #[serde(default)]
+    intent_ack_continuation: hermes_runtime::stall_guards::IntentAckContinuation,
     #[serde(default)]
     debug_log: Option<OsString>,
     #[serde(default)]
@@ -277,6 +281,10 @@ pub struct ChatRequest {
 
 fn default_clarify_timeout() -> u32 {
     90
+}
+
+fn default_stall_guards() -> bool {
+    true
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -512,6 +520,8 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         prompt: settings.prompt,
         compression: settings.compression,
         keep_phone_numbers: settings.keep_phone_numbers,
+        stall_guards: settings.stall_guards,
+        intent_ack_continuation: settings.intent_ack_continuation,
         debug_log: args.debug_log.clone(),
         delegation: settings.delegation.clone(),
         oneshot,
@@ -672,6 +682,8 @@ where
         terminal_local: request.terminal_local,
         compression: Some(&request.compression),
         keep_phone_numbers: request.keep_phone_numbers,
+        stall_guards: request.stall_guards,
+        intent_ack_continuation: &request.intent_ack_continuation,
         summarizer: summarizer.as_ref(),
         compaction_guard: guard,
         terminal_env: Some(&request.terminal_env),
@@ -1027,6 +1039,8 @@ pub async fn compress_session(
         terminal_local: request.terminal_local,
         compression: Some(&request.compression),
         keep_phone_numbers: request.keep_phone_numbers,
+        stall_guards: request.stall_guards,
+        intent_ack_continuation: &request.intent_ack_continuation,
         summarizer: summarizer.as_ref(),
         compaction_guard: Some(guard),
         terminal_env: Some(&request.terminal_env),

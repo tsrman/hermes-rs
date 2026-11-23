@@ -79,6 +79,11 @@ class CliTest(unittest.TestCase):
             "test_interrupted_saved_turn_does_not_create_database": "partial_after_tool",
             "test_resume_blocks_an_overlapping_turn_and_rejects_a_changed_transcript": "stall_on_resume",
             "test_cancelled_resume_releases_the_lease": "stall_on_resume",
+            "test_stall_guards_stub_large_repeat_and_warn_on_third_identical_call": "stall_identical_calls",
+            "test_stall_guards_disabled_skips_identical_call_stubbing_and_notice": "stall_identical_calls",
+            "test_stall_guards_reprompt_continue_intent_and_cap_at_two_nudges": "stall_continue_intent",
+            "test_stall_guards_disabled_skips_continue_intent_reprompt": "stall_continue_intent",
+            "test_stall_guards_reprompt_degenerate_fragment_after_tool_work": "stall_degenerate_final",
         }.get(self._testMethodName, "tool")
         self.server = subprocess.Popen(
             ["python3", str(ROOT / "compat" / "model_server.py"), "--scenario", scenario],
@@ -463,9 +468,14 @@ class CliTest(unittest.TestCase):
 
     def squeezed_with(self, thresholds):
         """Whether a turn of three large reads on a 1M-token window compresses, given `model_thresholds`."""
+        # Disable stall_guards so repeated large identical reads are not stubbed to ~150 bytes
+        # before the token threshold is reached.
         (self.workdir / "fixture.txt").write_text("".join(f"line {n} " + "x" * 190 + "\n" for n in range(9000)),
                                                   encoding="utf-8")
-        config = f"  context_length: 1000000\ncompression:\n  protect_first_n: 1\n  model_thresholds: {thresholds}\n"
+        config = (
+            f"  context_length: 1000000\nagent:\n  stall_guards: false\n"
+            f"compression:\n  protect_first_n: 1\n  model_thresholds: {thresholds}\n"
+        )
         result, _ = self.chat_with_profile(extra_config=config)
         self.assertEqual(result.returncode, 0, result.stderr)
         return "replacing earlier steps of this turn" in result.stderr
@@ -492,6 +502,7 @@ class CliTest(unittest.TestCase):
         (self.workdir / "fixture.txt").write_text(
             "".join(f"line {n:04d} " + ("x" * 180) + "\n" for n in range(150)), encoding="utf-8")
         config = (
+            "agent:\n  stall_guards: false\n"
             "compression:\n  threshold_tokens: '16000'\n  tail_mode: legacy\n"
             "  target_ratio: 0.1\n  protect_first_n: 1\n"
             + (f"  max_attempts: {attempts}\n" if attempts is not None else "")
@@ -1816,6 +1827,105 @@ class CliTest(unittest.TestCase):
         self.assertIn("interrupted", stderr)
         self.assertNotIn("Ответ модели", stdout)
         self.assertFalse((home / "state.db").exists())
+
+
+    def test_stall_guards_stub_large_repeat_and_warn_on_third_identical_call(self):
+        # Short fixture (< 512 chars): no stubbing on 2nd/3rd call, notice on 3rd consecutive call.
+        short_res, short_reqs = self.chat_with_profile()
+        self.assertEqual(short_res.returncode, 0, short_res.stderr)
+        self.assertEqual(short_res.stdout, "Ответ после замечания\n")
+        self.assertEqual(len(short_reqs), 4)
+        short_tools = [m["content"] for m in short_reqs[3]["messages"] if m["role"] == "tool"]
+        self.assertEqual(len(short_tools), 3)
+        self.assertNotIn("this result is byte-identical", short_tools[1])
+        self.assertNotIn("consecutive identical call", short_tools[1])
+        self.assertNotIn("this result is byte-identical", short_tools[2])
+        self.assertIn(
+            "[hermes note: this is the 3rd consecutive identical call to read_file with identical arguments returning the same result.",
+            short_tools[2],
+        )
+
+        # Large fixture (>= 512 chars): 2nd call is stubbed, 3rd call is stubbed + carries notice.
+        (self.workdir / "fixture.txt").write_text("x" * 700, encoding="utf-8")
+        large_res, all_reqs = self.chat_with_profile()
+        self.assertEqual(large_res.returncode, 0, large_res.stderr)
+        large_reqs = all_reqs[len(short_reqs):]
+        self.assertEqual(len(large_reqs), 4)
+        large_tools = [m["content"] for m in large_reqs[3]["messages"] if m["role"] == "tool"]
+        self.assertEqual(len(large_tools), 3)
+        self.assertIn("x" * 700, large_tools[0])
+        self.assertIn(
+            "[hermes note: this result is byte-identical to the read_file result earlier this turn",
+            large_tools[1],
+        )
+        self.assertNotIn("consecutive identical call", large_tools[1])
+        self.assertIn(
+            "[hermes note: this result is byte-identical to the read_file result earlier this turn",
+            large_tools[2],
+        )
+        self.assertIn(
+            "[hermes note: this is the 3rd consecutive identical call to read_file with identical arguments returning the same result.",
+            large_tools[2],
+        )
+
+    def test_stall_guards_disabled_skips_identical_call_stubbing_and_notice(self):
+        (self.workdir / "fixture.txt").write_text("x" * 700, encoding="utf-8")
+        result, requests = self.chat_with_profile(extra_config="agent:\n  stall_guards: false\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(requests), 4)
+        tools = [m["content"] for m in requests[3]["messages"] if m["role"] == "tool"]
+        self.assertEqual(len(tools), 3)
+        for content in tools:
+            self.assertIn("x" * 700, content)
+            self.assertNotIn("this result is byte-identical", content)
+            self.assertNotIn("consecutive identical call", content)
+
+    def test_stall_guards_reprompt_continue_intent_and_cap_at_two_nudges(self):
+        result, requests = self.chat_with_profile(query="inspect fixture")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[1]["messages"][-1]["role"], "user")
+        self.assertTrue(requests[1]["messages"][-1]["content"].startswith("[System: Continue now."))
+        self.assertIn("Final after nudge", result.stdout)
+
+        capped, all_requests = self.chat_with_profile(query="stay stalled")
+        self.assertEqual(capped.returncode, 0, capped.stderr)
+        capped_reqs = all_requests[len(requests):]
+        # Initial attempt + at most 2 continue-intent nudges.
+        self.assertEqual(len(capped_reqs), 3)
+        nudge_count = sum(
+            m["role"] == "user" and str(m.get("content", "")).startswith("[System: Continue now.")
+            for m in capped_reqs[-1]["messages"]
+        )
+        self.assertEqual(nudge_count, 2)
+
+    def test_stall_guards_disabled_skips_continue_intent_reprompt(self):
+        result, requests = self.chat_with_profile(extra_config="agent:\n  stall_guards: false\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(result.stdout, "Let me now check the file.\n")
+
+    def test_stall_guards_reprompt_degenerate_fragment_after_tool_work(self):
+        # Default intent_ack_continuation: "auto" is off on Chat Completions (matching upstream).
+        default_res, default_reqs = self.chat_with_profile()
+        self.assertEqual(default_res.returncode, 0, default_res.stderr)
+        self.assertEqual(len(default_reqs), 2)
+        self.assertEqual(default_res.stdout, "?warming\n")
+
+        # When intent_ack_continuation is active, a collapsed fragment after tool work re-prompts.
+        result, all_reqs = self.chat_with_profile(
+            extra_config="agent:\n  intent_ack_continuation: true\n"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        requests = all_reqs[len(default_reqs):]
+        self.assertEqual(len(requests), 3)
+        self.assertEqual(requests[2]["messages"][-1]["role"], "user")
+        self.assertTrue(
+            requests[2]["messages"][-1]["content"].startswith(
+                "[System: Your previous message ended the turn with a fragment"
+            )
+        )
+        self.assertIn("Complete after fragment", result.stdout)
 
 
 if __name__ == "__main__":

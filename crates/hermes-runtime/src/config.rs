@@ -55,6 +55,11 @@ pub fn keeps_phone_numbers(config: &serde_yaml::Value) -> bool {
 pub struct ChatSettings {
     /// `security.redact_phone_numbers: false`: the assistant's reply keeps its phone numbers.
     pub keep_phone_numbers: bool,
+    /// `agent.stall_guards` (default `true`): identical-call loop notices/stubbing and
+    /// continue-intent / degenerate-final re-prompts.
+    pub stall_guards: bool,
+    /// `agent.intent_ack_continuation` (default `"auto"`): governs degenerate-final re-prompting.
+    pub intent_ack_continuation: crate::stall_guards::IntentAckContinuation,
     /// `agent.reasoning_effort`, `agent.reasoning_overrides` and `agent.text_verbosity`.
     pub reasoning: crate::reasoning::ReasoningSettings,
     pub model: Option<String>,
@@ -183,6 +188,8 @@ impl Default for ChatSettings {
             config_api_key: None,
             redact_secrets: true,
             keep_phone_numbers: false,
+            stall_guards: true,
+            intent_ack_continuation: crate::stall_guards::IntentAckContinuation::default(),
             reasoning: crate::reasoning::ReasoningSettings::default(),
             prefill_file: None,
             named_custom: false,
@@ -441,6 +448,9 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
         ..ChatSettings::default()
     };
     settings.keep_phone_numbers = keeps_phone_numbers(&config);
+    settings.stall_guards = crate::stall_guards::parse_stall_guards(&config);
+    settings.intent_ack_continuation =
+        crate::stall_guards::IntentAckContinuation::from_config(&config);
     settings.reasoning = crate::reasoning::ReasoningSettings::from_config(&config);
     settings.custom_providers = custom_providers(&config);
     settings.model_overrides = ModelOverrides::from_config(&config);

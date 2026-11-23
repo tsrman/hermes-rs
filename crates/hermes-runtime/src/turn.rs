@@ -493,6 +493,11 @@ pub struct TurnOptions<'a> {
     pub compaction_guard: Option<&'a Mutex<CompactionGuard>>,
     /// `security.redact_phone_numbers: false`: the stored assistant reply keeps its phone numbers.
     pub keep_phone_numbers: bool,
+    /// `agent.stall_guards` (default `true`): identical-call loop notices/stubbing and
+    /// continue-intent / degenerate-final re-prompts.
+    pub stall_guards: bool,
+    /// `agent.intent_ack_continuation` (default `"auto"`): governs degenerate-final re-prompting.
+    pub intent_ack_continuation: &'a crate::stall_guards::IntentAckContinuation,
     /// Which environment variables commands see.
     pub terminal_env: Option<&'a crate::terminal::TerminalSettings>,
     /// Seconds to wait for an answer to `clarify`; 0 waits without limit.
@@ -581,6 +586,8 @@ where
     tools::sort_by_name(&mut tools);
     tools::append_bridge(&env, &mut tools);
     let mut memory_turn = MemoryTurn::default();
+    let mut stall_tracker = crate::stall_guards::StallGuardTracker::new();
+    let mut stall_continuations = 0usize;
     let mut usage = (0u64, 0u64);
     let mut approve_dyn =
         |request: ApprovalRequest| -> tools::BoxFuture<'static, ApprovalDecision> {
@@ -705,6 +712,38 @@ where
                 // What is stored is scrubbed like the reference's stored reply; the text the person
                 // saw (and a subagent's summary) is the model's own.
                 let stored = redact_assistant_reply(&result.content, options.keep_phone_numbers);
+                if options.stall_guards
+                    && stall_continuations < crate::stall_guards::MAX_STALL_CONTINUATIONS
+                {
+                    let stripped = crate::stall_guards::strip_think_blocks(&result.content);
+                    let ack_mode = options.intent_ack_continuation.resolve(
+                        &route.model,
+                        matches!(route.provider, Provider::Responses(_)),
+                    );
+                    let stall_continue = !tools.is_empty()
+                        && crate::stall_guards::trailing_continue_intent(&stripped);
+                    let degenerate = !stall_continue
+                        && ack_mode != "off"
+                        && crate::stall_guards::tool_results_since_last_user(&sent) > 0
+                        && crate::stall_guards::looks_like_degenerate_final(&stripped, query);
+                    if stall_continue || degenerate {
+                        stall_continuations += 1;
+                        let interim = json!({"role": "assistant", "content": stored});
+                        let nudge = json!({
+                            "role": "user",
+                            "content": if stall_continue {
+                                crate::stall_guards::CONTINUE_INTENT_NUDGE
+                            } else {
+                                crate::stall_guards::DEGENERATE_FINAL_NUDGE
+                            }
+                        });
+                        sent.push(interim.clone());
+                        messages.push(interim);
+                        sent.push(nudge.clone());
+                        messages.push(nudge);
+                        continue;
+                    }
+                }
                 messages.push(json!({"role": "assistant", "content": stored}));
                 let appended = messages.split_off(first_new_message);
                 messages.remove(0);
@@ -808,6 +847,11 @@ where
                     }),
                 );
             }
+            let content = if options.stall_guards {
+                stall_tracker.apply(&name, &arguments, content, &call.id, !succeeded)
+            } else {
+                content
+            };
             let tool_message = json!({"role": "tool", "tool_call_id": call.id, "content": content});
             sent.push(tool_message.clone());
             messages.push(tool_message);

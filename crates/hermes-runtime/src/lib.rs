@@ -35,6 +35,7 @@ mod session_search;
 mod skill_lint;
 mod skill_manage;
 mod skills;
+pub mod stall_guards;
 pub mod storage;
 mod syntax_lint;
 pub mod system_prompt;

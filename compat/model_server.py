@@ -247,6 +247,33 @@ class Handler(BaseHTTPRequestHandler):
             )
             wants_tool = not summary or scenario == "iteration_summary_tool"
             call_id = f"iteration-{len(self.server.requests)}"
+        elif scenario == "stall_identical_calls":
+            wants_tool = raw_tools < 3
+            call_id = f"stall-call-{len(self.server.requests)}"
+            if not wants_tool:
+                final_text = "Ответ после замечания"
+        elif scenario == "stall_continue_intent":
+            wants_tool = False
+            call_id = "none"
+            first_user = next((m.get("content", "") for m in messages if m.get("role") == "user"), "")
+            nudged = any(
+                m.get("role") == "user" and str(m.get("content", "")).startswith("[System: Continue now.")
+                for m in messages
+            )
+            final_text = "Final after nudge" if (nudged and first_user != "stay stalled") else "Let me now check the file."
+        elif scenario == "stall_degenerate_final":
+            if raw_tools == 0:
+                wants_tool = True
+                call_id = "degen-tool-0"
+            else:
+                wants_tool = False
+                call_id = "none"
+                nudged = any(
+                    m.get("role") == "user"
+                    and str(m.get("content", "")).startswith("[System: Your previous message ended the turn with a fragment")
+                    for m in messages
+                )
+                final_text = "Complete after fragment" if nudged else "?warming"
         else:
             wants_tool = scenario in ("tool", "reply_secrets", "overflow_tools", "partial_tool", "tool_retry", "tool_rate_limit", "fallback_after_tool", "partial_after_tool", "stall_on_resume") and not any(
                 isinstance(message, dict) and message.get("role") == "tool"
@@ -329,7 +356,7 @@ def main():
         "text", "tool", "partial_tool", "stall", "tool_retry", "tool_rate_limit",
         "fallback_after_tool", "fallback_auth", "partial_text", "disconnect_once",
         "iteration_limit", "iteration_summary_tool", "partial_after_tool", "stall_on_resume", "burst", "skill",
-        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "overflow_midturn", "pressure_midturn", "mcp", "mcp_resources", "mcp_old_name", "mcp_slow", "web", "memory", "cron_failure", "todo", "delegate", "code", "reply_secrets", "pressure_long", "pressure_summary_fail", "pressure_summary_grow",
+        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "overflow_midturn", "pressure_midturn", "mcp", "mcp_resources", "mcp_old_name", "mcp_slow", "web", "memory", "cron_failure", "todo", "delegate", "code", "reply_secrets", "pressure_long", "pressure_summary_fail", "pressure_summary_grow", "stall_identical_calls", "stall_continue_intent", "stall_degenerate_final",
     ), default="text")
     args = parser.parse_args()
     if bool(args.tls_cert) != bool(args.tls_key):
