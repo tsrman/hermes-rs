@@ -11,7 +11,10 @@ use crate::providers::profiles;
 use crate::tool_policy::ToolPolicy;
 use crate::web_tools::WebSettings;
 
-pub use crate::compaction::CompactionSettings;
+pub use crate::compaction::{
+    merge_summary_into_tail_row, plan_summary_placement, CompactionBlockReason, CompactionGuard,
+    CompactionSettings, SummaryPlacement,
+};
 
 mod edit;
 pub use edit::set_config_value;

@@ -144,6 +144,7 @@ impl ResumeState {
                 &self.id,
                 rows,
                 &compaction.summary,
+                &compaction.placement,
                 &turn.system_prompt,
             )?;
             (active_count, Some(tools))
@@ -165,6 +166,68 @@ impl ResumeState {
         transaction.commit()?;
         self.released = true;
         Ok(self.id.clone())
+    }
+
+    /// Commit a standalone manual compaction (e.g. REPL `/compress`) without appending a new turn.
+    /// Returns the number of archived messages.
+    pub(super) fn commit_compaction(
+        &mut self,
+        history: &TurnHistory,
+        ended_at: f64,
+    ) -> Result<usize, StorageError> {
+        let compaction = history
+            .compaction
+            .as_ref()
+            .ok_or(StorageError::InvalidTurn)?;
+        let system_prompt = history
+            .system_prompt
+            .as_deref()
+            .ok_or(StorageError::InvalidTurn)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        verify_write_schema(&transaction)?;
+        let now = timestamp();
+        let owns_lease: bool = transaction.query_row(
+            "SELECT EXISTS (SELECT 1 FROM session_turn_leases
+                            WHERE conversation_id = ?1 AND holder = ?2 AND expires_at > ?3)",
+            params![self.root, self.holder, now],
+            |row| row.get(0),
+        )?;
+        if !owns_lease
+            || compression::tip(&transaction, &self.requested)? != self.id
+            || compression::root(&transaction, &self.id)? != self.root
+            || read_revision(&transaction, &self.id)? != self.revision
+        {
+            return Err(StorageError::SessionChanged(self.id.clone()));
+        }
+        let (ids, messages) = read_history(&transaction, &self.id)?;
+        if ids != self.replay_ids || messages != history.messages {
+            return Err(StorageError::SessionChanged(self.id.clone()));
+        }
+        require_idle(&transaction, &self.root, &self.id, now)?;
+        let rows = ids
+            .get(compaction.range.clone())
+            .ok_or(StorageError::InvalidTurn)?;
+        let archived = rows.len();
+        let (active_count, tools) = compression::archive_middle(
+            &transaction,
+            &self.id,
+            rows,
+            &compaction.summary,
+            &compaction.placement,
+            system_prompt,
+        )?;
+        transaction.execute(
+            "UPDATE sessions SET last_activity_at = MAX(COALESCE(last_activity_at, 0), ?2),
+                 message_count = ?3, tool_call_count = ?4
+             WHERE id = ?1",
+            params![self.id, ended_at, active_count, tools],
+        )?;
+        release(&transaction, &self.root, &self.holder)?;
+        transaction.commit()?;
+        self.released = true;
+        Ok(archived)
     }
 }
 

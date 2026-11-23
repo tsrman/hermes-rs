@@ -448,6 +448,7 @@ async fn run_child(index: usize, task: &Task, family: &Family<'_>) -> ChildRun {
         child: Some(index),
         // Memory and clarify are off for children; the rest follows the parent.
         memory: None,
+        compaction_guard: None,
         ..**parent
     };
     let auto = delegation.settings.subagent_auto_approve;

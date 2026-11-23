@@ -256,7 +256,7 @@ class Handler(BaseHTTPRequestHandler):
             if scenario in ("overflow_midturn", "pressure_midturn"):
                 wants_tool = not summarizing and raw_tools < 3 and "[CONTEXT SUMMARY]" not in json.dumps(messages)
                 call_id = f"midturn-call-{len(self.server.requests)}"
-            if scenario == "pressure_long":
+            if scenario in ("pressure_long", "pressure_summary_fail", "pressure_summary_grow"):
                 # Tool calls until ten requests have been made, however much was compressed meanwhile.
                 wants_tool = not summarizing and len(self.server.requests) <= 10
                 call_id = f"long-call-{len(self.server.requests)}"
@@ -274,10 +274,12 @@ class Handler(BaseHTTPRequestHandler):
                 "[CRON_FAILURE]\nchild task failed" if scenario == "cron_failure" else (
                     REPLY_SECRETS if scenario == "reply_secrets" else (final_text or "Ответ модели")))}
             finish_reason = "stop"
-        if scenario in ("compact", "compact_failure", "overflow", "overflow_tools", "overflow_midturn", "pressure_midturn", "pressure_long") and messages[0]["content"].startswith("Summarize completed conversation history"):
+        if scenario in ("compact", "compact_failure", "overflow", "overflow_tools", "overflow_midturn", "pressure_midturn", "pressure_long", "pressure_summary_fail", "pressure_summary_grow") and messages[0]["content"].startswith("Summarize completed conversation history"):
             message["content"] = "Earlier turns resolved the fixture checks."
-            if scenario == "compact_failure":
+            if scenario in ("compact_failure", "pressure_summary_fail"):
                 finish_reason = "length"
+            elif scenario == "pressure_summary_grow":
+                message["content"] = "Oversized summary " + ("x" * 20000)
         if not body.get("stream"):
             self.send_json(200, {
                 **common,
@@ -327,7 +329,7 @@ def main():
         "text", "tool", "partial_tool", "stall", "tool_retry", "tool_rate_limit",
         "fallback_after_tool", "fallback_auth", "partial_text", "disconnect_once",
         "iteration_limit", "iteration_summary_tool", "partial_after_tool", "stall_on_resume", "burst", "skill",
-        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "overflow_midturn", "pressure_midturn", "mcp", "mcp_resources", "mcp_old_name", "mcp_slow", "web", "memory", "cron_failure", "todo", "delegate", "code", "reply_secrets", "pressure_long",
+        "compact", "compact_failure", "local_tools", "overflow", "overflow_tools", "overflow_midturn", "pressure_midturn", "mcp", "mcp_resources", "mcp_old_name", "mcp_slow", "web", "memory", "cron_failure", "todo", "delegate", "code", "reply_secrets", "pressure_long", "pressure_summary_fail", "pressure_summary_grow",
     ), default="text")
     args = parser.parse_args()
     if bool(args.tls_cert) != bool(args.tls_key):

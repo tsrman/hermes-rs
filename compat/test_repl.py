@@ -314,5 +314,68 @@ class PinnedSkillsTest(ReplBase):
         self.assertIn("skills.inline_shell is set", err)
 
 
+@unittest.skipUnless(sys.platform == "linux", "requires Linux terminals")
+class ReplCompressTest(ReplBase):
+    scenario = "compact"
+
+    def test_compress_handles_empty_and_short_sessions(self):
+        process, _ = self.start(tty=False)
+        out, err = process.communicate("/compress\nhello\n/compress\n", timeout=30)
+        self.assertEqual(process.returncode, 0, err)
+        self.assertIn("Nothing to compress yet: start a conversation first.", out)
+        self.assertIn("Nothing to compress: conversation is short enough already.", out)
+        # Only the single user turn hit the model; no summary request was sent.
+        self.assertEqual(len(self.requests()), 1)
+
+    def test_compress_and_compact_alias_summarize_with_focus_and_persist(self):
+        (self.profile / "config.yaml").write_text(
+            self.config + "compression:\n  protect_first_n: 1\n  protect_last_n: 2\n",
+            encoding="utf-8",
+        )
+        process, _ = self.start(tty=False)
+        turns = [
+            "First turn establishing the project layout " + ("a" * 240),
+            "Second turn discussing database migration details " + ("b" * 240),
+            "Third turn checking schema indexes and locks " + ("c" * 240),
+            "Fourth turn reviewing deployment steps " + ("d" * 240),
+        ]
+        script = "\n".join(turns + ["/compress database migration", "Fifth turn after compress"]) + "\n"
+        out, err = process.communicate(script, timeout=30)
+        self.assertEqual(process.returncode, 0, err)
+        self.assertIn("archived ", out)
+        requests = self.requests()
+        summaries = [r for r in requests if r["messages"][0]["content"].startswith("Summarize completed")]
+        self.assertEqual(len(summaries), 1, summaries)
+        self.assertIn('FOCUS TOPIC: "database migration"', summaries[0]["messages"][0]["content"])
+        # The fifth turn sees the persisted summary instead of the archived middle.
+        last_messages = json.dumps(requests[-1]["messages"])
+        self.assertIn("[CONTEXT SUMMARY]:", last_messages)
+        self.assertNotIn("Second turn discussing database migration details", last_messages)
+        with sqlite3.connect(self.profile / "state.db") as db:
+            self.assertEqual(
+                db.execute("SELECT count(*) FROM messages WHERE active = 1 AND _compressed_summary = 1").fetchone(),
+                (1,),
+            )
+            self.assertGreater(
+                db.execute("SELECT count(*) FROM messages WHERE active = 0 AND compacted = 1").fetchone()[0],
+                0,
+            )
+
+        # `/compact` alias also works on a resumed session.
+        session = self.sessions()[0][0]
+        more = [
+            "Sixth turn with extra details " + ("e" * 240),
+            "Seventh turn with extra details " + ("f" * 240),
+            "Eighth turn with extra details " + ("g" * 240),
+        ]
+        second, _ = self.start("--resume", session, tty=False)
+        out2, err2 = second.communicate("\n".join(more + ["/compact release checklist"]) + "\n", timeout=30)
+        self.assertEqual(second.returncode, 0, err2)
+        self.assertIn("archived ", out2)
+        summaries2 = [r for r in self.requests() if r["messages"][0]["content"].startswith("Summarize completed")]
+        self.assertEqual(len(summaries2), 2)
+        self.assertIn('FOCUS TOPIC: "release checklist"', summaries2[-1]["messages"][0]["content"])
+
+
 if __name__ == "__main__":
     unittest.main()

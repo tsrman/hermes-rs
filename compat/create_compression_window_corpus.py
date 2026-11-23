@@ -394,14 +394,156 @@ def main():
                     estimate=_estimate_msg_budget_tokens))
                 if not case["blank_echoes"]:  # the reference would renumber rows; leave such cases out
                     cases.append(case)
-    output.write_text(json.dumps({"markers": MARKERS, "cases": cases, "values": values, "fallback_window": DEFAULT_FALLBACK_CONTEXT},
-                                 ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+    output.write_text(json.dumps({
+        "markers": MARKERS,
+        "cases": cases,
+        "values": values,
+        "fallback_window": DEFAULT_FALLBACK_CONTEXT,
+        "prune_cases": record_prune_cases(compressor_for),
+        "placement_cases": record_placement_cases(ContextCompressor),
+    }, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
     kinds = {}
     for case in cases:
-        key = "noop" if case["noop"] else "window"
+        key = "noop" if case["full_noop"] else "window"
         kinds[key] = kinds.get(key, 0) + 1
     print({"cases": len(cases), "values": len(values), "outcomes": kinds,
            "pruned_differs": sum(1 for c in cases if not c["prune_clean"] and (c["start"], c["end"]) != (c["full_start"], c["full_end"]))})
+
+
+def record_prune_cases(compressor_for):
+    """Record `_prune_old_tool_results` outputs across tool types, dedup, spared pending rounds, and pass-4 pressure."""
+    long_text = "alpha line\n" * 30  # > 200 chars
+
+    def make_pair(cid, name, args, content):
+        return [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": cid, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+            ]},
+            {"role": "tool", "tool_call_id": cid, "content": content},
+        ]
+
+    # 1. Per-tool stub shapes + dedup + protected vs unprotected skill_view + refused calls.
+    msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "start"}]
+    msgs += make_pair("c1", "read_file", {"path": "src/a.rs", "offset": 10}, long_text)
+    msgs += make_pair("c2", "read_file", {"path": "src/a.rs", "offset": 10}, long_text)  # duplicate of c1 -> c1 deduped
+    msgs += make_pair("c3", "write_file", {"path": "out.txt", "content": "a\nb\nc"}, json.dumps({"bytes_written": 300, "padding": "w" * 220}))
+    msgs += make_pair("c4", "write_file", {"path": "bad.txt", "content": "a"}, json.dumps({"error": "permission denied", "padding": "e" * 220}))
+    msgs += make_pair("c5", "terminal", {"command": "cargo test --workspace"}, json.dumps({"exit_code": 0, "output": "ok\n" * 100}))
+    msgs += make_pair("c6", "terminal", {"command": "false && echo nope"}, json.dumps({"exit_code": 1, "output": "line1\nFAILED: assertion error\n" + " " * 200}))
+    msgs += make_pair("c7", "search_files", {"pattern": "foo", "path": "crates", "target": "content"}, json.dumps({"total_count": 7, "matches": "s" * 220}))
+    msgs += make_pair("c8", "patch", {"path": "lib.rs", "mode": "replace"}, json.dumps({"ok": True, "diff": "p" * 220}))
+    msgs += make_pair("c9", "web_search", {"query": "rust async"}, json.dumps({"results": "ws" * 120}))
+    msgs += make_pair("c10", "web_extract", {"urls": ["https://a.example", "https://b.example"]}, json.dumps({"text": "we" * 120}))
+    msgs += make_pair("c11", "delegate_task", {"goal": "audit module"}, json.dumps({"summary": "d1" * 120}))
+    msgs += make_pair("c12", "delegate_task", {"tasks": [{"goal": "first"}, {"goal": "second"}]}, json.dumps({"results": "d2" * 120}))
+    msgs += make_pair("c13", "execute_code", {"code": "print('hello')\n" * 6}, "out\n" * 80)
+    msgs += make_pair("c14", "skill_view", {"name": "old-skill"}, "skill body " + "sk" * 120)
+    msgs += make_pair("c15", "skills_list", {"category": "dev"}, json.dumps({"count": 4, "skills": "sl" * 120}))
+    msgs += make_pair("c16", "skill_manage", {"operations": [{"action": "create", "name": "s1"}, {"action": "patch", "name": "s2"}]}, json.dumps({"ok": True, "pad": "sm" * 120}))
+    msgs += make_pair("c17", "memory", {"action": "add", "target": "user"}, json.dumps({"ok": True, "pad": "mm" * 120}))
+    msgs += make_pair("c18", "todo_list", {"todos": []}, json.dumps({"todos": "td" * 120}))
+    msgs += make_pair("c19", "clarify", {"question": "Pick"}, json.dumps({"responses": [{"status": "answered", "user_response": "Option A"}], "pad": "cl" * 120}))
+    msgs += make_pair("c20", "process_manage", {"action": "poll", "session_id": "p1"}, json.dumps({"exit_code": 2, "output": "pm" * 120}))
+    msgs += make_pair("c21", "cronjob_manage", {"action": "run"}, json.dumps({"success": True, "job": {"execution_error": "boom"}, "pad": "cj" * 120}))
+    msgs += make_pair("c22", "browser_navigate", {"url": "https://example.test"}, "html " + "bn" * 120)
+    msgs += make_pair("c23", "custom_mcp", {"a": "val1", "b": 42}, json.dumps({"result": "cm" * 120}))
+    msgs += make_pair("c24", "terminal", {"command": "rm -rf /"}, json.dumps({"status": "blocked", "error": "BLOCKED: NOT consented " + "bl" * 120}))
+    msgs += make_pair("c25", "skill_view", {"name": "recent-skill"}, "recent skill body " + "z" * 220)
+    # Tail turns (recent-skill is within last 10 messages so it stays protected).
+    for k in range(3):
+        msgs.append({"role": "user", "content": f"tail user {k}"})
+        msgs.append({"role": "assistant", "content": f"tail reply {k}"})
+
+    # 2. Spared pending tool round vs oversized pending round + pass-4 pressure demotion.
+    pressure_msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "u0"}]
+    for k in range(5):
+        pressure_msgs += make_pair(f"p{k}", "read_file", {"path": f"p{k}.txt"}, f"body-{k} " + "q" * 1600)
+    pressure_msgs.append({"role": "assistant", "content": "done"})
+    pressure_msgs.append({"role": "user", "content": "next"})
+
+    pending_spared = [{"role": "system", "content": "sys"}, {"role": "user", "content": "u0"}]
+    pending_spared += make_pair("s0", "read_file", {"path": "old.txt"}, "old " + "a" * 800)
+    pending_spared += make_pair("s1", "read_file", {"path": "pending.txt"}, "pending " + "b" * 800)
+
+    pending_huge = [{"role": "system", "content": "sys"}, {"role": "user", "content": "u0"}]
+    pending_huge += make_pair("h0", "read_file", {"path": "old.txt"}, "old " + "a" * 400)
+    pending_huge += make_pair("h1", "read_file", {"path": "huge.txt"}, "huge " + "c" * 12000)
+
+    out = []
+    for label, section, window, case_msgs in [
+        ("all_tools_and_dedup", "{threshold_tokens: 200, tail_mode: legacy, protect_last_n: 6}", 128000, msgs),
+        ("pressure_tail_demote", "{threshold_tokens: 400, tail_mode: legacy, target_ratio: 0.5, protect_last_n: 8}", 8000, pressure_msgs),
+        ("pending_round_spared", "{threshold_tokens: 400, tail_mode: legacy, target_ratio: 0.25, protect_last_n: 2}", 8000, pending_spared),
+        ("pending_round_oversized", "{threshold_tokens: 400, tail_mode: legacy, target_ratio: 0.25, protect_last_n: 2}", 4000, pending_huge),
+    ]:
+        comp = compressor_for(section, window)
+        pruned, count = comp._prune_old_tool_results(
+            case_msgs, protect_tail_count=comp.protect_last_n, protect_tail_tokens=comp.tail_token_budget,
+        )
+        out.append({
+            "label": label,
+            "compression": section,
+            "window": window,
+            "messages": case_msgs,
+            "pruned_count": count,
+            "contents": [m.get("content") for m in pruned],
+        })
+    return out
+
+
+def record_placement_cases(cls):
+    """Record `_summary_placement` and `_merge_summary_into_tail_row` across head/tail role shapes."""
+    u = lambda text="hi": {"role": "user", "content": text}
+    a = lambda text="ok": {"role": "assistant", "content": text}
+    s = lambda text="sys": {"role": "system", "content": text}
+    at = lambda: {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]}
+    t = lambda: {"role": "tool", "tool_call_id": "c1", "content": "res"}
+
+    cases = []
+    grids = [
+        ("empty_head_user_tail", [], [u()], 0),
+        ("empty_head_asst_tail", [], [a(), u()], 0),
+        ("sys_head_user_tail", [s()], [u()], 1),
+        ("sys_head_asst_tail", [s()], [a(), u()], 1),
+        ("sys_head_exempt_then_user", [s()], [at(), t(), u()], 1),
+        ("sys_head_exempt_only", [s()], [at(), t()], 1),
+        ("user_head_user_tail", [s(), u()], [u()], 2),
+        ("user_head_asst_tail", [s(), u()], [a(), u()], 2),
+        ("user_head_exempt_then_asst", [s(), u()], [at(), t(), a(), u()], 2),
+        ("user_head_exempt_only", [s(), u()], [at(), t()], 2),
+        ("asst_head_user_tail", [s(), u(), a()], [u()], 3),
+        ("asst_head_asst_tail", [s(), u(), a()], [a(), u()], 3),
+        ("asst_head_exempt_then_asst", [s(), u(), a()], [at(), t(), a(), u()], 3),
+        ("asst_head_exempt_only", [s(), u(), a()], [at(), t()], 3),
+        ("exempt_head_user_tail", [at(), t()], [u()], 2),
+        ("exempt_head_asst_tail", [at(), t()], [a()], 2),
+        ("no_user_anywhere", [s(), a()], [a()], 2),
+        ("blank_user_only", [s(), u("   ")], [a()], 2),
+        ("user_head_empty_tail", [s(), u()], [], 2),
+        ("asst_head_empty_tail", [s(), u(), a()], [], 3),
+    ]
+    comp = cls.__new__(cls)
+    comp._summary_has_user_turn = True
+    for label, head, tail, start in grids:
+        role, merge, force_lead, first_vis = cls._summary_placement(head, tail, start)
+        merged_preview = None
+        if merge and tail:
+            target_idx = first_vis if force_lead and first_vis is not None else 0
+            copy = dict(tail[target_idx])
+            comp._merge_summary_into_tail_row(copy, "SUM", role, force_lead)
+            merged_preview = {"target_idx": target_idx, "role": copy["role"], "content": copy["content"]}
+        cases.append({
+            "label": label,
+            "head": head,
+            "tail": tail,
+            "compress_start": start,
+            "summary_role": role,
+            "merge_into_tail": merge,
+            "force_user_leading": force_lead,
+            "first_tail_visible_idx": first_vis,
+            "merged_preview": merged_preview,
+        })
+    return cases
 
 
 def record(case, section, window, compressor_for, messages, after_pass, _helpers):
@@ -421,15 +563,23 @@ def record(case, section, window, compressor_for, messages, after_pass, _helpers
     case["blank_echoes"] = len(unpruned) != len(messages)
     case["noop"] = True
     case["tail_start"] = case["window_rows"] = None
+    case["full_noop"] = True
+    case["full_tail_start"] = case["full_window_rows"] = None
     if case["gate"] or case["blank_echoes"]:
-        case["noop"] = True
         return
-    if start >= end:
-        return
-    scan = comp._scan_window_handoffs(unpruned, start, end, unpruned[start:end])
-    case["tail_start"] = scan.tail_start
-    case["window_rows"] = len(scan.turns_to_summarize)
-    case["noop"] = not scan.turns_to_summarize
+    if start < end:
+        scan = comp._scan_window_handoffs(unpruned, start, end, unpruned[start:end])
+        case["tail_start"] = scan.tail_start
+        case["window_rows"] = len(scan.turns_to_summarize)
+        case["noop"] = not scan.turns_to_summarize
+    if full_start < full_end:
+        full_comp = compressor_for(section, window)
+        if after_pass:
+            full_comp.compression_count = 1
+        full_scan = full_comp._scan_window_handoffs(plan, full_start, full_end, plan[full_start:full_end])
+        case["full_tail_start"] = full_scan.tail_start
+        case["full_window_rows"] = len(full_scan.turns_to_summarize)
+        case["full_noop"] = not full_scan.turns_to_summarize
 
 
 if __name__ == "__main__":

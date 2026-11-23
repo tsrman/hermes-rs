@@ -16,8 +16,8 @@ use hermes_runtime::providers::{
 use hermes_runtime::storage::SessionWriter;
 use hermes_runtime::tool_policy::ToolPolicy;
 use hermes_runtime::turn::{
-    run_turn, ApprovalDecision, ApprovalRequest, CompactionOutcome, CompactionTrigger, ModelRoute,
-    TurnError, TurnEvent, TurnOptions, TurnOutcome,
+    run_turn, ApprovalDecision, ApprovalRequest, CompactionGuard, CompactionOutcome,
+    CompactionTrigger, ModelRoute, TurnError, TurnEvent, TurnOptions, TurnOutcome,
 };
 use hermes_runtime::web_tools::WebSettings;
 use hermes_runtime::BrowserSettings;
@@ -562,6 +562,20 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
 pub async fn execute<A, F>(
     home: Option<&Path>,
     request: ChatRequest,
+    emit: impl FnMut(Event) -> bool,
+    approve: A,
+) -> Result<u8, String>
+where
+    A: FnMut(ApprovalRequest) -> F + Send,
+    F: Future<Output = ApprovalDecision> + Send + 'static,
+{
+    execute_with_guard(home, request, None, emit, approve).await
+}
+
+pub async fn execute_with_guard<A, F>(
+    home: Option<&Path>,
+    request: ChatRequest,
+    guard: Option<&std::sync::Mutex<CompactionGuard>>,
     mut emit: impl FnMut(Event) -> bool,
     approve: A,
 ) -> Result<u8, String>
@@ -659,6 +673,7 @@ where
         compression: Some(&request.compression),
         keep_phone_numbers: request.keep_phone_numbers,
         summarizer: summarizer.as_ref(),
+        compaction_guard: guard,
         terminal_env: Some(&request.terminal_env),
         clarify_timeout_secs: request.clarify_timeout_secs,
     };
@@ -683,6 +698,7 @@ where
                     CompactionTrigger::Estimate {
                         query: &request.query,
                     },
+                    guard,
                 )
                 .await;
             let mut retried = false;
@@ -738,6 +754,7 @@ where
                         CompactionTrigger::Overflow {
                             query: &request.query,
                         },
+                        guard,
                     )
                     .await;
                 if !matches!(compaction, CompactionOutcome::Applied) {
@@ -953,5 +970,88 @@ impl ChatRequest {
     #[cfg(unix)]
     pub fn events_json(&self) -> bool {
         self.events_json
+    }
+}
+
+/// Outcome of an explicit `/compress [focus]` command in the REPL.
+pub enum ManualCompress {
+    Applied { archived: usize },
+    Unchanged,
+    Skipped,
+}
+
+/// Compress a saved session immediately in place (REPL `/compress [focus]`), clearing any active
+/// cooldown/anti-thrash state in `guard`.
+pub async fn compress_session(
+    home: &Path,
+    request: &ChatRequest,
+    session_id: &str,
+    focus: Option<&str>,
+    guard: &std::sync::Mutex<CompactionGuard>,
+) -> Result<ManualCompress, String> {
+    let root = Path::new(&request.root);
+    let mut writer = block_in_place(|| SessionWriter::prepare_resume(home, session_id))
+        .map_err(|error| error.to_string())?;
+    let model = request
+        .model_override
+        .clone()
+        .or_else(|| writer.saved_model().map(str::to_owned))
+        .or_else(|| request.primary.model.clone())
+        .filter(|value| !value.is_empty())
+        .ok_or("model name is required")?;
+    let mut history = writer.take_history();
+    let primary = request.primary.open(model.clone(), request.attempts)?;
+    let summarizer = match &request.summary {
+        Some(route) => Some(route.open(route.model.clone().unwrap_or(model), request.attempts)?),
+        None => None,
+    };
+    let options = TurnOptions {
+        single_query: false,
+        journal: None,
+        delegation: None,
+        system_prompt_override: None,
+        child: None,
+        prefill: None,
+        state_scope: request.state_scope.as_deref(),
+        mcp: None,
+        web: Some(&request.web),
+        browser: Some(&request.browser),
+        memory: Some(&request.memory),
+        tools: &request.tools,
+        root,
+        profile: Some(home),
+        session_id: writer.session_id(),
+        max_turns: request.max_turns,
+        approval_timeout_secs: request.approval_timeout_secs,
+        terminal_approval_timeout_secs: request.terminal_approval_timeout_secs,
+        terminal_local: request.terminal_local,
+        compression: Some(&request.compression),
+        keep_phone_numbers: request.keep_phone_numbers,
+        summarizer: summarizer.as_ref(),
+        compaction_guard: Some(guard),
+        terminal_env: Some(&request.terminal_env),
+        clarify_timeout_secs: request.clarify_timeout_secs,
+    };
+    block_in_place(|| history.capture_prompt(&options, &request.prompt, &primary));
+    match history
+        .compact(
+            Some(home),
+            root,
+            &request.prompt,
+            &request.compression,
+            &primary,
+            summarizer.as_ref(),
+            CompactionTrigger::Manual { focus },
+            Some(guard),
+        )
+        .await
+    {
+        CompactionOutcome::Applied => {
+            let archived = block_in_place(|| writer.save_compaction(&history))
+                .map_err(|error| error.to_string())?;
+            Ok(ManualCompress::Applied { archived })
+        }
+        CompactionOutcome::Unchanged => Ok(ManualCompress::Unchanged),
+        CompactionOutcome::Skipped => Ok(ManualCompress::Skipped),
     }
 }

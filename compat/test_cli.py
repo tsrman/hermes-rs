@@ -47,6 +47,9 @@ class CliTest(unittest.TestCase):
             "test_max_attempts_defaults_to_three": "pressure_long",
             "test_max_attempts_below_one_means_three": "pressure_long",
             "test_max_attempts_is_capped_at_ten": "pressure_long",
+            "test_mid_turn_summary_failure_arms_cooldown_and_keeps_history": "pressure_summary_fail",
+            "test_ineffective_summary_growth_trips_two_strike_breaker": "pressure_summary_grow",
+            "test_incompressible_prefix_over_threshold_trips_two_strike_breaker": "pressure_long",
             "test_the_stored_reply_is_scrubbed_before_the_next_request": "reply_secrets",
             "test_the_phone_option_keeps_numbers_in_the_stored_reply_only": "reply_secrets",
             "test_the_stored_reply_is_left_alone_when_secret_redaction_is_off": "reply_secrets",
@@ -337,8 +340,10 @@ class CliTest(unittest.TestCase):
                          [{"role": "assistant", "content": "Ответ модели"}, {"role": "user", "content": "Second task"}])
 
     def test_a_compaction_that_starts_at_an_assistant_row_is_stored_and_replayed_in_order(self):
-        # With `protect_first_n: 1` the head ends after the first user row, so the summarized span starts at an
-        # assistant reply (the old selector always started at a user row).
+        # With `protect_first_n: 1` the head ends on a user row and the tail's first template-visible
+        # row is an assistant reply (`Retainedword`), so neither standalone role alternates cleanly;
+        # matching `_summary_placement` + `_merge_summary_into_tail_row`, the summary folds into
+        # `tail[0]` (the exempt `assistant(tool_calls)` row) and replays cleanly across `--resume`.
         session, database, original, _ = self.seed_compression_history()
         config = "compression:\n  threshold_tokens: '450'\n  protect_first_n: 1\n  protect_last_n: 2\n"
         result, recorded = self.chat_with_profile(extra_config=config, args=("--resume", session), query="New task")
@@ -346,17 +351,20 @@ class CliTest(unittest.TestCase):
         summary, answer = recorded[len(original):]
         messages = answer["messages"]
         self.assertEqual([m["role"] for m in messages],
-                         ["system", "user", "user", "assistant", "tool", "assistant", "user"])
+                         ["system", "user", "assistant", "tool", "assistant", "user"])
         self.assertEqual(messages[1]["content"], "Keep this first exchange")
         self.assertIn("[CONTEXT SUMMARY]:", messages[2]["content"])
+        self.assertIn("--- END OF CONTEXT SUMMARY", messages[2]["content"])
+        self.assertNotIn("_compressed_summary", messages[2])
         self.assertIn("Old response", json.dumps(summary["messages"]))
         with sqlite3.connect(database) as db:
-            active = db.execute("SELECT role, content FROM messages WHERE session_id = ? AND active = 1 "
+            active = db.execute("SELECT role, content, _compressed_summary FROM messages WHERE session_id = ? AND active = 1 "
                                 "ORDER BY display_order", (session,)).fetchall()
-        self.assertEqual([role for role, _ in active],
-                         ["user", "user", "assistant", "tool", "assistant", "user", "assistant"])
+        self.assertEqual([role for role, _, _ in active],
+                         ["user", "assistant", "tool", "assistant", "user", "assistant"])
         self.assertEqual(active[0][1], "Keep this first exchange")
-        self.assertTrue(active[1][1].startswith("[CONTEXT SUMMARY]:"))
+        self.assertEqual(active[1][2], 1)
+        self.assertIn("[CONTEXT SUMMARY]:", active[1][1])
         self.assertEqual(active[-2][1], "New task")
         resumed, all_requests = self.chat_with_profile(args=("--resume", session), query="Second task")
         self.assertEqual(resumed.returncode, 0, resumed.stderr)
@@ -406,9 +414,10 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("tools", summary)
         self.assertNotIn("[CONTEXT SUMMARY]", json.dumps(rejected["messages"]))
         self.assertIn("[CONTEXT SUMMARY]", json.dumps(answer["messages"]))
-        # The first exchange became the summary; the query and the last two exchanges are kept.
+        # The first exchange became the summary; head ends on `user` and the tail is tool-call rows
+        # (template-exempt), so `_summary_placement` emits the summary with role `assistant`.
         roles = [m["role"] for m in answer["messages"]]
-        self.assertEqual(roles, ["system", "user", "user", "assistant", "tool", "assistant", "tool"])
+        self.assertEqual(roles, ["system", "user", "assistant", "assistant", "tool", "assistant", "tool"])
         # What is saved is the whole turn: all three tool results and no summary.
         session = result.stderr.splitlines()[-1].removeprefix("Session: ")
         with sqlite3.connect(self.workdir / "hermes" / "state.db") as db:
@@ -476,8 +485,17 @@ class CliTest(unittest.TestCase):
 
     def summaries_with(self, attempts):
         """Summary requests a long tool run makes with `compression.max_attempts` set to `attempts`."""
-        config = "compression:\n  threshold_tokens: '50'\n" + (
-            f"  max_attempts: {attempts}\n" if attempts is not None else "")
+        # Multi-line fixture (~29 KB, ~7.4k tokens per read, avoiding read_file's 2000-char line
+        # cap) with a legacy 10% tail budget (~1.6k tokens) so every pass keeps 1 exchange (~14.4k
+        # total < 16k threshold, clearing the threshold without tripping the 2-strike anti-thrash
+        # breaker) and `max_attempts` binds.
+        (self.workdir / "fixture.txt").write_text(
+            "".join(f"line {n:04d} " + ("x" * 180) + "\n" for n in range(150)), encoding="utf-8")
+        config = (
+            "compression:\n  threshold_tokens: '16000'\n  tail_mode: legacy\n"
+            "  target_ratio: 0.1\n  protect_first_n: 1\n"
+            + (f"  max_attempts: {attempts}\n" if attempts is not None else "")
+        )
         result, recorded = self.chat_with_profile(extra_config=config)
         self.assertEqual(result.returncode, 0, result.stderr)
         return sum(r["messages"][0]["content"].startswith("Summarize completed") for r in recorded)
@@ -507,6 +525,35 @@ class CliTest(unittest.TestCase):
 
     def test_max_attempts_is_capped_at_ten(self):
         self.assertGreaterEqual(self.summaries_with(50), 4)
+
+    def test_mid_turn_summary_failure_arms_cooldown_and_keeps_history(self):
+        # Summarizer returns finish_reason=length; the turn preserves history untouched and arms
+        # cooldown so later steps of the same turn do not re-hammer the failing summarizer.
+        config = "compression:\n  threshold_tokens: '50'\n  protect_first_n: 1\n  max_attempts: 10\n"
+        result, recorded = self.chat_with_profile(extra_config=config)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summaries = [r for r in recorded if r["messages"][0]["content"].startswith("Summarize completed")]
+        self.assertEqual(len(summaries), 1, f"expected cooldown after first failure, got {len(summaries)} summaries")
+        self.assertNotIn("[CONTEXT SUMMARY]", json.dumps(recorded[-1]["messages"]))
+
+    def test_ineffective_summary_growth_trips_two_strike_breaker(self):
+        # Summarizer returns a 20KB summary larger than what it replaces: rejected pre-commit,
+        # preserving history and tripping the 2-strike anti-thrash breaker after 2 attempts.
+        config = "compression:\n  threshold_tokens: '50'\n  protect_first_n: 1\n  max_attempts: 10\n"
+        result, recorded = self.chat_with_profile(extra_config=config)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summaries = [r for r in recorded if r["messages"][0]["content"].startswith("Summarize completed")]
+        self.assertEqual(len(summaries), 2, f"expected 2-strike breaker, got {len(summaries)} summaries")
+        self.assertNotIn("[CONTEXT SUMMARY]", json.dumps(recorded[-1]["messages"]))
+
+    def test_incompressible_prefix_over_threshold_trips_two_strike_breaker(self):
+        # When system prompt + tool schemas alone exceed threshold_tokens (50), every compaction
+        # leaves the prompt over threshold; the 2-strike anti-thrash breaker stops thrashing.
+        config = "compression:\n  threshold_tokens: '50'\n  protect_first_n: 1\n  max_attempts: 10\n"
+        result, recorded = self.chat_with_profile(extra_config=config)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summaries = [r for r in recorded if r["messages"][0]["content"].startswith("Summarize completed")]
+        self.assertEqual(len(summaries), 2, f"expected 2-strike breaker, got {len(summaries)} summaries")
 
     SCRUBBED = "Calling +155****4567 with key sk-abc...7890 now."
     RAW = "Calling +15551234567 with key sk-abcdefghijklmnop1234567890 now."

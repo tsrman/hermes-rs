@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use super::StorageError;
+use crate::compaction::{merge_summary_content, PersistedSummaryPlacement};
 
 const CHAIN_LIMIT: usize = 1000;
 
@@ -12,6 +13,7 @@ pub(super) fn archive_middle(
     session: &str,
     rows: &[i64],
     summary: &str,
+    placement: &PersistedSummaryPlacement,
     system_prompt: &str,
 ) -> Result<(i64, i64), StorageError> {
     let first = rows.first().ok_or(StorageError::InvalidTurn)?;
@@ -29,11 +31,13 @@ pub(super) fn archive_middle(
         let rows = statement.query_map(params![session, last], |row| row.get(0))?;
         rows.collect::<rusqlite::Result<_>>()?
     };
-    transaction.execute(
-        "INSERT INTO messages(session_id, role, content, timestamp, _compressed_summary)
-         SELECT ?1, 'user', ?2, timestamp, 1 FROM messages WHERE id = ?3",
-        params![session, summary, first],
-    )?;
+    if let PersistedSummaryPlacement::Standalone { role } = placement {
+        transaction.execute(
+            "INSERT INTO messages(session_id, role, content, timestamp, _compressed_summary)
+             SELECT ?1, ?4, ?2, timestamp, 1 FROM messages WHERE id = ?3",
+            params![session, summary, first, role],
+        )?;
+    }
     if !tail.is_empty() {
         // The summary gets an earlier row ID than the carried tail. Clone the
         // tail's original columns to keep its display metadata and tool identities.
@@ -50,8 +54,45 @@ pub(super) fn archive_middle(
             "INSERT INTO messages ({columns}, active, compacted)
              SELECT {columns}, 1, 0 FROM messages WHERE id = ?1"
         ))?;
-        for row in tail {
-            clone.execute([row])?;
+        let merged_columns: String = transaction.query_row(
+            r#"SELECT group_concat(printf('"%w"', name), ',') FROM (
+                   SELECT name FROM pragma_table_xinfo('messages')
+                   WHERE hidden = 0 AND name NOT IN (
+                       'id', 'active', 'compacted', 'display_order',
+                       'display_identity', 'content', 'api_content', '_compressed_summary'
+                   ) ORDER BY cid
+               )"#,
+            [],
+            |row| row.get(0),
+        )?;
+        let mut clone_merged = transaction.prepare(&format!(
+            "INSERT INTO messages ({merged_columns}, content, api_content, _compressed_summary, active, compacted)
+             SELECT {merged_columns}, ?2, NULL, 1, 1, 0 FROM messages WHERE id = ?1"
+        ))?;
+        for (index, row) in tail.into_iter().enumerate() {
+            match placement {
+                PersistedSummaryPlacement::MergedIntoTail {
+                    tail_index,
+                    summary_role,
+                    force_user_leading,
+                } if index == *tail_index => {
+                    let old: Option<String> = transaction.query_row(
+                        "SELECT COALESCE(api_content, content) FROM messages WHERE id = ?1",
+                        [row],
+                        |r| r.get(0),
+                    )?;
+                    let merged = merge_summary_content(
+                        old.as_deref(),
+                        summary,
+                        summary_role,
+                        *force_user_leading,
+                    );
+                    clone_merged.execute(params![row, merged])?;
+                }
+                _ => {
+                    clone.execute([row])?;
+                }
+            }
         }
     }
     transaction.execute(

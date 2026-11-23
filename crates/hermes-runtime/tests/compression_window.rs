@@ -1,13 +1,15 @@
 //! Which rows a compression keeps at the head and the tail and which it summarizes, replayed against
-//! the Python reference. `compat/create_compression_window_corpus.py` plans the window with the
-//! reference's own compressor for hundreds of synthetic histories and settings and writes
-//! `fixtures/compression_window_cases.json`; every case here must come out the same.
-//!
-//! The reference prunes old tool results before it plans; the port plans on the history as it is.
-//! The corpus records both (`start`/`end` unpruned, `full_*` pruned) and the replay compares against
-//! the unpruned plan, so a case whose prune changed the answer is counted, not failed.
+//! the Python reference. `compat/create_compression_window_corpus.py` runs the reference's own
+//! compressor (`_plan_compaction_window`, `_prune_old_tool_results`, `_scan_window_handoffs`, and
+//! `_summary_placement`) for hundreds of synthetic histories and writes
+//! `fixtures/compression_window_cases.json`; every case here must come out identical.
 
-use hermes_runtime::config::CompactionSettings;
+use std::time::{Duration, Instant};
+
+use hermes_runtime::config::{
+    merge_summary_into_tail_row, plan_summary_placement, CompactionBlockReason, CompactionGuard,
+    CompactionSettings,
+};
 use serde_json::{json, Value};
 
 fn fixture() -> Value {
@@ -94,15 +96,18 @@ fn settings(section: &str, window: Option<u64>) -> CompactionSettings {
     CompactionSettings::from_config(&config)
 }
 
-fn expected(case: &Value) -> Option<std::ops::Range<usize>> {
-    if case["noop"].as_bool().unwrap() {
+fn expected_full(case: &Value) -> Option<std::ops::Range<usize>> {
+    if case["full_noop"].as_bool().unwrap() {
         return None;
     }
-    Some(case["start"].as_u64().unwrap() as usize..case["tail_start"].as_u64().unwrap() as usize)
+    Some(
+        case["full_start"].as_u64().unwrap() as usize
+            ..case["full_tail_start"].as_u64().unwrap() as usize,
+    )
 }
 
 #[test]
-fn the_window_matches_the_reference_on_every_recorded_history() {
+fn the_window_matches_the_reference_on_every_recorded_history_including_pruned_cases() {
     let data = fixture();
     let markers = &data["markers"];
     let mut wrong = Vec::new();
@@ -128,13 +133,14 @@ fn the_window_matches_the_reference_on_every_recorded_history() {
             continue;
         }
         let after_pass = case["after_pass"].as_bool().unwrap();
-        let want = expected(case);
+        let want = expected_full(case);
         let got = ours.plan_window(&rows, after_pass);
         let got_rows = ours.plan_window_rows(&rows, after_pass);
-        if let (Some((_, count)), Some(want)) = (&got_rows, case["window_rows"].as_u64()) {
-            if *count as u64 != want {
+        if let (Some((_, count)), Some(want_rows)) = (&got_rows, case["full_window_rows"].as_u64())
+        {
+            if *count as u64 != want_rows {
                 wrong.push(format!(
-                    "{label}: summarizer reads {count} rows, reference {want}"
+                    "{label}: summarizer reads {count} rows, reference {want_rows}"
                 ));
             }
         }
@@ -172,9 +178,175 @@ fn the_window_matches_the_reference_on_every_recorded_history() {
         checked >= 400 && preflight >= 80,
         "{checked} cases, {preflight} preflight"
     );
-    // Pinned: the cases whose old tool results the reference prunes before planning. The port plans
-    // on the history as it is, so these are the only ones where the reference's real answer differs.
-    assert!(pruned_differs > 0, "the corpus lost its pruned cases");
+    assert!(
+        pruned_differs >= 30,
+        "expected >= 30 pruned-window cases, got {pruned_differs}"
+    );
+}
+
+#[test]
+fn prune_old_tool_results_matches_the_reference_corpus() {
+    let data = fixture();
+    let cases = data["prune_cases"].as_array().unwrap();
+    assert!(cases.len() >= 4);
+    for case in cases {
+        let label = case["label"].as_str().unwrap();
+        let ours = settings(
+            case["compression"].as_str().unwrap(),
+            case["window"].as_u64(),
+        );
+        let rows = case["messages"].as_array().unwrap();
+        let (pruned, count) = ours.prune_tool_results(rows).unwrap();
+        let want_count = case["pruned_count"].as_u64().unwrap() as usize;
+        assert_eq!(count, want_count, "{label}: pruned_count");
+        let want_contents = case["contents"].as_array().unwrap();
+        assert_eq!(pruned.len(), want_contents.len(), "{label}: len");
+        for (idx, (row, want)) in pruned.iter().zip(want_contents.iter()).enumerate() {
+            assert_eq!(&row["content"], want, "{label}[{idx}]");
+        }
+    }
+}
+
+#[test]
+fn summary_placement_matches_the_reference_corpus() {
+    let data = fixture();
+    let cases = data["placement_cases"].as_array().unwrap();
+    assert!(cases.len() >= 20);
+    for case in cases {
+        let label = case["label"].as_str().unwrap();
+        let head = case["head"].as_array().unwrap();
+        let tail = case["tail"].as_array().unwrap();
+        let start = case["compress_start"].as_u64().unwrap() as usize;
+        let got = plan_summary_placement(head, tail, start);
+        assert_eq!(
+            got.summary_role,
+            case["summary_role"].as_str().unwrap(),
+            "{label}: summary_role"
+        );
+        assert_eq!(
+            got.merge_into_tail,
+            case["merge_into_tail"].as_bool().unwrap(),
+            "{label}: merge_into_tail"
+        );
+        assert_eq!(
+            got.force_user_leading,
+            case["force_user_leading"].as_bool().unwrap(),
+            "{label}: force_user_leading"
+        );
+        assert_eq!(
+            got.first_tail_visible_idx,
+            case["first_tail_visible_idx"].as_u64().map(|v| v as usize),
+            "{label}: first_tail_visible_idx"
+        );
+        if let Some(preview) = case["merged_preview"].as_object() {
+            let target_idx = got.merge_target_idx();
+            assert_eq!(
+                target_idx,
+                preview["target_idx"].as_u64().unwrap() as usize,
+                "{label}: target_idx"
+            );
+            let mut copy = tail[target_idx].clone();
+            merge_summary_into_tail_row(&mut copy, "SUM", &got);
+            assert_eq!(copy["role"], preview["role"], "{label}: merged role");
+            assert_eq!(
+                copy["content"], preview["content"],
+                "{label}: merged content"
+            );
+        }
+    }
+}
+
+#[test]
+fn compaction_guard_enforces_cooldown_ladder_ineffective_breaker_and_probation() {
+    let mut guard = CompactionGuard::new();
+    let t0 = Instant::now();
+
+    // Timeout / truncated ladder: 60s -> 300s -> 900s.
+    guard.record_summary_failure_at(t0, true);
+    assert_eq!(
+        guard.check_blocked_at(t0 + Duration::from_secs(59), false),
+        Some(CompactionBlockReason::Cooldown)
+    );
+    // Overflow bypasses cooldown without clearing it.
+    assert_eq!(
+        guard.check_blocked_at(t0 + Duration::from_secs(59), true),
+        None
+    );
+    assert_eq!(
+        guard.check_blocked_at(t0 + Duration::from_secs(60), false),
+        None
+    );
+
+    let t1 = t0 + Duration::from_secs(61);
+    guard.record_summary_failure_at(t1, true);
+    assert_eq!(
+        guard.check_blocked_at(t1 + Duration::from_secs(299), false),
+        Some(CompactionBlockReason::Cooldown)
+    );
+    assert_eq!(
+        guard.check_blocked_at(t1 + Duration::from_secs(300), false),
+        None
+    );
+
+    let t2 = t1 + Duration::from_secs(301);
+    guard.record_summary_failure_at(t2, true);
+    assert_eq!(
+        guard.check_blocked_at(t2 + Duration::from_secs(899), false),
+        Some(CompactionBlockReason::Cooldown)
+    );
+    assert_eq!(
+        guard.check_blocked_at(t2 + Duration::from_secs(900), false),
+        None
+    );
+
+    // Non-timeout failure arms 600s cooldown; manual reset clears it immediately.
+    let t3 = t2 + Duration::from_secs(901);
+    guard.record_summary_failure_at(t3, false);
+    assert_eq!(
+        guard.check_blocked_at(t3 + Duration::from_secs(599), false),
+        Some(CompactionBlockReason::Cooldown)
+    );
+    guard.reset_for_manual();
+    assert_eq!(
+        guard.check_blocked_at(t3 + Duration::from_secs(1), false),
+        None
+    );
+
+    // Anti-thrash breaker: 1 strike does not block; 2 strikes trip for 300s, then 1 probation probe.
+    guard.record_ineffective();
+    assert_eq!(guard.ineffective_count(), 1);
+    assert_eq!(guard.check_blocked_at(t3, false), None);
+
+    guard.record_ineffective();
+    assert_eq!(guard.ineffective_count(), 2);
+    assert_eq!(
+        guard.check_blocked_at(t3, false),
+        Some(CompactionBlockReason::Ineffective)
+    );
+    // Overflow does NOT bypass the ineffective breaker.
+    assert_eq!(
+        guard.check_blocked_at(t3 + Duration::from_secs(10), true),
+        Some(CompactionBlockReason::Ineffective)
+    );
+    // After 300s, one probation probe is allowed and strikes drop to 1.
+    assert_eq!(
+        guard.check_blocked_at(t3 + Duration::from_secs(300), false),
+        None
+    );
+    assert_eq!(guard.ineffective_count(), 1);
+    // If the probation probe is ineffective again, it re-trips immediately.
+    guard.record_ineffective();
+    assert_eq!(
+        guard.check_blocked_at(t3 + Duration::from_secs(301), false),
+        Some(CompactionBlockReason::Ineffective)
+    );
+    // A healthy compaction below threshold clears the breaker.
+    guard.record_success(false);
+    assert_eq!(guard.ineffective_count(), 0);
+    assert_eq!(
+        guard.check_blocked_at(t3 + Duration::from_secs(302), false),
+        None
+    );
 }
 
 #[test]

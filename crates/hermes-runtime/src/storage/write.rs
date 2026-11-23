@@ -63,6 +63,13 @@ impl<'a> SessionWriter<'a> {
         self.resume.as_ref().map_or(Ok(()), ResumeState::refresh)
     }
 
+    /// Persist a manual compaction (`/compress`) on a resumed session without appending a new turn.
+    pub fn save_compaction(&mut self, history: &TurnHistory) -> Result<usize, StorageError> {
+        let ended_at = timestamp().max(self.started_at);
+        let resume = self.resume.as_mut().ok_or(StorageError::InvalidTurn)?;
+        resume.commit_compaction(history, ended_at)
+    }
+
     pub fn save(&mut self, turn: &CompletedTurn, cwd: &Path) -> Result<String, StorageError> {
         let path = self.profile.join("state.db");
         let ended_at = timestamp().max(self.started_at);

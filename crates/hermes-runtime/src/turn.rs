@@ -2,11 +2,16 @@
 
 use std::future::Future;
 use std::path::Path;
+use std::sync::Mutex;
 
 use serde_json::{json, Value};
 
 use crate::browser_cdp::BrowserSettings;
-use crate::compaction::{messages_bytes, CompactedHistory, CompactionSettings};
+use crate::compaction::{
+    merge_summary_into_tail_row, messages_bytes, plan_summary_placement, CompactedHistory,
+    CompactionSettings, PersistedSummaryPlacement,
+};
+pub use crate::compaction::{CompactionBlockReason, CompactionGuard};
 use crate::file_tools::FileWorkspace;
 use crate::mcp::McpClients;
 use crate::memory_tool::{MemorySettings, MemoryTurn};
@@ -44,7 +49,7 @@ pub struct CompletedTurn {
     pub(crate) system_prompt: String,
     pub(crate) replayed_history: Vec<Value>,
     pub(crate) messages: Vec<Value>,
-    pub(crate) compaction: Option<CompactedHistory>,
+    pub(crate) compaction: Option<Box<CompactedHistory>>,
     pub(crate) input_tokens: u64,
     pub(crate) output_tokens: u64,
 }
@@ -89,7 +94,7 @@ pub struct TurnHistory {
     pub(crate) pinned: Option<String>,
     pub(crate) policy: ToolPolicy,
     pub(crate) env: ToolEnv,
-    pub(crate) compaction: Option<CompactedHistory>,
+    pub(crate) compaction: Option<Box<CompactedHistory>>,
     pub(crate) write_files: bool,
     pub(crate) terminal_enabled: bool,
     /// A `-q` run: the skills guidance is the shorter one.
@@ -103,12 +108,19 @@ pub enum CompactionTrigger<'a> {
     Estimate { query: &'a str },
     /// After the provider reported a context overflow.
     Overflow { query: &'a str },
+    /// Explicit `/compress [focus]` invoked by the user between turns.
+    Manual { focus: Option<&'a str> },
 }
 
 pub enum CompactionOutcome {
     Unchanged,
     Skipped,
     Applied,
+}
+
+fn is_timeout_provider_error(error: &ProviderError) -> bool {
+    matches!(error, ProviderError::Http(err) if err.is_timeout())
+        || matches!(error, ProviderError::HttpStatus(408 | 429 | 502 | 504))
 }
 
 impl TurnHistory {
@@ -181,28 +193,74 @@ impl TurnHistory {
         route: &ModelRoute,
         summarizer: Option<&ModelRoute>,
         trigger: CompactionTrigger<'_>,
+        guard: Option<&Mutex<CompactionGuard>>,
     ) -> CompactionOutcome {
-        if !settings.enabled() || self.messages.is_empty() {
+        if self.messages.is_empty() {
             return CompactionOutcome::Unchanged;
         }
+        let manual_settings;
+        let effective = match trigger {
+            CompactionTrigger::Manual { .. } => {
+                if let Some(guard) = guard {
+                    guard.lock().unwrap().reset_for_manual();
+                }
+                let Some(s) = settings.for_manual() else {
+                    return CompactionOutcome::Unchanged;
+                };
+                manual_settings = s;
+                &manual_settings
+            }
+            CompactionTrigger::Estimate { .. } => {
+                if !settings.enabled() {
+                    return CompactionOutcome::Unchanged;
+                }
+                if guard.is_some_and(|g| g.lock().unwrap().check_blocked(false).is_some()) {
+                    return CompactionOutcome::Unchanged;
+                }
+                settings
+            }
+            CompactionTrigger::Overflow { .. } => {
+                if !settings.enabled() {
+                    return CompactionOutcome::Unchanged;
+                }
+                if guard.is_some_and(|g| g.lock().unwrap().check_blocked(true).is_some()) {
+                    return CompactionOutcome::Unchanged;
+                }
+                settings
+            }
+        };
         let system = route.system_prompt(self.system_prompt.as_deref());
         let write_files = self.write_files;
         let terminal_enabled = self.terminal_enabled;
         let old_prefix = prefix_bytes(&system, &self.env);
-        let (query, input_bytes) = match trigger {
-            CompactionTrigger::Estimate { query } => (
-                query,
-                old_prefix + messages_bytes(&self.messages) + query.len(),
-            ),
-            // The provider already rejected the request, so the estimate no longer gates it.
-            CompactionTrigger::Overflow { query } => (query, usize::MAX),
-        };
-        let Some(range) = settings.select(&self.messages, query, input_bytes, false) else {
-            return CompactionOutcome::Unchanged;
+        let (query, focus, range) = match trigger {
+            CompactionTrigger::Estimate { query } => {
+                let input_bytes = old_prefix + messages_bytes(&self.messages) + query.len();
+                let Some(range) = effective.select(&self.messages, query, input_bytes, false)
+                else {
+                    return CompactionOutcome::Unchanged;
+                };
+                (Some(query), None, range)
+            }
+            CompactionTrigger::Overflow { query } => {
+                let Some(range) = effective.select(&self.messages, query, usize::MAX, false) else {
+                    return CompactionOutcome::Unchanged;
+                };
+                (Some(query), None, range)
+            }
+            CompactionTrigger::Manual { focus } => {
+                let Some(range) = effective.plan_manual(&self.messages) else {
+                    return CompactionOutcome::Unchanged;
+                };
+                (None, focus, range)
+            }
         };
         let middle = &self.messages[range.clone()];
         let summary_route = summarizer.unwrap_or(route);
-        let Some(request) = settings.request(&summary_route.model, middle) else {
+        let Some(request) = effective.request(&summary_route.model, middle, focus) else {
+            if let Some(guard) = guard {
+                guard.lock().unwrap().record_summary_failure(false);
+            }
             return CompactionOutcome::Skipped;
         };
         // A configured summary route carries its own body fields; the main route's are left out.
@@ -214,19 +272,60 @@ impl TurnHistory {
                 .complete_plain(&request, |_| {})
                 .await
         };
-        let Ok(result) = sent else {
-            return CompactionOutcome::Skipped;
+        let result = match sent {
+            Ok(result) => result,
+            Err(error) => {
+                if let Some(guard) = guard {
+                    guard
+                        .lock()
+                        .unwrap()
+                        .record_summary_failure(is_timeout_provider_error(&error));
+                }
+                return CompactionOutcome::Skipped;
+            }
         };
         if result.finish_reason.as_deref() != Some("stop") || !result.tool_calls.is_empty() {
+            let truncated = result.finish_reason.as_deref() == Some("length");
+            if let Some(guard) = guard {
+                guard.lock().unwrap().record_summary_failure(truncated);
+            }
             return CompactionOutcome::Skipped;
         }
-        let removed_bytes = messages_bytes(middle);
-        let Some(compaction) = CompactedHistory::new(range, &result.content) else {
+        let mut head = Vec::with_capacity(range.start + 1);
+        head.push(json!({"role": "system", "content": system}));
+        head.extend(self.messages[..range.start].iter().cloned());
+        let persisted_tail_len = self.messages.len() - range.end;
+        let mut tail = self.messages[range.end..].to_vec();
+        if let Some(q) = query {
+            tail.push(json!({"role": "user", "content": q}));
+        }
+        let placement_plan = plan_summary_placement(&head, &tail, head.len());
+        let placement = if placement_plan.merge_into_tail
+            && placement_plan.merge_target_idx() < persisted_tail_len
+        {
+            PersistedSummaryPlacement::MergedIntoTail {
+                tail_index: placement_plan.merge_target_idx(),
+                summary_role: placement_plan.summary_role,
+                force_user_leading: placement_plan.force_user_leading,
+            }
+        } else {
+            PersistedSummaryPlacement::Standalone {
+                role: placement_plan.summary_role,
+            }
+        };
+        let Some(compaction) = CompactedHistory::new(range, &result.content, placement) else {
+            if let Some(guard) = guard {
+                guard.lock().unwrap().record_summary_failure(false);
+            }
             return CompactionOutcome::Skipped;
         };
-        let summary_bytes =
-            messages_bytes(&[json!({"role": "user", "content": compaction.summary})]);
-        if summary_bytes >= removed_bytes {
+        let old_history_bytes = messages_bytes(&self.messages);
+        let replayed = compaction.replay(&self.messages);
+        let new_history_bytes = messages_bytes(&replayed);
+        if new_history_bytes >= old_history_bytes {
+            if let Some(guard) = guard {
+                guard.lock().unwrap().record_ineffective();
+            }
             return CompactionOutcome::Skipped;
         }
 
@@ -268,12 +367,22 @@ impl TurnHistory {
             return CompactionOutcome::Skipped;
         };
         // A newly loaded memory or project file can outweigh the savings.
-        if prefix_bytes(&system, &self.env) + summary_bytes >= old_prefix + removed_bytes {
+        let new_prefix = prefix_bytes(&system, &self.env);
+        if new_prefix + new_history_bytes >= old_prefix + old_history_bytes {
+            if let Some(guard) = guard {
+                guard.lock().unwrap().record_ineffective();
+            }
             return CompactionOutcome::Skipped;
+        }
+        if let Some(guard) = guard {
+            let still_over = query.is_some_and(|q| {
+                effective.over_threshold(new_prefix + new_history_bytes + q.len())
+            });
+            guard.lock().unwrap().record_success(still_over);
         }
         self.system_prompt = Some(system);
         self.skills = skills;
-        self.compaction = Some(compaction);
+        self.compaction = Some(Box::new(compaction));
         CompactionOutcome::Applied
     }
 }
@@ -379,6 +488,9 @@ pub struct TurnOptions<'a> {
     /// context after tool calls uses them to compress its own earlier steps and carry on.
     pub compression: Option<&'a CompactionSettings>,
     pub summarizer: Option<&'a ModelRoute>,
+    /// Shared per-session cooldown and anti-thrash guard across turns (REPL); when `None`, a
+    /// turn-local guard still protects mid-turn loops from hammering a failing summarizer.
+    pub compaction_guard: Option<&'a Mutex<CompactionGuard>>,
     /// `security.redact_phone_numbers: false`: the stored assistant reply keeps its phone numbers.
     pub keep_phone_numbers: bool,
     /// Which environment variables commands see.
@@ -455,6 +567,8 @@ where
     // mid-turn compression, which shortens this copy and never the conversation that is saved.
     let mut sent = messages.clone();
     let mut squeezes = 0usize;
+    let local_guard = Mutex::new(CompactionGuard::new());
+    let guard = options.compaction_guard.unwrap_or(&local_guard);
     // `compression.max_attempts`: how often this turn may compress its own earlier steps.
     let max_squeezes = options.compression.map_or(3, CompactionSettings::attempts);
     let mut env = ToolEnv::from_options(&options);
@@ -478,7 +592,7 @@ where
         let result = loop {
             // Before the request goes out: once the steps of this turn have outgrown the threshold,
             // replace the early ones with a summary instead of waiting for the provider to refuse.
-            if squeezes < max_squeezes {
+            if squeezes < max_squeezes && guard.lock().unwrap().check_blocked(false).is_none() {
                 if let Some(settings) = options.compression.filter(|s| {
                     s.enabled() && s.over_threshold(messages_bytes(&sent) + messages_bytes(&tools))
                 }) {
@@ -488,8 +602,10 @@ where
                         summarizer.unwrap_or(route),
                         summarizer.is_some(),
                         &mut sent,
+                        &tools,
                         first_new_message,
                         squeezes > 0 || original.is_some(),
+                        guard,
                     )
                     .await
                     {
@@ -546,6 +662,7 @@ where
                     if matches!(error, ProviderError::ContextOverflow)
                         && !emitted_text
                         && squeezes < max_squeezes
+                        && guard.lock().unwrap().check_blocked(true).is_none()
                     {
                         if let Some(settings) = options.compression.filter(|s| s.enabled()) {
                             let summarizer = options.summarizer;
@@ -554,8 +671,10 @@ where
                                 summarizer.unwrap_or(route),
                                 summarizer.is_some(),
                                 &mut sent,
+                                &tools,
                                 first_new_message,
                                 squeezes > 0 || original.is_some(),
+                                guard,
                             )
                             .await
                             {
@@ -724,13 +843,16 @@ where
 /// when the request nears the threshold or the provider refuses it. When the span reaches the running
 /// turn's own request, the request is restated after the summary so that it is not lost.
 /// `false` when nothing can be replaced or the summary is no shorter than what it replaces.
+#[allow(clippy::too_many_arguments)]
 async fn squeeze_turn(
     settings: &CompactionSettings,
     route: &ModelRoute,
     own_route: bool,
     sent: &mut Vec<Value>,
+    tools: &[Value],
     query_index: usize,
     after_pass: bool,
+    guard: &Mutex<CompactionGuard>,
 ) -> bool {
     // Before the turn's first step there is nothing of this turn to replace: the history belongs to the
     // preflight pass (and, after a refusal, to the retry that compresses the saved history).
@@ -741,7 +863,8 @@ async fn squeeze_turn(
         return false;
     };
     let middle = &sent[range.clone()];
-    let Some(request) = settings.request(&route.model, middle) else {
+    let Some(request) = settings.request(&route.model, middle, None) else {
+        guard.lock().unwrap().record_summary_failure(false);
         return false;
     };
     // A configured summary route carries its own body fields; the main route's are left out.
@@ -750,13 +873,37 @@ async fn squeeze_turn(
     } else {
         route.provider.complete_plain(&request, |_| {}).await
     };
-    let Ok(reply) = reply else {
-        return false;
+    let reply = match reply {
+        Ok(reply) => reply,
+        Err(error) => {
+            guard
+                .lock()
+                .unwrap()
+                .record_summary_failure(is_timeout_provider_error(&error));
+            return false;
+        }
     };
     if reply.finish_reason.as_deref() != Some("stop") || !reply.tool_calls.is_empty() {
+        let truncated = reply.finish_reason.as_deref() == Some("length");
+        guard.lock().unwrap().record_summary_failure(truncated);
         return false;
     }
-    let Some(compaction) = CompactedHistory::new(range.clone(), &reply.content) else {
+    let head = &sent[..range.start];
+    let tail = &sent[range.end..];
+    let placement = plan_summary_placement(head, tail, range.start);
+    let persisted = if placement.merge_into_tail && placement.merge_target_idx() < tail.len() {
+        PersistedSummaryPlacement::MergedIntoTail {
+            tail_index: placement.merge_target_idx(),
+            summary_role: placement.summary_role,
+            force_user_leading: placement.force_user_leading,
+        }
+    } else {
+        PersistedSummaryPlacement::Standalone {
+            role: placement.summary_role,
+        }
+    };
+    let Some(compaction) = CompactedHistory::new(range.clone(), &reply.content, persisted) else {
+        guard.lock().unwrap().record_summary_failure(false);
         return false;
     };
     let mut text = compaction.summary;
@@ -766,11 +913,27 @@ async fn squeeze_turn(
             text.push_str(query);
         }
     }
-    let summary = json!({"role": "user", "content": text});
-    if messages_bytes(std::slice::from_ref(&summary)) >= messages_bytes(middle) {
+    let old_bytes = messages_bytes(sent);
+    let mut candidate = sent[..range.start].to_vec();
+    let mut tail_copy = sent[range.end..].to_vec();
+    if placement.merge_into_tail && placement.merge_target_idx() < tail_copy.len() {
+        merge_summary_into_tail_row(
+            &mut tail_copy[placement.merge_target_idx()],
+            &text,
+            &placement,
+        );
+    } else {
+        candidate.push(json!({"role": placement.summary_role, "content": text}));
+    }
+    candidate.extend(tail_copy);
+    let new_bytes = messages_bytes(&candidate);
+    if new_bytes >= old_bytes {
+        guard.lock().unwrap().record_ineffective();
         return false;
     }
-    sent.splice(range, [summary]);
+    *sent = candidate;
+    let still_over = settings.over_threshold(new_bytes + messages_bytes(tools));
+    guard.lock().unwrap().record_success(still_over);
     true
 }
 

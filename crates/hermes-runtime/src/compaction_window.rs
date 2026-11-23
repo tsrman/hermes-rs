@@ -1,34 +1,42 @@
 //! Which messages a compression keeps at the head, keeps verbatim at the tail and summarizes in
-//! between. A port of the reference's `ContextCompressor._compress_window`: the head is the system
-//! prompt plus `protect_first_n` rows (none once a handoff exists), the tail is a token budget walked
-//! backwards from the newest row, and anchors keep the latest user request, the latest assistant
+//! between. A port of the reference's `ContextCompressor._plan_compaction_window` (`_prune_old_tool_results`
+//! followed by `_compress_window` and `_scan_window_handoffs`) and `_summary_placement`: the head is the
+//! system prompt plus `protect_first_n` rows (none once a handoff exists), the tail is a token budget
+//! walked backwards from the newest row, and anchors keep the latest user request, the latest assistant
 //! reply and the last `min_tail_user_messages` user turns out of the summary. A tool call and its
 //! results are never split. `compat/create_compression_window_corpus.py` records the reference's
 //! answer for hundreds of synthetic histories; `tests/compression_window.rs` replays them.
 //!
-//! Differences from the reference are deliberate and listed in the migration plan: rows are priced
-//! as the reference prices them (`estimate_tokens_rough` plus the Python `repr` of each tool call)
-//! but the port never prunes old tool results before planning, images and the Codex replay fields
-//! cost nothing, and a route that echoes stale thinking is not priced separately.
+//! Remaining differences from the reference are listed in the migration plan: images and the Codex
+//! replay fields cost nothing, and a route that echoes stale thinking is not priced separately.
 
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 const SUMMARY_PREFIXES: [&str; 3] = [
     "[CONTEXT SUMMARY]:",
     "[CONTEXT COMPACTION — REFERENCE ONLY]",
     "[CONTEXT COMPACTION",
 ];
-const END_MARKER: &str =
+pub(crate) const END_MARKER: &str =
     "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---";
-const PRIOR_HEADER: &str = "[PRIOR CONTEXT — for reference only; not a new message]";
-const MERGED_DELIMITER: &str = "[END OF PRIOR CONTEXT — COMPACTION SUMMARY BELOW]";
+pub(crate) const PRIOR_HEADER: &str = "[PRIOR CONTEXT — for reference only; not a new message]";
+pub(crate) const MERGED_DELIMITER: &str = "[END OF PRIOR CONTEXT — COMPACTION SUMMARY BELOW]";
 /// Rows the reference looks at past `protect_first_n` for a handoff left by an earlier run.
 const RESTART_PROBE_EXTRA: usize = 4;
 /// The most recent rows the walk keeps whatever they cost (`_MAX_TAIL_MESSAGE_FLOOR`).
 const MAX_TAIL_FLOOR: usize = 8;
+/// Under pressure, pass 4 keeps this many trailing messages verbatim before last-resort demotion.
+const PRESSURE_KEEP_RECENT: usize = 3;
 const ROW_OVERHEAD_TOKENS: usize = 10;
+const PRUNE_MIN_CHARS: usize = 200;
+const SKILL_PRUNE_RECENT_WINDOW: usize = 10;
+const PRUNED_TOOL_PLACEHOLDER: &str = "[Old tool output cleared to save context space]";
+const DUPLICATE_TOOL_PLACEHOLDER: &str =
+    "[Duplicate tool output — same content as a more recent call]";
+const SKILL_PRUNED_MARKER_PREFIX: &str = "[SKILL_PRUNED:";
 
 /// Rows the reference treats as its own scaffolding rather than a human turn.
 const SYNTHETIC_TEXTS: [&str; 11] = [
@@ -652,31 +660,38 @@ pub(crate) fn plan(messages: &[Value], rules: &WindowRules) -> Option<Range<usiz
     plan_counted(messages, rules).map(|(span, _)| span)
 }
 
-/// `plan` and the number of rows the summarizer would read: handoffs inside the span are not read, a
-/// merged one contributes the content it carried.
+/// `plan` and the number of rows the summarizer would read: runs `_prune_old_tool_results` on a
+/// working copy first (as `_plan_compaction_window` does) so old bulky tool results do not inflate
+/// the tail cut. Handoffs inside the span are not read; a merged one contributes the content it
+/// carried.
 pub(crate) fn plan_counted(
     messages: &[Value],
     rules: &WindowRules,
 ) -> Option<(Range<usize>, usize)> {
-    let planner = Planner { messages, rules };
-    if messages.len() <= planner.head_size() + 4 {
+    let pre_planner = Planner { messages, rules };
+    if messages.len() <= pre_planner.head_size() + 4 {
         return None;
     }
+    let (working, _) = prune_old_tool_results(messages, rules);
+    let planner = Planner {
+        messages: &working,
+        rules,
+    };
     let (start, end) = planner.compress_window();
     if start >= end {
         return None;
     }
     // The handoff scan: earlier handoffs inside the window are not summarized again, and one beyond
     // the window pulls the tail start past itself.
-    let search_start = usize::from(messages.first().is_some_and(|m| m["role"] == "system"));
-    let newest = (search_start..messages.len())
+    let search_start = usize::from(working.first().is_some_and(|m| m["role"] == "system"));
+    let newest = (search_start..working.len())
         .rev()
-        .find(|&i| is_summary_message(&messages[i]));
+        .find(|&i| is_summary_message(&working[i]));
     let Some(newest) = newest else {
         return Some((start..end, end - start));
     };
     let live = |index: usize| {
-        let row = &messages[index];
+        let row = &working[index];
         !is_summary_message(row) || Planner::unwrapped_prior(row)
     };
     let rows = (start..newest.max(start)).filter(|&i| live(i)).count()
@@ -686,6 +701,968 @@ pub(crate) fn plan_counted(
         return None;
     }
     Some((start..if newest >= end { newest + 1 } else { end }, rows))
+}
+
+/// How the reference places the compaction summary relative to its head and tail neighbors
+/// (`ContextCompressor._summary_placement`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SummaryPlacement {
+    pub summary_role: &'static str,
+    pub merge_into_tail: bool,
+    pub force_user_leading: bool,
+    pub first_tail_visible_idx: Option<usize>,
+}
+
+impl SummaryPlacement {
+    /// Index in `tail` that absorbs the summary when `merge_into_tail` is true.
+    pub fn merge_target_idx(&self) -> usize {
+        if self.force_user_leading {
+            self.first_tail_visible_idx.unwrap_or(0)
+        } else {
+            0
+        }
+    }
+}
+
+/// Role as counted by strict chat-template alternation checks (`_template_visible_role`).
+/// Tool rows and assistant rows carrying `tool_calls` are exempt.
+fn template_visible_role(message: &Value) -> Option<&str> {
+    let role = message["role"].as_str()?;
+    if role == "tool" || (role == "assistant" && has_tool_calls(message)) {
+        None
+    } else {
+        Some(role)
+    }
+}
+
+fn last_template_visible_role(messages: &[Value]) -> Option<&str> {
+    messages.iter().rev().find_map(template_visible_role)
+}
+
+/// Pick the summary row's role and whether it must merge into the first tail row so template-visible
+/// alternation holds (`ContextCompressor._summary_placement`).
+pub fn plan_summary_placement(
+    head: &[Value],
+    tail: &[Value],
+    compress_start: usize,
+) -> SummaryPlacement {
+    let last_head_role = if head.is_empty() {
+        Some("user")
+    } else {
+        last_template_visible_role(head)
+    };
+    let (first_tail_visible_idx, first_tail_role) = tail
+        .iter()
+        .enumerate()
+        .find_map(|(idx, msg)| template_visible_role(msg).map(|role| (Some(idx), Some(role))))
+        .unwrap_or((None, None));
+    let has_text_user = head
+        .iter()
+        .chain(tail.iter())
+        .any(|msg| msg["role"] == "user" && !content_text(&msg["content"]).trim().is_empty());
+    let force_user_leading =
+        compress_start == 0 || last_head_role == Some("system") || !has_text_user;
+    let mut summary_role = if matches!(last_head_role, None | Some("assistant") | Some("tool"))
+        || force_user_leading
+    {
+        "user"
+    } else {
+        "assistant"
+    };
+    let mut merge_into_tail = false;
+    if let Some(tail_role) = first_tail_role {
+        if tail_role == summary_role {
+            let flipped = if summary_role == "user" {
+                "assistant"
+            } else {
+                "user"
+            };
+            if Some(flipped) != last_head_role && last_head_role.is_some() && !force_user_leading {
+                summary_role = flipped;
+            } else {
+                merge_into_tail = !tail.is_empty();
+            }
+        }
+    }
+    SummaryPlacement {
+        summary_role,
+        merge_into_tail,
+        force_user_leading,
+        first_tail_visible_idx,
+    }
+}
+
+/// Format the merged content when `placement.merge_into_tail` is true
+/// (`ContextCompressor._merge_summary_into_tail_row`).
+pub fn merge_summary_content(
+    old_content: Option<&str>,
+    summary: &str,
+    summary_role: &str,
+    force_user_leading: bool,
+) -> String {
+    let old = old_content.unwrap_or("");
+    if force_user_leading && summary_role == "user" {
+        format!("{summary}\n\n{END_MARKER}\n\n{old}")
+    } else {
+        format!("{PRIOR_HEADER}\n{old}\n\n{MERGED_DELIMITER}\n\n{summary}\n\n{END_MARKER}")
+    }
+}
+
+/// Fold `summary` into `row["content"]` in place (matching `_merge_summary_into_tail_row`).
+pub fn merge_summary_into_tail_row(row: &mut Value, summary: &str, placement: &SummaryPlacement) {
+    let old = match &row["content"] {
+        Value::Null => None,
+        Value::String(text) => Some(text.as_str()),
+        other => {
+            let rendered = other.to_string();
+            let merged = merge_summary_content(
+                Some(&rendered),
+                summary,
+                placement.summary_role,
+                placement.force_user_leading,
+            );
+            row["content"] = Value::String(merged);
+            return;
+        }
+    };
+    let merged = merge_summary_content(
+        old,
+        summary,
+        placement.summary_role,
+        placement.force_user_leading,
+    );
+    row["content"] = Value::String(merged);
+}
+
+/// Port of `ContextCompressor._prune_old_tool_results`: dedupe identical >=200-char tool outputs,
+/// replace old >200-char tool outputs before `prune_boundary` with 1-line summaries, and run pass-4
+/// pressure demotion inside the protected tail when it alone exceeds the soft ceiling.
+pub(crate) fn prune_old_tool_results(
+    messages: &[Value],
+    rules: &WindowRules,
+) -> (Vec<Value>, usize) {
+    if messages.is_empty() {
+        return (Vec::new(), 0);
+    }
+    let mut result = messages.to_vec();
+    let calls = tool_calls_by_id(&result);
+    let mut prune_boundary = prune_boundary_for(&result, rules);
+    let spared = spared_pending_tool_round(&result, rules.context_length);
+    if !spared.is_empty() {
+        prune_boundary = prune_boundary.min(spared.start);
+    }
+    let mut pruned = dedupe_tool_results(&mut result);
+    let protected_skills = collect_protected_skill_names(&result, prune_boundary);
+    for idx in 0..prune_boundary {
+        if demote_tool_result_at(
+            &mut result,
+            idx,
+            &calls,
+            PRUNE_MIN_CHARS,
+            Some(&protected_skills),
+        ) {
+            pruned += 1;
+        }
+    }
+    if rules.tail_budget > 0 && !result.is_empty() {
+        pruned += pressure_demote_tail(
+            &mut result,
+            prune_boundary,
+            rules,
+            &calls,
+            PRUNE_MIN_CHARS,
+            &spared,
+        );
+    }
+    (result, pruned)
+}
+
+fn prune_boundary_for(messages: &[Value], rules: &WindowRules) -> usize {
+    let n = messages.len();
+    if rules.tail_budget == 0 {
+        return n.saturating_sub(rules.protect_last);
+    }
+    let min_protect = rules.protect_last.min(n).min(MAX_TAIL_FLOOR);
+    let planner = Planner { messages, rules };
+    let (boundary, _) = planner.walk(0, rules.tail_budget, min_protect, true, None);
+    boundary.min(n.saturating_sub(min_protect))
+}
+
+fn pending_tool_round(messages: &[Value]) -> Range<usize> {
+    let mut end = messages.len();
+    while end > 0 && messages[end - 1]["display_kind"].as_str() == Some("steer") {
+        end -= 1;
+    }
+    let mut start = end;
+    while start > 0 && messages[start - 1]["role"].as_str() == Some("tool") {
+        start -= 1;
+    }
+    start..end
+}
+
+fn spared_pending_tool_round(messages: &[Value], context_length: usize) -> Range<usize> {
+    let mut pending = pending_tool_round(messages);
+    if !pending.is_empty() && pending.start > 0 && has_tool_calls(&messages[pending.start - 1]) {
+        pending.start -= 1;
+    }
+    if pending.is_empty() {
+        return 0..0;
+    }
+    let hard_share = context_length / 5;
+    let tokens: usize = pending
+        .clone()
+        .map(|i| row_tokens(&messages[i], true))
+        .sum();
+    if tokens <= hard_share {
+        pending
+    } else {
+        0..0
+    }
+}
+
+fn dedupe_tool_results(result: &mut [Value]) -> usize {
+    let mut pruned = 0;
+    let mut seen: HashSet<String> = HashSet::new();
+    for msg in result.iter_mut().rev() {
+        if msg["role"].as_str() != Some("tool") {
+            continue;
+        }
+        let Some(content) = msg["content"].as_str() else {
+            continue;
+        };
+        if content.chars().count() < PRUNE_MIN_CHARS {
+            continue;
+        }
+        if !seen.insert(content.to_owned()) {
+            msg["content"] = Value::String(DUPLICATE_TOOL_PLACEHOLDER.to_owned());
+            pruned += 1;
+        }
+    }
+    pruned
+}
+
+fn tool_calls_by_id(messages: &[Value]) -> HashMap<String, (String, String)> {
+    let mut map = HashMap::new();
+    for msg in messages {
+        if msg["role"].as_str() != Some("assistant") {
+            continue;
+        }
+        let Some(calls) = msg["tool_calls"].as_array() else {
+            continue;
+        };
+        for call in calls {
+            let id = call["id"].as_str().unwrap_or("").to_owned();
+            let func = &call["function"];
+            let name = func["name"].as_str().unwrap_or("unknown").to_owned();
+            let args = func["arguments"].as_str().unwrap_or("").to_owned();
+            map.insert(id, (name, args));
+        }
+    }
+    map
+}
+
+fn collect_protected_skill_names(messages: &[Value], prune_boundary: usize) -> HashSet<String> {
+    let total = messages.len();
+    if total == 0 {
+        return HashSet::new();
+    }
+    let recent_start = total.saturating_sub(SKILL_PRUNE_RECENT_WINDOW);
+    let tail_start = prune_boundary.min(total);
+    let tail_user_texts: Vec<String> = messages[tail_start..]
+        .iter()
+        .filter(|m| m["role"].as_str() == Some("user"))
+        .filter_map(|m| m["content"].as_str().filter(|s| !s.is_empty()))
+        .map(str::to_lowercase)
+        .collect();
+    let mut protected = HashSet::new();
+    for (idx, msg) in messages.iter().enumerate() {
+        if msg["role"].as_str() != Some("assistant") {
+            continue;
+        }
+        let Some(calls) = msg["tool_calls"].as_array() else {
+            continue;
+        };
+        for call in calls {
+            let func = &call["function"];
+            if func["name"].as_str() != Some("skill_view") {
+                continue;
+            }
+            let Some(args_str) = func["arguments"].as_str() else {
+                continue;
+            };
+            let args = json_dict(args_str);
+            let Some(skill) = args
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            else {
+                continue;
+            };
+            let lower = skill.to_lowercase();
+            if idx >= recent_start.min(tail_start)
+                || tail_user_texts.iter().any(|text| text.contains(&lower))
+            {
+                protected.insert(lower);
+            }
+        }
+    }
+    protected
+}
+
+fn is_summary_stub(content: &str) -> bool {
+    (content.starts_with('[')
+        && (content.contains(" chars)") || content.contains(" chars result)"))
+        && content.chars().count() < 400)
+        || content.starts_with("[Tool output archived")
+}
+
+fn demote_tool_result_at(
+    result: &mut [Value],
+    idx: usize,
+    calls: &HashMap<String, (String, String)>,
+    min_prune_chars: usize,
+    protected_skills: Option<&HashSet<String>>,
+) -> bool {
+    let msg = &result[idx];
+    if msg["role"].as_str() != Some("tool") {
+        return false;
+    }
+    let Some(content) = msg["content"].as_str() else {
+        return false;
+    };
+    if content.is_empty()
+        || content == PRUNED_TOOL_PLACEHOLDER
+        || content.starts_with("[Duplicate tool output")
+        || content.starts_with("[screenshot removed")
+        || is_summary_stub(content)
+        || content.chars().count() <= min_prune_chars
+    {
+        return false;
+    }
+    let call_id = msg["tool_call_id"].as_str().unwrap_or("");
+    let (tool_name, tool_args) = calls
+        .get(call_id)
+        .map(|(n, a)| (n.as_str(), a.as_str()))
+        .unwrap_or(("unknown", ""));
+    if let Some(protected) = protected_skills {
+        if tool_name == "skill_view" {
+            if let Some(skill) = json_dict(tool_args).get("name").and_then(Value::as_str) {
+                if protected.contains(&skill.to_lowercase()) {
+                    return false;
+                }
+            }
+        }
+    }
+    let summary = summarize_tool_result(tool_name, tool_args, content);
+    result[idx]["content"] = Value::String(summary);
+    true
+}
+
+fn pressure_demote_tail(
+    result: &mut [Value],
+    prune_boundary: usize,
+    rules: &WindowRules,
+    calls: &HashMap<String, (String, String)>,
+    min_prune_chars: usize,
+    spared: &Range<usize>,
+) -> usize {
+    let soft = {
+        let mut ceiling = rules.tail_budget * 3 / 2;
+        if rules.context_length > 0 {
+            ceiling = ceiling.min(rules.context_length / 5);
+        }
+        ceiling.max(rules.tail_budget)
+    };
+    let n = result.len();
+    let demote_end = n.saturating_sub(PRESSURE_KEEP_RECENT.min(n));
+    let start = prune_boundary;
+    let region_tokens = |rows: &[Value]| -> usize {
+        (start..rows.len())
+            .map(|i| row_tokens(&rows[i], true))
+            .sum()
+    };
+    if demote_end <= prune_boundary || region_tokens(result) <= soft {
+        return 0;
+    }
+    let mut demoted = 0;
+    for i in start..demote_end {
+        if !spared.contains(&i) && demote_tool_result_at(result, i, calls, min_prune_chars, None) {
+            demoted += 1;
+        }
+        if region_tokens(result) <= soft {
+            break;
+        }
+    }
+    if region_tokens(result) > soft {
+        let last_tool = (0..n)
+            .rev()
+            .find(|&i| result[i]["role"].as_str() == Some("tool"));
+        for i in start..n {
+            if Some(i) == last_tool || spared.contains(&i) {
+                continue;
+            }
+            if demote_tool_result_at(result, i, calls, min_prune_chars, None) {
+                demoted += 1;
+            }
+        }
+        if let Some(last) = last_tool {
+            if !spared.contains(&last)
+                && last >= prune_boundary
+                && region_tokens(result) > soft
+                && demote_tool_result_at(result, last, calls, min_prune_chars, None)
+            {
+                demoted += 1;
+            }
+        }
+    }
+    demoted
+}
+
+fn json_dict(text: &str) -> serde_json::Map<String, Value> {
+    if text.is_empty() {
+        return serde_json::Map::new();
+    }
+    match serde_json::from_str::<Value>(text) {
+        Ok(Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    }
+}
+
+fn format_commas(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn py_val_str(value: &Value) -> String {
+    match value {
+        Value::Null => "None".into(),
+        Value::Bool(true) => "True".into(),
+        Value::Bool(false) => "False".into(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => s.clone(),
+        other => python_repr(other),
+    }
+}
+
+fn str_arg(args: &serde_json::Map<String, Value>, key: &str, default: &str) -> String {
+    match args.get(key) {
+        None | Some(Value::Null) => default.to_owned(),
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => py_val_str(other),
+    }
+}
+
+fn take_chars(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
+}
+
+fn failure_suffix_labeled(reason: Option<&Value>, label: &str) -> String {
+    let text = match reason {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => String::new(),
+        Some(Value::String(s)) if s.is_empty() => String::new(),
+        Some(other) => {
+            let rendered = py_val_str(other);
+            let collapsed = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+            take_chars(&collapsed, 80)
+        }
+    };
+    if text.is_empty() {
+        format!(" {label}")
+    } else {
+        format!(" {label}: {text}")
+    }
+}
+
+fn payload_failure_suffix(payload: &serde_json::Map<String, Value>) -> String {
+    let error = payload.get("error").filter(|v| truthy_other(v));
+    let failed = payload.get("success") == Some(&Value::Bool(false));
+    if error.is_none() && !failed {
+        return String::new();
+    }
+    failure_suffix_labeled(error, "FAILED")
+}
+
+fn result_failure_suffix(content: &str) -> String {
+    payload_failure_suffix(&json_dict(content))
+}
+
+fn summarize_refused_tool_result(
+    tool_name: &str,
+    args: &serde_json::Map<String, Value>,
+    content: &str,
+) -> Option<String> {
+    let payload = json_dict(content);
+    let status = payload.get("status").and_then(Value::as_str);
+    let mut error = payload
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    if error.is_empty() && content.trim_start().starts_with("BLOCKED") {
+        error = content.trim().to_owned();
+    }
+    let outcome = if status == Some("pending_approval") {
+        "awaiting the user's approval, not run".to_owned()
+    } else if !error.is_empty()
+        && (status == Some("blocked") || error.trim_start().starts_with("BLOCKED"))
+    {
+        let mut s = "BLOCKED, not run".to_owned();
+        if error.contains("NOT consented") {
+            s.push_str(
+                "; the user did NOT consent, do not retry or reach the same outcome another way",
+            );
+        }
+        s
+    } else {
+        return None;
+    };
+    let raw_target = {
+        let cmd = str_arg(args, "command", "");
+        if !cmd.is_empty() {
+            cmd
+        } else {
+            str_arg(args, "path", "")
+        }
+    };
+    let target = if raw_target.is_empty() {
+        String::new()
+    } else if raw_target.chars().count() <= 60 {
+        format!(" `{raw_target}`")
+    } else {
+        format!(" `{}...`", take_chars(&raw_target, 57))
+    };
+    Some(take_chars(
+        &format!("[{tool_name}]{target} {outcome}"),
+        PRUNE_MIN_CHARS - 1,
+    ))
+}
+
+fn extract_json_int(content: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let pos = content.find(&needle)?;
+    let rest = content[pos + needle.len()..].trim_start();
+    let rest = rest.strip_prefix(':')?.trim_start();
+    let mut chars = rest.chars().peekable();
+    let mut num = String::new();
+    if matches!(chars.peek(), Some('-')) {
+        num.push(chars.next().unwrap());
+    }
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_digit() {
+            num.push(c);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    if num.is_empty() || num == "-" {
+        None
+    } else {
+        Some(num)
+    }
+}
+
+fn stub_arguments(args: &serde_json::Map<String, Value>) -> String {
+    let mut out = String::new();
+    for (key, value) in args {
+        let raw = py_val_str(value);
+        let one_line = raw.lines().collect::<Vec<_>>().join(" ");
+        let preview = take_chars(&one_line, 40);
+        out.push_str(&format!(" {key}={preview}"));
+        if out.chars().count() >= 120 {
+            return take_chars(&out, 120);
+        }
+    }
+    out
+}
+
+/// Port of `_summarize_tool_result` from `agent/context_compressor.py`.
+fn summarize_tool_result(tool_name: &str, tool_args: &str, content: &str) -> String {
+    let args = json_dict(tool_args);
+    if let Some(refused) = summarize_refused_tool_result(tool_name, &args, content) {
+        return refused;
+    }
+    let content_len = content.chars().count();
+    let line_count = if content.trim().is_empty() {
+        0
+    } else {
+        content.bytes().filter(|&b| b == b'\n').count() + 1
+    };
+    let len_fmt = format_commas(content_len);
+    match tool_name {
+        "terminal" => {
+            let raw_cmd = str_arg(&args, "command", "");
+            let cmd_joined = raw_cmd.lines().collect::<Vec<_>>().join(" ");
+            let cmd = if cmd_joined.chars().count() <= 80 {
+                cmd_joined
+            } else {
+                format!("{}...", take_chars(&cmd_joined, 77))
+            };
+            let exit_code = extract_json_int(content, "exit_code").unwrap_or_else(|| "?".into());
+            let payload = json_dict(content);
+            let output_lines: Vec<&str> = payload
+                .get("output")
+                .and_then(Value::as_str)
+                .map(|s| s.lines().collect())
+                .unwrap_or_default();
+            let count = if payload.get("output").and_then(Value::as_str).is_some() {
+                output_lines.len()
+            } else {
+                line_count
+            };
+            let word = if count == 1 { "line" } else { "lines" };
+            let mut stub =
+                format!("[terminal] ran `{cmd}` -> exit {exit_code}, {count} {word} output");
+            let last = output_lines
+                .iter()
+                .rev()
+                .map(|l| l.trim())
+                .find(|l| !l.is_empty())
+                .unwrap_or("");
+            let overhead = stub.chars().count() + " | last: ".len();
+            let room = (PRUNE_MIN_CHARS - 1).saturating_sub(overhead).min(120);
+            if exit_code != "?" && exit_code != "0" && !last.is_empty() && room >= 20 {
+                stub.push_str(" | last: ");
+                stub.push_str(&take_chars(last, room));
+            }
+            stub
+        }
+        "read_file" => {
+            let path = str_arg(&args, "path", "?");
+            let offset = str_arg(&args, "offset", "1");
+            format!(
+                "[read_file] read {path} from line {offset} ({len_fmt} chars){}",
+                result_failure_suffix(content)
+            )
+        }
+        "write_file" => {
+            let path = str_arg(&args, "path", "?");
+            let failed = result_failure_suffix(content);
+            if !failed.is_empty() {
+                return format!("[write_file] {path}{failed}");
+            }
+            let written_lines = match args.get("content") {
+                Some(v) if truthy_other(v) => {
+                    let s = str_arg(&args, "content", "");
+                    (s.bytes().filter(|&b| b == b'\n').count() + 1).to_string()
+                }
+                _ => "?".into(),
+            };
+            format!("[write_file] wrote to {path} ({written_lines} lines)")
+        }
+        "search_files" => {
+            let count = extract_json_int(content, "total_count")
+                .filter(|c| !c.starts_with('-'))
+                .unwrap_or_else(|| "?".into());
+            let target = str_arg(&args, "target", "content");
+            let pattern = str_arg(&args, "pattern", "?");
+            let path = str_arg(&args, "path", ".");
+            format!("[search_files] {target} search for '{pattern}' in {path} -> {count} matches")
+        }
+        "patch" => {
+            let mode = str_arg(&args, "mode", "replace");
+            let path = str_arg(&args, "path", "?");
+            format!(
+                "[patch] {mode} in {path} ({len_fmt} chars result){}",
+                result_failure_suffix(content)
+            )
+        }
+        "browser_navigate" | "browser_click" | "browser_snapshot" | "browser_type"
+        | "browser_scroll" | "browser_vision" => {
+            let url = str_arg(&args, "url", "");
+            let r = str_arg(&args, "ref", "");
+            let detail = if !url.is_empty() {
+                format!(" {url}")
+            } else if !r.is_empty() {
+                format!(" ref={r}")
+            } else {
+                String::new()
+            };
+            format!(
+                "[{tool_name}]{detail} ({len_fmt} chars){}",
+                result_failure_suffix(content)
+            )
+        }
+        "web_search" => {
+            let query = str_arg(&args, "query", "?");
+            format!(
+                "[web_search] query='{query}' ({len_fmt} chars result){}",
+                result_failure_suffix(content)
+            )
+        }
+        "web_extract" => {
+            let urls = args.get("urls").and_then(Value::as_array);
+            let mut first = match urls.and_then(|u| u.first()) {
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Object(map)) => map
+                    .get("url")
+                    .or_else(|| map.get("href"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("?")
+                    .to_owned(),
+                _ => "?".into(),
+            };
+            if let Some(list) = urls {
+                if list.len() > 1 {
+                    first.push_str(&format!(" (+{} more)", list.len() - 1));
+                }
+            }
+            format!(
+                "[web_extract] {first} ({len_fmt} chars){}",
+                result_failure_suffix(content)
+            )
+        }
+        "delegate_task" => {
+            let tasks = args
+                .get("tasks")
+                .and_then(Value::as_array)
+                .filter(|t| !t.is_empty());
+            let goal_source = tasks
+                .and_then(|t| t.first())
+                .and_then(Value::as_object)
+                .unwrap_or(&args);
+            let raw_goal = str_arg(goal_source, "goal", "");
+            let joined = raw_goal.lines().collect::<Vec<_>>().join(" ");
+            let goal = if joined.chars().count() <= 60 {
+                joined
+            } else {
+                format!("{}...", take_chars(&joined, 57))
+            };
+            let detail = match tasks {
+                Some(list) => format!("{} tasks, first: '{goal}'", list.len()),
+                None => format!("'{goal}'"),
+            };
+            format!(
+                "[delegate_task] {detail} ({len_fmt} chars result){}",
+                result_failure_suffix(content)
+            )
+        }
+        "execute_code" => {
+            let code_str = str_arg(&args, "code", "");
+            let head = take_chars(&code_str, 60).replace('\n', " ");
+            let suffix = if code_str.chars().count() > 60 {
+                "..."
+            } else {
+                ""
+            };
+            format!("[execute_code] `{head}{suffix}` ({line_count} lines output)")
+        }
+        "skill_view" => {
+            let skill = str_arg(&args, "name", "?");
+            let failed = {
+                let s = result_failure_suffix(content);
+                if !s.is_empty() {
+                    s
+                } else if content.starts_with("[skill_view] ")
+                    && content
+                        .split(" (")
+                        .next()
+                        .is_some_and(|h| h.contains(" FAILED"))
+                {
+                    " FAILED".into()
+                } else {
+                    String::new()
+                }
+            };
+            let keep = if is_summary_stub(content) {
+                content.contains(SKILL_PRUNED_MARKER_PREFIX)
+            } else {
+                failed.is_empty()
+            };
+            let marker = if skill != "?" && keep {
+                format!(
+                    " {SKILL_PRUNED_MARKER_PREFIX} content lost in compression; reload with skill_view(name='{skill}')]"
+                )
+            } else {
+                String::new()
+            };
+            format!("[skill_view] name={skill}{failed} ({len_fmt} chars){marker}")
+        }
+        "skills_list" => {
+            let category = str_arg(&args, "category", "");
+            let scope = if category.is_empty() {
+                String::new()
+            } else {
+                format!(" category={category}")
+            };
+            let payload = json_dict(content);
+            let listed = payload
+                .get("count")
+                .and_then(Value::as_i64)
+                .map_or(String::new(), |c| format!(" {c} skills"));
+            format!(
+                "[skills_list]{scope}{listed}{} ({len_fmt} chars)",
+                result_failure_suffix(content)
+            )
+        }
+        "skill_manage" => {
+            let ops = args
+                .get("operations")
+                .and_then(Value::as_array)
+                .filter(|v| !v.is_empty());
+            let summary = if let Some(list) = ops {
+                let mut rendered = Vec::new();
+                for op in list {
+                    if let Some(map) = op.as_object() {
+                        let action = str_arg(map, "action", "?");
+                        let op_name = str_arg(map, "name", "?");
+                        rendered.push(format!("{action} {op_name}"));
+                    }
+                }
+                let head: String = rendered
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                let mut s = format!("[skill_manage] {head}");
+                if list.len() > 3 {
+                    s.push_str(&format!(" (+{} more)", list.len() - 3));
+                }
+                s
+            } else {
+                let action = str_arg(&args, "action", "?");
+                let op_name = str_arg(&args, "name", "?");
+                format!("[skill_manage] {action} {op_name}")
+            };
+            format!(
+                "{summary}{} ({len_fmt} chars)",
+                result_failure_suffix(content)
+            )
+        }
+        "vision_analyze" => {
+            let q = take_chars(&str_arg(&args, "question", ""), 50);
+            format!(
+                "[vision_analyze] '{q}' ({len_fmt} chars){}",
+                result_failure_suffix(content)
+            )
+        }
+        "memory" => {
+            let action = str_arg(&args, "action", "?");
+            let target = str_arg(&args, "target", "?");
+            format!(
+                "[memory] {action} on {target}{}",
+                result_failure_suffix(content)
+            )
+        }
+        "todo_list" => "[todo] updated task list".into(),
+        "clarify" => summarize_clarify(content),
+        "text_to_speech" => {
+            format!(
+                "[text_to_speech] generated audio ({len_fmt} chars){}",
+                result_failure_suffix(content)
+            )
+        }
+        "cronjob_manage" => {
+            let stub = format!("[cronjob] {}", str_arg(&args, "action", "?"));
+            let payload = json_dict(content);
+            let mut suffix = payload_failure_suffix(&payload);
+            if suffix.is_empty() {
+                if let Some(job) = payload.get("job").and_then(Value::as_object) {
+                    let error = job.get("execution_error").filter(|v| !v.is_null());
+                    let skipped = job.get("execution_skipped").filter(|v| !v.is_null());
+                    if error.is_some()
+                        || (skipped.is_none()
+                            && job.get("execution_success") == Some(&Value::Bool(false)))
+                    {
+                        suffix = failure_suffix_labeled(error, "FAILED");
+                    } else if skipped.is_some() {
+                        suffix = failure_suffix_labeled(skipped, "SKIPPED");
+                    }
+                }
+            }
+            format!("{stub}{suffix}")
+        }
+        "process_manage" => {
+            let stub = format!(
+                "[process] {} session={}",
+                str_arg(&args, "action", "?"),
+                str_arg(&args, "session_id", "?")
+            );
+            let payload = json_dict(content);
+            let mut suffix = payload_failure_suffix(&payload);
+            if suffix.is_empty() {
+                if let Some(code) = payload.get("exit_code").and_then(Value::as_i64) {
+                    if code != 0
+                        && payload.get("completion_reason").and_then(Value::as_str)
+                            != Some("killed")
+                    {
+                        suffix = format!(" FAILED: exit code {code}");
+                    }
+                }
+            }
+            format!("{stub}{suffix}")
+        }
+        _ => {
+            let first_arg = stub_arguments(&args);
+            format!(
+                "[{tool_name}]{first_arg} ({len_fmt} chars result){}",
+                result_failure_suffix(content)
+            )
+        }
+    }
+}
+
+fn summarize_clarify(content: &str) -> String {
+    let payload = json_dict(content);
+    let responses: Vec<&Value> = match payload.get("responses") {
+        Some(Value::Array(list)) => list.iter().collect(),
+        _ if payload.contains_key("user_response") => vec![],
+        _ => vec![],
+    };
+    let single = if responses.is_empty() && payload.contains_key("user_response") {
+        Some(Value::Object(payload.clone()))
+    } else {
+        None
+    };
+    let iter: Vec<&Value> = match &single {
+        Some(val) => vec![val],
+        None => responses,
+    };
+    let mut answers: Vec<String> = Vec::new();
+    for entry in iter {
+        let Some(map) = entry.as_object() else {
+            continue;
+        };
+        let is_answered = map.get("status").and_then(Value::as_str) == Some("answered")
+            || (!map.contains_key("status") && map.contains_key("user_response"));
+        if !is_answered {
+            continue;
+        }
+        let values: Vec<&Value> = match map.get("user_response") {
+            Some(Value::Array(list)) => list.iter().collect(),
+            Some(val) => vec![val],
+            None => vec![],
+        };
+        for item in values {
+            if let Some(s) = item.as_str().filter(|s| !s.is_empty()) {
+                answers.push(s.to_owned());
+            }
+        }
+    }
+    if answers.is_empty() {
+        return "[clarify] asked user a question".into();
+    }
+    let serialized = if answers.len() == 1 {
+        json!(answers[0]).to_string()
+    } else {
+        crate::session_search::py_json_dumps(&json!(answers))
+    };
+    let full = format!("[clarify] user responded: {serialized}");
+    let max_len = PRUNE_MIN_CHARS - 1;
+    if full.chars().count() <= max_len {
+        full
+    } else {
+        let kept = max_len.saturating_sub(3);
+        format!("{}...", take_chars(&full, kept))
+    }
 }
 
 #[cfg(test)]

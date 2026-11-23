@@ -7,20 +7,22 @@
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
+use hermes_runtime::turn::CompactionGuard;
 use rustyline::error::ReadlineError;
 use rustyline::history::FileHistory;
 use rustyline::{Config, Editor};
 use tokio::task::spawn_blocking;
 
 use crate::approval;
-use crate::chat::{self, ChatRequest, Event};
+use crate::chat::{self, ChatRequest, Event, ManualCompress};
 
 type Lines = Editor<(), FileHistory>;
 
 const PROMPT: &str = "› ";
 const CONTINUATION: &str = "… ";
-const HELP: &str = "Commands:\n  /help            show this list\n  /new             start a new conversation (the old one stays saved)\n  /sessions        list recent sessions\n  /resume <id>     continue another session\n  /model [name]    show or change the model for the next turns\n  /yolo            toggle approving file changes and commands without asking\n  /retry           send the last turn again when it was interrupted or failed\n  /exit, /quit     leave (Ctrl-D also works)\nA line ending in \\ continues on the next line. Ctrl-C stops a running turn.";
+const HELP: &str = "Commands:\n  /help              show this list\n  /new               start a new conversation (the old one stays saved)\n  /sessions          list recent sessions\n  /resume <id>       continue another session\n  /model [name]      show or change the model for the next turns\n  /compress [topic]  compress the current session history now\n  /yolo              toggle approving file changes and commands without asking\n  /retry             send the last turn again when it was interrupted or failed\n  /exit, /quit       leave (Ctrl-D also works)\nA line ending in \\ continues on the next line. Ctrl-C stops a running turn.";
 
 enum Input {
     Line(String),
@@ -91,6 +93,7 @@ pub async fn run(home: Option<&Path>, request: ChatRequest) -> Result<u8, String
     let scope = format!("repl-{}", std::process::id());
     let mut request = request;
     let mut session = request.resume().map(str::to_owned);
+    let guard = Mutex::new(CompactionGuard::new());
     let mut code = 0;
     // A turn that was interrupted or failed is not saved, so `/retry` may send it again.
     let mut unsaved: Option<String> = None;
@@ -119,13 +122,38 @@ pub async fn run(home: Option<&Path>, request: ChatRequest) -> Result<u8, String
                     announce(&session);
                     session = None;
                     unsaved = None;
+                    guard.lock().unwrap().reset();
                 }
                 "model" if argument.is_empty() => {
                     println!("{}", request.model().unwrap_or("(not set)"));
                 }
                 "model" => {
                     request.set_model(argument);
+                    guard.lock().unwrap().reset();
                     println!("Model for the next turns: {argument}");
+                }
+                "compress" | "compact" => {
+                    let Some(home) = home else {
+                        eprintln!("Cannot compress: profile root is unavailable.");
+                        continue;
+                    };
+                    let Some(id) = session.as_deref() else {
+                        println!("Nothing to compress yet: start a conversation first.");
+                        continue;
+                    };
+                    let focus = (!argument.is_empty()).then_some(argument);
+                    match chat::compress_session(home, &request, id, focus, &guard).await {
+                        Ok(ManualCompress::Applied { archived }) => {
+                            println!("Compressed session {id}: archived {archived} message(s) into a summary.");
+                        }
+                        Ok(ManualCompress::Unchanged) => {
+                            println!("Nothing to compress: conversation is short enough already.");
+                        }
+                        Ok(ManualCompress::Skipped) => {
+                            eprintln!("Compression skipped: summary failed or did not shorten the conversation.");
+                        }
+                        Err(error) => eprintln!("Compression failed: {error}"),
+                    }
                 }
                 "yolo" => {
                     if let Some(policy) = hermes_runtime::approval_policy::installed() {
@@ -147,6 +175,7 @@ pub async fn run(home: Option<&Path>, request: ChatRequest) -> Result<u8, String
                     announce(&session);
                     session = Some(argument.to_owned());
                     unsaved = None;
+                    guard.lock().unwrap().reset();
                     println!("The next turn continues session {argument}");
                 }
                 "retry" => match unsaved.take() {
@@ -166,9 +195,10 @@ pub async fn run(home: Option<&Path>, request: ChatRequest) -> Result<u8, String
         let mut output_open = true;
         let started = std::time::Instant::now();
         let outcome = tokio::select! {
-            result = chat::execute(
+            result = chat::execute_with_guard(
                 home,
                 turn,
+                Some(&guard),
                 |event| {
                     if let Event::Stderr(text) = &event {
                         if let Some(id) = text.strip_prefix("Session: ") {
