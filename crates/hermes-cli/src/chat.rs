@@ -648,7 +648,9 @@ where
                         &request.compression,
                         &primary,
                         summarizer.as_ref(),
-                        CompactionTrigger::Overflow,
+                        CompactionTrigger::Overflow {
+                            query: &request.query,
+                        },
                     )
                     .await;
                 if !matches!(compaction, CompactionOutcome::Applied) {

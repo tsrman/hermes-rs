@@ -4,6 +4,7 @@ mod browser_cdp;
 mod browser_url_policy;
 mod clarify;
 mod compaction;
+mod compaction_window;
 pub mod config;
 pub mod cron;
 pub mod delegation;

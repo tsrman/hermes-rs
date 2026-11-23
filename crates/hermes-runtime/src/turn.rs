@@ -102,7 +102,7 @@ pub enum CompactionTrigger<'a> {
     /// Before a turn, when the estimated input reaches the configured threshold.
     Estimate { query: &'a str },
     /// After the provider reported a context overflow.
-    Overflow,
+    Overflow { query: &'a str },
 }
 
 pub enum CompactionOutcome {
@@ -189,14 +189,15 @@ impl TurnHistory {
         let write_files = self.write_files;
         let terminal_enabled = self.terminal_enabled;
         let old_prefix = prefix_bytes(&system, &self.env);
-        let input_bytes = match trigger {
-            CompactionTrigger::Estimate { query } => {
-                old_prefix + messages_bytes(&self.messages) + query.len()
-            }
+        let (query, input_bytes) = match trigger {
+            CompactionTrigger::Estimate { query } => (
+                query,
+                old_prefix + messages_bytes(&self.messages) + query.len(),
+            ),
             // The provider already rejected the request, so the estimate no longer gates it.
-            CompactionTrigger::Overflow => usize::MAX,
+            CompactionTrigger::Overflow { query } => (query, usize::MAX),
         };
-        let Some(range) = settings.select(&self.messages, input_bytes) else {
+        let Some(range) = settings.select(&self.messages, query, input_bytes, false) else {
             return CompactionOutcome::Unchanged;
         };
         let middle = &self.messages[range.clone()];
@@ -488,6 +489,7 @@ where
                         summarizer.is_some(),
                         &mut sent,
                         first_new_message,
+                        squeezes > 0 || original.is_some(),
                     )
                     .await
                     {
@@ -553,6 +555,7 @@ where
                                 summarizer.is_some(),
                                 &mut sent,
                                 first_new_message,
+                                squeezes > 0 || original.is_some(),
                             )
                             .await
                             {
@@ -716,8 +719,10 @@ where
     Ok(TurnOutcome::IterationLimit)
 }
 
-/// Replace the steps of the running turn that come before its last two exchanges with a summary in
-/// `sent`, as the reference does when a request overflows the context window after tool calls.
+/// Replace the early part of `sent` with a summary, over the span the reference's compressor would
+/// pick for the whole request (head, token-budget tail, anchors; see `compaction_window`), as it does
+/// when the request nears the threshold or the provider refuses it. When the span reaches the running
+/// turn's own request, the request is restated after the summary so that it is not lost.
 /// `false` when nothing can be replaced or the summary is no shorter than what it replaces.
 async fn squeeze_turn(
     settings: &CompactionSettings,
@@ -725,8 +730,9 @@ async fn squeeze_turn(
     own_route: bool,
     sent: &mut Vec<Value>,
     query_index: usize,
+    after_pass: bool,
 ) -> bool {
-    let Some(range) = CompactionSettings::select_in_turn(sent, query_index) else {
+    let Some(range) = settings.select_in_turn(sent, after_pass) else {
         return false;
     };
     let middle = &sent[range.clone()];
@@ -748,7 +754,14 @@ async fn squeeze_turn(
     let Some(compaction) = CompactedHistory::new(range.clone(), &reply.content) else {
         return false;
     };
-    let summary = json!({"role": "user", "content": compaction.summary});
+    let mut text = compaction.summary;
+    if range.contains(&query_index) {
+        if let Some(query) = sent[query_index]["content"].as_str() {
+            text.push_str("\n\n[ACTIVE REQUEST, VERBATIM]\n");
+            text.push_str(query);
+        }
+    }
+    let summary = json!({"role": "user", "content": text});
     if messages_bytes(std::slice::from_ref(&summary)) >= messages_bytes(middle) {
         return false;
     }
