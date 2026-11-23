@@ -37,14 +37,14 @@
         "tool": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
       },
       {
-        "name": "mcp__xxxxxxxxxxxxxxxxxxxxxxxxxx__yyyyyyyyyyyyyyyyyyyyyyyyyy",
-        "server": "xxxxxxxxxxxxxxxxxxxxxxxxxx",
-        "tool": "yyyyyyyyyyyyyyyyyyyyyyyyyy"
+        "name": "mcp__xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx__yyyyyyyyyyyyyyyyyyyyyyyyyyy",
+        "server": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tool": "yyyyyyyyyyyyyyyyyyyyyyyyyyy"
       },
       {
-        "name": "mcp__xxxxxxxxxxxxxxxxxxxxxxxxxxx__yyyyyyyyyyyyyyyyyyyyyyyyyy",
-        "server": "xxxxxxxxxxxxxxxxxxxxxxxxxxx",
-        "tool": "yyyyyyyyyyyyyyyyyyyyyyyyyy"
+        "name": "mcp__xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx__yyyyyyyyyyyyyyyyyy_03fc670c",
+        "server": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tool": "yyyyyyyyyyyyyyyyyyyyyyyyyyyy"
       },
       {
         "name": "mcp__srv________________________________________________b69ed9ed",
@@ -164,6 +164,10 @@
       "structured_only": {
         "output": "{\"result\": {\"a\": 1, \"b\": [1.5, true, null], \"c\": \"ü\"}}",
         "wire": "{\"content\": [], \"structuredContent\": {\"a\": 1, \"b\": [1.5, true, null], \"c\": \"ü\"}}"
+      },
+      "wrapped_blank_next_to_structured": {
+        "output": "{\"result\": \"  \", \"structuredContent\": {\"result\": \"  \"}}",
+        "wire": "{\"content\": [{\"type\": \"text\", \"text\": \"  \"}], \"structuredContent\": {\"result\": \"  \"}}"
       },
       "wrapped_list": {
         "output": "{\"result\": \"[1, \\\"two\\\"]\"}",

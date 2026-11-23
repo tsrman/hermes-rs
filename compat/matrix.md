@@ -56,7 +56,7 @@ P0 относится к первому CLI-релизу, P3 — к заключ
 | `skills_list`, `skill_view`, `skill_manage` | навыки включены | `skill_manage` одобряется каждый раз |
 | `web_search`, `web_extract` | настроен бэкенд | Tavily, Perplexity, Exa, Parallel, Firecrawl (с ключом или своим сервером), Keenable (с ключом), xAI (поиск), SearXNG (поиск), Brave (поиск). Exa и Parallel без ключа отказывают явно (бесплатный режим эталона ходит на удалённые MCP-серверы и не перенесён). openai_native, DDGS не поддержаны; Keenable без ключа и xAI без `XAI_API_KEY` отказывают явно |
 | `browser_cdp` | задан endpoint DevTools | Остальные browser-инструменты не поддержаны |
-| MCP (`mcp_<сервер>_<инструмент>`) | `mcp_servers` | stdio и Streamable HTTP, отмена вызова, обновление истёкшей сессии, возобновление потока, ресурсы (`tools.resources`). OAuth, `sampling`, prompts и события, SSE-транспорт не поддержаны; двоичные ресурсы не сохраняются |
+| MCP (`mcp__<сервер>__<инструмент>`) | `mcp_servers` | Имена и ответы `tools/call` как в эталоне (сверено с записью), таймаут вызова 300 с или `timeouts.mcp.tool_call`; сохранённые сессии с прежними именами `mcp_<сервер>_<инструмент>` воспроизводятся, но вызов под старым именем неизвестен. stdio и Streamable HTTP, отмена вызова, обновление истёкшей сессии, возобновление потока, ресурсы (`tools.resources`). OAuth, `sampling`, prompts и события, SSE-транспорт не поддержаны; двоичные ресурсы не сохраняются |
 | `tool_search`, `tool_describe`, `tool_call` | всегда | Мост к инструментам, скрытым набором или мостом |
 | Voice, TTS, vision, `cronjob_manage`, `fact_store`, генерация изображений | | Не поддержаны |
 

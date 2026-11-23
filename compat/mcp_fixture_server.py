@@ -1,7 +1,7 @@
 """Minimal MCP stdio server used by compatibility and runtime tests.
 
 HERMES_MCP_LOG names a file that receives one JSON line for every `tools/call`, `resources/read`
-and `notifications/cancelled` the server gets (with its params). HERMES_MCP_EXTRA=1 adds tools whose names collide after sanitising and tools that answer with an
+and `notifications/cancelled` the server gets (with its params). HERMES_MCP_SLOW_LIST=1 makes `tools/list` take 30 s. HERMES_MCP_EXTRA=1 adds tools whose names collide after sanitising and tools that answer with an
 empty `isError`, `structuredContent` and `_meta`. HERMES_MCP_RESOURCES=1 adds the
 `resources` capability with `resources/list` and `resources/read`. The `slow` tool runs beside
 the request loop, so a cancellation reaches the server; a cancelled call is never answered.
@@ -35,7 +35,8 @@ if EXTRA:
     TOOLS[1] += [
         {"name": "dup-x", "description": "Collides with dup_x.", "inputSchema": {"type": "object"}},
         {"name": "dup_x", "description": "Collides with dup-x.", "inputSchema": {"type": "object"}},
-        {"name": "list.resources", "description": "Collides with the resource tool.", "inputSchema": {"type": "object"}},
+        {"name": "list.resources", "description": "Collides with list-resources.", "inputSchema": {"type": "object"}},
+        {"name": "list-resources", "description": "Collides with list.resources.", "inputSchema": {"type": "object"}},
         {"name": "echo", "description": "Listed twice.", "inputSchema": {"type": "object"}},
         {"name": "empty-error", "description": "isError without content.", "inputSchema": {"type": "object"}},
         {"name": "rich", "description": "structuredContent and _meta.", "inputSchema": {"type": "object"}},
@@ -116,6 +117,8 @@ for line in sys.stdin:
             "protocolVersion": "2025-06-18", "capabilities": capabilities,
             "serverInfo": {"name": "fixture", "version": "1"}}})
     elif method == "tools/list":
+        if os.environ.get("HERMES_MCP_SLOW_LIST") == "1":
+            time.sleep(30)
         cursor = message.get("params", {}).get("cursor")
         page = 1 if cursor == "page2" else 0
         result = {"tools": TOOLS[page]}

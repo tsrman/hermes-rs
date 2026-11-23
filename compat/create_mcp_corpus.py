@@ -265,6 +265,7 @@ def record_calls():
         "structured_next_to_prose": {"content": [text("summary")], "structuredContent": {"a": 1, "z": 2}},
         "wrapped_string": {"content": [text("abc")], "structuredContent": {"result": "abc"}},
         "wrapped_number": {"content": [text("7")], "structuredContent": {"result": 7}},
+        "wrapped_blank_next_to_structured": {"content": [text("  ")], "structuredContent": {"result": "  "}},
         "wrapped_list": {"content": [text("1"), text("two")], "structuredContent": {"result": [1, "two"]}},
         "wrapped_list_mismatch": {"content": [text("1")], "structuredContent": {"result": [1, 2]}},
         "wrapped_other_key": {"content": [text("x")], "structuredContent": {"result": "x", "more": 1}},
@@ -288,7 +289,7 @@ def record_calls():
         # The document cache path of a saved binary block differs on every run.
         results[name] = {"wire": json.dumps(wire, ensure_ascii=False), "output": re.sub(r"saved to \S+ \(", "saved to <path> (", output)}
     names = [("srv", "echo"), ("my-server.v2", "do-it.now"), ("ünï", "tööl"), ("", ""), ("a b", "c/d"),
-             ("srv", "list_resources"), ("x" * 40, "y" * 40), ("x" * 26, "y" * 26), ("x" * 27, "y" * 26),
+             ("srv", "list_resources"), ("x" * 40, "y" * 40), ("x" * 30, "y" * 27), ("x" * 30, "y" * 28),
              ("srv", "ü" * 70)]
     named = [{"server": s, "tool": t, "name": mcp_prefixed_tool_name(s, t)} for s, t in names]
 

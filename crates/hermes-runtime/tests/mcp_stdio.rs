@@ -290,8 +290,8 @@ async fn names_two_tools_share_are_given_to_neither_and_a_server_keeps_what_it_h
     let (mut clients, warnings) = McpClients::start(&[first, second]).await;
     assert!(warnings.is_empty(), "{warnings:?}");
     // `dup-x` and `dup_x` are the same name once sanitised: neither is exposed. A tool listed
-    // twice is exposed once. `list.resources` is a tool of the server and wins over the utility
-    // of the same name, `read_resource` stays. The second server sanitises to the same names and
+    // twice is exposed once. `list.resources` and `list-resources` are one name, so neither is exposed and the utility
+    // of that name is dropped as well; `read_resource` stays. The second server sanitises to the same names and
     // gets none of them.
     assert_eq!(
         names(&clients),
@@ -302,11 +302,25 @@ async fn names_two_tools_share_are_given_to_neither_and_a_server_keeps_what_it_h
             "mcp__a_b__slow",
             "mcp__a_b__spawn_child",
             "mcp__a_b__image",
-            "mcp__a_b__list_resources",
             "mcp__a_b__empty_error",
             "mcp__a_b__rich",
             "mcp__a_b__read_resource",
         ]
     );
+    clients.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_server_that_lists_its_tools_too_slowly_gets_the_connect_timeout_not_the_call_timeout() {
+    // The reference bounds the whole connection (and so `tools/list`) with `connect_timeout`; the
+    // time a tool call may take must not stretch it.
+    let mut server = config("slow", 30);
+    server.connect_timeout_secs = 1;
+    server.env.insert("HERMES_MCP_SLOW_LIST".into(), "1".into());
+    let started = std::time::Instant::now();
+    let (mut clients, warnings) = McpClients::start(&[server]).await;
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("timed out"), "{warnings:?}");
     clients.shutdown().await;
 }
