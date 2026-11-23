@@ -641,6 +641,7 @@ async fn run_job(
     let mut watch = tokio::time::interval(Duration::from_millis(100));
     watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut ticks: u64 = 0;
+    let mut last_heartbeat = Instant::now();
     let result = loop {
         tokio::select! {
             result = &mut turn => break Some(result),
@@ -655,7 +656,8 @@ async fn run_job(
                     return (false, Some("job removed while running".to_owned()), Some("cancelled"), document);
                 }
                 // Every ten seconds: keep the fire claim alive.
-                if let Some(owner) = owner.filter(|_| ticks.is_multiple_of(100)) {
+                if let Some(owner) = owner.filter(|_| last_heartbeat.elapsed() >= Duration::from_secs(10)) {
+                    last_heartbeat = Instant::now();
                     if !manage::heartbeat(home, now_in(now.timezone()), id, owner)
                         && store::job_exists(home, id)
                     {

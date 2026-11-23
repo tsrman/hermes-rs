@@ -341,6 +341,16 @@ class CronWriteTest(CronCliTest):
         self.assertEqual((job["model"], job["catch_up"]), ("m2", True))
         self.assertEqual(after["jobs"][1], before["jobs"][1])
 
+    def test_edit_flags_for_wrap_response_and_failure_deliver_reach_the_store(self):
+        self.read_json("add", "0 9 * * *", "Brief", "--name", "Brief", timezone="UTC")
+        self.read_json("edit", "brief", "--wrap-response", "--failure-deliver", "local")
+        job = self.stored()[0]
+        self.assertEqual((job["wrap_response"], job["failure_deliver"]), (True, "local"))
+        self.read_json("edit", "brief", "--inherit-wrap-response", "--failure-deliver", "")
+        job = self.stored()[0]
+        self.assertEqual((job["wrap_response"], job["failure_deliver"]), (None, None))
+        self.assertIn("wrap_response", job)
+
     # ---- terminal states ----
 
     def test_pause_and_resume_treat_finished_jobs_as_the_reference_does(self):
@@ -732,8 +742,11 @@ class CronTickTest(unittest.TestCase):
         self.write(self.job("brief", {"kind": "interval", "minutes": 30}, next_run_at=self.when(20)))
         process = self.start_slow_run("run", "brief")
         first = self.read()["brief"]["fire_claim"]
-        time.sleep(11)
-        later = self.read()["brief"]["fire_claim"]
+        later = first
+        deadline = time.monotonic() + 25
+        while later["at"] == first["at"] and time.monotonic() < deadline:
+            time.sleep(0.5)
+            later = self.read()["brief"]["fire_claim"]
         self.assertEqual(later["by"], first["by"])
         self.assertGreater(datetime.fromisoformat(later["at"]), datetime.fromisoformat(first["at"]))
         subprocess.run([str(BINARY), "cron", "remove", "brief"], env=self.env, check=True, capture_output=True,
