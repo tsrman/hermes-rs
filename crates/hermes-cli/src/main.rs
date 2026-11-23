@@ -98,7 +98,20 @@ async fn run() -> Result<u8, String> {
             Ok(0)
         }
         Command::Chat(args) => {
-            let request = chat::prepare(home, args)?;
+            let events_json = args.events_json;
+            let emit_json_err = |error: String| -> Result<u8, String> {
+                if events_json {
+                    chat::write_stdout_line(&chat::json_error(&error));
+                    chat::write_stdout_line(&chat::json_done(1, "error"));
+                    Ok(1)
+                } else {
+                    Err(error)
+                }
+            };
+            let request = match chat::prepare(home, args) {
+                Ok(request) => request,
+                Err(error) => return emit_json_err(error),
+            };
             approval::install(request.approvals().clone());
             if request.is_unattended(approval::available()) {
                 if let Some(policy) = hermes_runtime::approval_policy::installed() {
@@ -110,20 +123,40 @@ async fn run() -> Result<u8, String> {
             }
             #[cfg(unix)]
             if let Some(home) = home {
-                if let Some(connection) = owner::connect(home).await? {
-                    return owner::forward(connection, request).await;
+                match owner::connect(home).await {
+                    Ok(Some(connection)) => match owner::forward(connection, request).await {
+                        Ok(code) => return Ok(code),
+                        Err(error) => return emit_json_err(error),
+                    },
+                    Ok(None) => {}
+                    Err(error) => return emit_json_err(error),
                 }
             }
-            tokio::select! {
-                result = chat::execute(home, request, |event| chat::display(event).is_ok(), approval::prompt) => result,
+            let mut cancelled = false;
+            let outcome = tokio::select! {
+                result = chat::execute(home, request, |event| chat::display(event).is_ok(), approval::prompt) => {
+                    match result {
+                        Ok(code) => Ok(code),
+                        Err(error) => emit_json_err(error),
+                    }
+                }
                 signal = tokio::signal::ctrl_c() => {
                     signal.map_err(|error| format!("signal handler failed: {error}"))?;
-                    // The turn was dropped: tell the MCP servers its calls are cancelled.
-                    hermes_runtime::mcp::flush_cancellations().await;
-                    eprintln!("interrupted");
+                    cancelled = true;
                     Ok(130)
                 }
+            };
+            if cancelled {
+                // The turn was dropped: tell the MCP servers its calls are cancelled.
+                hermes_runtime::mcp::flush_cancellations().await;
+                if events_json {
+                    chat::write_stdout_line(&chat::json_cancelled(130));
+                    chat::write_stdout_line(&chat::json_done(130, "cancelled"));
+                } else {
+                    eprintln!("interrupted");
+                }
             }
+            outcome
         }
         #[cfg(unix)]
         Command::Owner => {

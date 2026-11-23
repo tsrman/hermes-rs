@@ -16,7 +16,7 @@ P0 относится к первому CLI-релизу, P3 — к заключ
 | P0 | Релизные сборки CLI Linux x86_64 | Rust CLI и Python-эталон | Debian GNU, Alpine musl, живой HTTPS и замеры на loopback | [Сборки и замеры проверены](#релизная-проверка-и-замеры-cli) |
 | P2 | Anthropic, Codex и остальные провайдеры | `providers/`, `agent/anthropic_adapter.py` | Фикстуры запросов, streaming, OAuth и live smoke | Anthropic Messages по API-ключу проверен на имитаторе SSE (текст, tool use, retry 529, обрыв). OpenAI Responses по API-ключу проверен на имитаторе SSE. 32 именованных провайдера по ключу сверены с эталоном (см. «Режимы провайдера»). OAuth и Codex OAuth не проверены |
 | P2 | MCP, browser, web, voice и среды исполнения | `tools/mcp_tool.py`, `tools/environments/`, `tools/` | Контракты протоколов, отмена, очистка процессов | MCP stdio и Streamable HTTP проверены на фикстурах (список, вызов, ошибки, таймаут, окружение, очистка группы процессов на Linux, сессия и заголовки HTTP). Отмена вызова (`notifications/cancelled`), обновление истёкшей сессии (повтор только для `readOnlyHint`), возобновление потока по `Last-Event-ID` и ресурсы (`list_resources`, `read_resource`) сверены с записью клиента SDK `mcp` 2.3.0 против тех же фикстурных серверов (`compat/create_mcp_corpus.py`); тексты ошибок и ответов ресурсов взяты из обработчиков эталона. `web_search` и `web_extract` проверены на имитаторах для Tavily, SearXNG и Brave, а Perplexity, Exa и Parallel сверены с записью эталона (`compat/create_web_backend_corpus.py`, `create_web_sdk_corpus.py`: запрос, заголовок ключа, текст для модели, ошибки источника, повторы Parallel). Firecrawl (ключ или свой сервер, `compat/create_web_firecrawl_corpus.py`) тоже сверен с записью. Keenable (с ключом) и xAI (поиск через `web_search` Responses API, только `XAI_API_KEY`) сверены с записью (`compat/create_web_rest_corpus.py`, 62 случая). openai_native (нужен OAuth Codex), DDGS, управляемый шлюз Nous и бесплатный режим без ключей не реализованы. Browser и voice не проверены |
-| P2 | Навыки и плагины | `skills/`, `agent/skill_utils.py`, `tools/skills_tool.py`, `plugins/` | Discovery, lifecycle hooks, Python API и изоляция | Сверены индекс Markdown-навыков и чтение `SKILL.md` |
+| P2 | Навыки и плагины | `skills/`, `agent/skill_utils.py`, `tools/skills_tool.py`, `plugins/` | Discovery, lifecycle hooks, Python API и изоляция | Сверены индекс Markdown-навыков, `skill_view` и `skill_manage`. Задокументирован интерфейс расширений ([docs/extensions.md](../docs/extensions.md)), проверены `hermes chat --events-json` (`version: 1`), Python SDK-обёртка и Python MCP-плагин (`compat/test_extensions.py`: события, отмена, изоляция профиля/окружения, отсутствие интерпретатора). Хуки жизненного цикла и плагины с зависимостью от внутренних Python-объектов не загружаются внутрь процесса (см. раздел ниже) |
 | P2 | Локальный cron, Kanban, делегирование и batch | `cron/`, `tools/delegate_tool.py`, `batch_runner.py` | Миграция, таймзоны, рестарт и вывод результатов | Cron: разбор расписаний и расчёт следующего запуска сверены с эталоном на 323 случаях (DST, зоны); `add`, `edit`, `run`, `pause`, `resume` (в том числе `--at`, `--run-now`), `remove` и `tick` для простых заданий с локальным результатом пишут `jobs.json` так же, как эталон (146 записанных шагов, живой обход туда и обратно). Скрипты, навыки, мониторы, `workdir`, `context_from`, доставка, журнал выполнений не поддержаны и отклоняются явно; команды `cancel`, `status`, `runs`, `incidents`, `notepad`, `doctor` не перенесены; Kanban, делегирование и batch не проверены |
 | P3 | Канонический gateway | `gateway/session_authority.py`, `tui_gateway/contracts/` | Канонический протокол, переподключение, approvals, `runtime_epoch`, отказ после захвата | Не проверено |
 | P3 | Существующие TUI и Desktop, ACP, dashboard и API server | `ui-tui/`, `apps/desktop/`, `apps/shared/`, `acp_adapter/`, `web/` | Сквозные сценарии каждого заявленного клиента | Не проверено |
@@ -30,7 +30,7 @@ P0 относится к первому CLI-релизу, P3 — к заключ
 
 | Команда | Что делает | Статус |
 | --- | --- | --- |
-| `hermes chat -q <запрос>` | Один ход, потоковый ответ, инструменты. `--oneshot` запрещает вопросы человеку. | Проверено |
+| `hermes chat -q <запрос>` | Один ход, потоковый ответ, инструменты. `--oneshot` запрещает вопросы человеку; `--events-json` выводит версионированный NDJSON (`version: 1`). | Проверено |
 | `hermes chat` (без `-q`) | Интерактивный диалог: `rustyline`, история, Ctrl-C останавливает ход, `/sessions`, `/resume`, `/model`, `/yolo`, `/retry`. | Проверено |
 | `chat --save-session`, `--resume <id>`, `--continue` | Сохранение хода, продолжение сессии с арендой SQLite, последняя сессия CLI. | Проверено, включая `SIGKILL` посреди хода и отмену |
 | `chat --yolo`, `approvals.mode: off` | Одобрять всё, кроме `approvals.deny` и пола детектора (hardline). | Проверено |
@@ -235,3 +235,26 @@ Rust заменил середину истории сводкой в сесси
 ## Локальный владелец
 
 Проверены `chat` и `--resume` через Unix-сокет выбранного профиля. Второй владелец и параллельный ход в той же сессии отклоняются. Пользовательский вывод сохраняется при серии коротких SSE-событий. Тесты подтвердили отмену и освобождение аренды при `Ctrl+C`, отключении клиента и штатном завершении владельца. После аварийного завершения между ходами новый владелец заменил устаревший сокет и возобновил сохранённую сессию.
+
+## Интерфейс расширений и Python-плагины
+
+Документация контракта: [docs/extensions.md](../docs/extensions.md). Сквозные проверки (`compat/test_extensions.py`) подтверждают на реальном бинарнике `hermes`:
+
+- версионированный поток событий `hermes chat --events-json` (`version: 1`) через [examples/extensions/hermes_sdk.py](../examples/extensions/hermes_sdk.py) — стриминг `text`, `tool_started`/`tool_finished`, `fallback`, `iteration_limit`, `warning`, `usage`, `session`, `done`, работа напрямую и через `hermes owner`;
+- отмену хода по `SIGINT` (в том числе через `hermes owner` и во время вызова Python MCP-плагина) с событиями `cancelled` + `done`, освобождением аренды SQLite и остановкой дочернего процесса плагина;
+- изоляцию профилей (сессии профиля А недоступны из профиля Б, посторонние ключи окружения не передаются в `hermes` и в процесс MCP-плагина [examples/extensions/python_mcp_plugin.py](../examples/extensions/python_mcp_plugin.py));
+- обработку отсутствующего бинарника `hermes` (`HermesBinaryNotFoundError`), отсутствующего интерпретатора Python в `mcp_servers` (структурированный `warning`, ход продолжается) и отсутствующего `python3` в `execute_code` (структурированная ошибка инструмента без падения CLI);
+- совместимость Markdown-навыков (`SKILL.md`) через SDK.
+
+Плагины эталона, зависящие от внутренних Python-объектов, и требуемые изменения:
+
+| Категория плагина | Зависимость в эталоне | Статус в Rust CLI | Требуемые изменения |
+| --- | --- | --- | --- |
+| Markdown-навыки (`skills/*/SKILL.md`) | Нет (кроме `skills.inline_shell`) | Поддержано | Без изменений; команды из `inline_shell` вынести в явный инструмент или MCP |
+| Пользовательские инструменты (`tools/registry.py`) | Внутренний реестр и состояние `AIAgent` | Замена через MCP | Оформить как MCP-сервер (`stdio` или Streamable HTTP) в `mcp_servers` |
+| Интеграции с `AIAgent.run_conversation` | Импорт `AIAgent`, Python-колбэки | Замена через `--events-json` / SDK | Использовать `hermes chat --events-json` и `hermes_sdk.py` |
+| Хуки жизненного цикла (`plugins/`, `hooks/`) | Мутация сообщений и вызовов в памяти `AIAgent` | Не поддержано | Перенести логику во внешний MCP-инструмент, `approvals.*` или обёртку над `--events-json` |
+| Плагины памяти (`memory_provider`, `holographic`, `fact_store`) | Интерфейс `MemoryProvider` | Не поддержано | Использовать встроенную память или вынести внешнее хранилище в MCP |
+| Платформенные адаптеры (`plugins/platforms/`) | Внутренний `gateway/` | Не поддержано (этап 6) | Перенос на этапе 6 или внешний бот поверх `--events-json` / `hermes owner` |
+| Провайдеры с переписыванием сообщений (NVIDIA, кастомный OAuth) | Классы адаптеров `providers/` | Не поддержано | Профили OpenAI/Anthropic/Responses задавать в `providers:`; остальное требует реализации в `hermes-runtime` или локального прокси |
+| `quick_commands`, `skills.inline_shell`, расширения TUI | Внутренний цикл `cli.py` / Ink TUI | Не поддержано | Внешние обёртки CLI; для исполнения команд из файлов навыков/быстрых команд нужна отдельная политика одобрений |

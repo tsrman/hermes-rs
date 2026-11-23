@@ -162,10 +162,60 @@ pub struct ChatArgs {
     /// Append what the turn sent, received and ran to this file, one JSON object per line.
     #[arg(long, env = "HERMES_DEBUG_LOG", value_name = "FILE")]
     debug_log: Option<OsString>,
+    /// Emit versioned JSON Lines events on stdout instead of plain text (requires --query).
+    #[arg(long)]
+    pub events_json: bool,
+}
+
+pub const EVENTS_JSON_VERSION: u32 = 1;
+
+pub fn json_event(kind: &str, mut fields: serde_json::Map<String, serde_json::Value>) -> String {
+    let mut payload = serde_json::Map::new();
+    payload.insert("version".into(), serde_json::json!(EVENTS_JSON_VERSION));
+    payload.insert("event".into(), serde_json::json!(kind));
+    payload.append(&mut fields);
+    let mut line = serde_json::Value::Object(payload).to_string();
+    line.push('\n');
+    line
+}
+
+pub fn json_warning(message: &str) -> String {
+    let mut fields = serde_json::Map::new();
+    fields.insert("message".into(), serde_json::json!(message));
+    json_event("warning", fields)
+}
+
+pub fn json_error(message: &str) -> String {
+    let mut fields = serde_json::Map::new();
+    fields.insert("message".into(), serde_json::json!(message));
+    json_event("error", fields)
+}
+
+pub fn json_cancelled(exit_code: u8) -> String {
+    let mut fields = serde_json::Map::new();
+    fields.insert("exit_code".into(), serde_json::json!(exit_code));
+    json_event("cancelled", fields)
+}
+
+pub fn json_done(exit_code: u8, status: &str) -> String {
+    let mut fields = serde_json::Map::new();
+    fields.insert("exit_code".into(), serde_json::json!(exit_code));
+    fields.insert("status".into(), serde_json::json!(status));
+    json_event("done", fields)
+}
+
+pub fn write_stdout_line(line: &str) {
+    let mut output = io::stdout().lock();
+    let _ = output.write_all(line.as_bytes());
+    let _ = output.flush();
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct ChatRequest {
+    #[serde(default)]
+    events_json: bool,
+    #[serde(default)]
+    startup_warnings: Vec<String>,
     #[serde(default)]
     state_scope: Option<String>,
     /// Where the compression summary is made; the main route when unset.
@@ -307,6 +357,11 @@ pub fn display(event: Event) -> io::Result<()> {
 }
 
 pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, String> {
+    if args.events_json && args.query.is_none() {
+        return Err("--events-json requires --query".into());
+    }
+    let oneshot = args.oneshot || args.events_json;
+    let mut startup_warnings = Vec::new();
     if args.continue_last {
         let home = home.ok_or("profile root is unavailable")?;
         let store = hermes_runtime::storage::SessionStore::open_read_only(home)
@@ -362,7 +417,12 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
     settings.terminal_env.scratch = home.and_then(hermes_runtime::scratch::directory);
     hermes_runtime::redact::set_enabled(settings.redact_secrets);
     if !settings.redact_secrets {
-        eprintln!("Warning: secret redaction is off (security.redact_secrets or HERMES_REDACT_SECRETS); credentials in tool output reach the model unmasked.");
+        let message = "secret redaction is off (security.redact_secrets or HERMES_REDACT_SECRETS); credentials in tool output reach the model unmasked.";
+        if args.events_json {
+            startup_warnings.push(message.to_owned());
+        } else {
+            eprintln!("Warning: {message}");
+        }
     }
     let mut extras = hermes_runtime::providers::Extras::default();
     // A named provider's own request fields (what its hooks add with no reasoning setting).
@@ -419,18 +479,25 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         &api_key,
         true,
     )?;
-    Ok(ChatRequest {
-        state_scope: None,
-        prefill: match settings.prefill_file.as_deref() {
-            Some(path) => {
-                let (messages, warning) = hermes_runtime::config::load_prefill(path, home);
-                if let Some(warning) = warning {
+    let prefill = match settings.prefill_file.as_deref() {
+        Some(path) => {
+            let (messages, warning) = hermes_runtime::config::load_prefill(path, home);
+            if let Some(warning) = warning {
+                if args.events_json {
+                    startup_warnings.push(warning);
+                } else {
                     eprintln!("Warning: {warning}");
                 }
-                messages
             }
-            None => Vec::new(),
-        },
+            messages
+        }
+        None => Vec::new(),
+    };
+    Ok(ChatRequest {
+        events_json: args.events_json,
+        startup_warnings,
+        state_scope: None,
+        prefill,
         summary,
         delegate,
         root: std::env::current_dir()
@@ -447,13 +514,13 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         keep_phone_numbers: settings.keep_phone_numbers,
         debug_log: args.debug_log.clone(),
         delegation: settings.delegation.clone(),
-        oneshot: args.oneshot,
+        oneshot,
         approvals: {
             let mut approvals = settings.approvals.clone();
             approvals.approve_all |= args.yolo;
             approvals
         },
-        approval_timeout_secs: ((!args.oneshot && crate::approval::available())
+        approval_timeout_secs: ((!oneshot && crate::approval::available())
             || settings.approvals.answers_without_a_person()
             || args.yolo)
             .then_some(settings.approval_timeout_secs),
@@ -540,9 +607,19 @@ where
         Some(route) => Some(route.open(route.model.clone().unwrap_or(model), request.attempts)?),
         None => None,
     };
+    let json_mode = request.events_json;
+    for warning in &request.startup_warnings {
+        if json_mode {
+            emit(Event::Stdout(json_warning(warning)));
+        }
+    }
     let (clients, warnings) = McpClients::start(&request.mcp_servers).await;
     for warning in warnings {
-        emit(Event::Stderr(warning));
+        if json_mode {
+            emit(Event::Stdout(json_warning(&warning)));
+        } else {
+            emit(Event::Stderr(warning));
+        }
     }
     let mcp = tokio::sync::Mutex::new(clients);
     let journal = match &request.debug_log {
@@ -611,9 +688,15 @@ where
             let mut retried = false;
             loop {
                 if let CompactionOutcome::Skipped = compaction {
-                    receiving = emit(Event::Stderr(
-                        "Context compression skipped: no usable shorter context.".into(),
-                    ));
+                    receiving = emit(if json_mode {
+                        let mut fields = serde_json::Map::new();
+                        fields.insert("reason".into(), serde_json::json!("skipped"));
+                        Event::Stdout(json_event("context_compressed", fields))
+                    } else {
+                        Event::Stderr(
+                            "Context compression skipped: no usable shorter context.".into(),
+                        )
+                    });
                 }
                 // Output or tool effects from a failed attempt cannot be replayed safely.
                 let mut started = false;
@@ -626,7 +709,11 @@ where
                     |event| {
                         started |= matches!(event, TurnEvent::Text(_) | TurnEvent::ToolStarted(_));
                         if receiving {
-                            receiving = emit(format_event(event));
+                            receiving = emit(if json_mode {
+                                format_json_event(event)
+                            } else {
+                                format_event(event)
+                            });
                         }
                     },
                     &mut approve,
@@ -656,9 +743,15 @@ where
                 if !matches!(compaction, CompactionOutcome::Applied) {
                     break result;
                 }
-                receiving = emit(Event::Stderr(
-                    "Context window exceeded: retrying with compressed history.".into(),
-                ));
+                receiving = emit(if json_mode {
+                    let mut fields = serde_json::Map::new();
+                    fields.insert("reason".into(), serde_json::json!("overflow"));
+                    Event::Stdout(json_event("context_compressed", fields))
+                } else {
+                    Event::Stderr(
+                        "Context window exceeded: retrying with compressed history.".into(),
+                    )
+                });
             }
         };
         let period = Duration::from_secs(60);
@@ -676,24 +769,75 @@ where
         }
     };
     mcp.lock().await.shutdown().await;
-    if !receiving || !emit(Event::Stdout("\n".into())) {
+    if !receiving || (!json_mode && !emit(Event::Stdout("\n".into()))) {
         return Err("chat output was interrupted".into());
     }
     match outcome {
         TurnOutcome::Completed(turn) => {
-            if request.state_scope.is_some() {
-                let (input, output) = turn.usage();
+            let (input, output) = turn.usage();
+            if json_mode {
+                let mut fields = serde_json::Map::new();
+                fields.insert("input_tokens".into(), serde_json::json!(input));
+                fields.insert("output_tokens".into(), serde_json::json!(output));
+                emit(Event::Stdout(json_event("usage", fields)));
+            } else if request.state_scope.is_some() {
                 emit(Event::Stderr(format!("Usage: {input} {output}")));
             }
             if let Some(mut writer) = writer {
                 let id = block_in_place(|| writer.save(&turn, root))
                     .map_err(|error| error.to_string())?;
-                emit(Event::Stderr(format!("Session: {id}")));
+                if json_mode {
+                    let mut fields = serde_json::Map::new();
+                    fields.insert("id".into(), serde_json::json!(id));
+                    emit(Event::Stdout(json_event("session", fields)));
+                } else {
+                    emit(Event::Stderr(format!("Session: {id}")));
+                }
+            }
+            if json_mode {
+                emit(Event::Stdout(json_done(0, "completed")));
             }
             Ok(0)
         }
-        TurnOutcome::IterationLimit => Ok(1),
+        TurnOutcome::IterationLimit => {
+            if json_mode {
+                emit(Event::Stdout(json_done(1, "iteration_limit")));
+            }
+            Ok(1)
+        }
     }
+}
+
+fn format_json_event(event: TurnEvent<'_>) -> Event {
+    let mut fields = serde_json::Map::new();
+    let line = match event {
+        TurnEvent::Text(text) => {
+            fields.insert("text".into(), serde_json::json!(text));
+            json_event("text", fields)
+        }
+        TurnEvent::Fallback(model) => {
+            fields.insert("model".into(), serde_json::json!(model));
+            json_event("fallback", fields)
+        }
+        TurnEvent::ToolStarted(name) => {
+            fields.insert("name".into(), serde_json::json!(name));
+            json_event("tool_started", fields)
+        }
+        TurnEvent::ToolFinished { name, succeeded } => {
+            fields.insert("name".into(), serde_json::json!(name));
+            fields.insert("succeeded".into(), serde_json::json!(succeeded));
+            json_event("tool_finished", fields)
+        }
+        TurnEvent::IterationLimit(limit) => {
+            fields.insert("limit".into(), serde_json::json!(limit));
+            json_event("iteration_limit", fields)
+        }
+        TurnEvent::ContextSqueezed => {
+            fields.insert("reason".into(), serde_json::json!("midturn"));
+            json_event("context_compressed", fields)
+        }
+    };
+    Event::Stdout(line)
 }
 
 fn format_event(event: TurnEvent<'_>) -> Event {
@@ -738,6 +882,7 @@ pub async fn run_text(
         api_key: env("HERMES_API_KEY"),
         yolo: false,
         debug_log: None,
+        events_json: false,
     };
     let mut request = prepare(home, args)?;
     request.tools = hermes_runtime::config::load_tool_policy(home, platform)?;
@@ -803,5 +948,10 @@ impl ChatRequest {
 
     pub fn approvals(&self) -> &hermes_runtime::approval_policy::ApprovalSettings {
         &self.approvals
+    }
+
+    #[cfg(unix)]
+    pub fn events_json(&self) -> bool {
+        self.events_json
     }
 }

@@ -179,6 +179,7 @@ pub async fn serve(home: &Path) -> Result<(), String> {
 }
 
 pub async fn forward(mut stream: UnixStream, request: ChatRequest) -> Result<u8, String> {
+    let events_json = request.events_json();
     let start = Start {
         version: VERSION,
         request,
@@ -191,7 +192,12 @@ pub async fn forward(mut stream: UnixStream, request: ChatRequest) -> Result<u8,
         }
         signal = &mut interrupt => {
             signal.map_err(|error| format!("signal handler failed: {error}"))?;
-            eprintln!("interrupted");
+            if events_json {
+                chat::write_stdout_line(&chat::json_cancelled(130));
+                chat::write_stdout_line(&chat::json_done(130, "cancelled"));
+            } else {
+                eprintln!("interrupted");
+            }
             return Ok(130);
         }
     };
@@ -300,6 +306,7 @@ async fn handle(mut stream: UnixStream, home: &Path) -> io::Result<()> {
         .await?;
         return write_frame(&mut stream, &Event::Exit(1)).await;
     }
+    let events_json = request.events_json();
     let (mut reader, mut writer) = stream.into_split();
     let (events, mut buffered) = mpsc::unbounded_channel();
     let queued = AtomicUsize::new(0);
@@ -343,11 +350,12 @@ async fn handle(mut stream: UnixStream, home: &Path) -> io::Result<()> {
                 }
             }
         };
+        let mut cancelled = false;
         let result = tokio::select! {
             biased;
             control = read_controls(&mut reader, &pending) => match control {
                 Ok(()) => {
-                    let _ = events.send((Event::Stderr("interrupted".into()), 0));
+                    cancelled = true;
                     Ok(130)
                 }
                 Err(error) if error.kind() == io::ErrorKind::InvalidData => Err(error.to_string()),
@@ -356,10 +364,24 @@ async fn handle(mut stream: UnixStream, home: &Path) -> io::Result<()> {
             _ = stalled.notified() => Err("local owner output buffer is full".into()),
             result = chat::execute(Some(home), request, &queue, approve) => result,
         };
+        if cancelled {
+            hermes_runtime::mcp::flush_cancellations().await;
+            if events_json {
+                let _ = events.send((Event::Stdout(chat::json_cancelled(130)), 0));
+                let _ = events.send((Event::Stdout(chat::json_done(130, "cancelled")), 0));
+            } else {
+                let _ = events.send((Event::Stderr("interrupted".into()), 0));
+            }
+        }
         let code = match result {
             Ok(code) => code,
             Err(error) => {
-                let _ = events.send((Event::Stderr(error), 0));
+                if events_json {
+                    let _ = events.send((Event::Stdout(chat::json_error(&error)), 0));
+                    let _ = events.send((Event::Stdout(chat::json_done(1, "error")), 0));
+                } else {
+                    let _ = events.send((Event::Stderr(error), 0));
+                }
                 1
             }
         };
