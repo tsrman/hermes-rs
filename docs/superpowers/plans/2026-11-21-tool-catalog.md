@@ -2,19 +2,21 @@
 
 Цель — довести набор инструментов Rust CLI до набора эталона из списка ниже. Каждый инструмент проходит один и тот же путь: схема записана из эталона, поведение сверено на фикстурах, тест на имитаторе, строка в `compat/matrix.md`.
 
-## Что уже есть
+## Что уже есть (актуализировано 2026-11-24)
 
 | Набор | Инструменты | Состояние |
 | --- | --- | --- |
-| web | `web_search`, `web_extract` | Сделано для Tavily, SearXNG, Brave, Perplexity, Exa, Parallel, Firecrawl, Keenable и xAI (`web_tools.rs`, `web_vendors.rs`). Нет `openai_native` (нужен OAuth Codex), DDGS, режима без ключей, политики сайтов `check_website_access` |
-| file | `read_file`, `write_file`, `patch`, `search_files` | Сделано (схемы `read_file` и `terminal` рукописные) |
-| terminal | `terminal`, `process_manage` | Сделано, включая `background=true`, окружение пользователя и запоминание каталога. Нет pty, `notify_on_complete`, `watch_patterns` |
-| skills | `skills_list`, `skill_view`, `skill_manage` | Сделано (`skill_manage` без нечёткого patch и журнала) |
+| web | `web_search`, `web_extract` | Сделано для Tavily, SearXNG, Brave, Perplexity, Exa, Parallel, Firecrawl, Keenable, xAI, DuckDuckGo (`ddgs`), `openai-native` (Responses), режима без ключей (`web_keyless.rs`) и политики сайтов `check_website_access` (`website_policy.rs`). Не перенесены: управляемый шлюз Nous, дисковый кэш `web_result_cache` |
+| file | `read_file`, `write_file`, `patch`, `search_files` | Сделано: `read_file` извлекает `.ipynb`, `.docx`, `.xlsx`, `.pptx`, `.pdf`, `.db`/`.sqlite`/`.sqlite3` (`doc_extract.rs`), читает изображения для vision и блокирует перезапись бинарных документов и SQLite sidecar (`-wal`/`-shm`/`-journal`); `write_file`/`patch` работают на Linux и macOS |
+| terminal | `terminal`, `process_manage` | Сделано: `background=true`, постоянное окружение и каталог (`TERMINAL_LOCAL_PERSISTENT`), реальный POSIX PTY (`pty=true`), `write`/`submit`/`close`, `notify_on_complete`, `watch_patterns`, `poll(acknowledge=true)` и инжекция уведомлений в `turn.rs` |
+| skills | `skills_list`, `skill_view`, `skill_manage` | Сделано, включая append-only аудит-журнал `.curator_ledger.jsonl` и content-addressed резервные копии `.curator_backups/blobs/` (`skill_ledger.rs`); `skill_manage` без нечёткого patch |
 | memory | `memory` | Сделано. Нет плагина holographic |
-| прочее | `clarify`, `todo_list`, `session_search`, `execute_code`, `delegate_task`, `browser_cdp` | Сделано (отличия в разделах ниже) |
+| browser | `browser_cdp`, `browser_dialog`, `browser_exec`, `browser_vault` | Сделано (`8bf0f21`): постоянный CDP-супервизор (`browser_supervisor.rs`), маршрутизация `frame_id`, перехват нативных и JS-bridge диалогов (`browser_dialog`), локальный аутентифицированный HTTP→CDP мост и `python3 -I` (`browser_exec`), зашифрованное Fernet-хранилище с TOTP и exact-origin guard (`browser_vault`, отложен по умолчанию). Нет живого `/browser connect` и облачных browser-бэкендов |
+| media / x | `vision_analyze`, `image_generate`, `text_to_speech`, `x_search` | Сделано (`vision_tool.rs`, `image_gen.rs`, `tts_tool.rs`, `x_search.rs`) вместе с мультимодальным транспортом изображений во всех основных провайдерах |
+| cron / прочее | `cronjob_manage`, `clarify`, `todo_list`, `session_search`, `execute_code`, `delegate_task` | Сделано (`delegate_task` с одиночным `goal`, `max_spawn_depth`, `list`/`steer`/`stop`/`continue`; `cronjob_manage` отложен по умолчанию) |
 | мета | `tool_search`, `tool_describe`, `tool_call` | Сделано |
-| MCP | `mcp__<сервер>__<инструмент>`, `mcp__<сервер>__list_resources`, `mcp__<сервер>__read_resource` | Сделано для stdio и Streamable HTTP (`mcp.rs`): имена, ответы `tools/call` и таймаут как в эталоне, отмена, обновление сессии, ресурсы. Нет кэша изображений и звука (`MEDIA:`), слоя вытеснения (предел 100 000 байт), OAuth, prompts, `sampling`, транспорта SSE |
-| не сделано | `browser_exec`, `browser_vault`, `browser_dialog`, `vision_analyze`, `manage_connections`, `cronjob_manage`, `fact_store`, `fact_feedback` | — |
+| MCP | `mcp__<сервер>__<инструмент>`, `list_resources`/`read_resource`, `list_prompts`/`get_prompt` | Сделано для stdio, Streamable HTTP и `transport: sse` (`mcp.rs`, `mcp_media.rs`): кэш `MEDIA:`/документов, дисковый spillover `<persisted-output>`, отмена, обновление сессии, MCP OAuth. Отложены: `sampling`, elicitation, подписки на события |
+| не сделано | `manage_connections`, `fact_store`, `fact_feedback`, голосовой ввод (STT), `computer_use`, Kanban | За рамками текущего CLI-этапа / требуют внешних сервисов или плагинов |
 
 Из рабочего прототипа в Python по умолчанию видны `clarify`, `delegate_task`, `execute_code`, `memory`, `patch`, `read_file`, `search_files`, `skill_manage`, `skill_view`, `skills_list`, `terminal`, `web_extract`, `web_search`, `write_file` и три мета-инструмента. `todo_list`, `session_search` и браузер скрыты в отложенном каталоге.
 
@@ -40,8 +42,8 @@
 | `todo_list` (сделано) | Список в памяти сессии с версией, перестраивается из последнего парного результата вызова в истории при `--resume`. Схема из эталона. Скрыт по умолчанию через отложенный каталог (`tools.tool_search`), показывается при `enabled: off` или явном `defer`. Не перенесено: возврат списка в контекст после сжатия (модель читает его вызовом без параметров) | — |
 | `tool_search`, `tool_describe`, `tool_call` | Сделано (`tool_search.rs`): три инструмента-моста вместо отложенных, каталог с описаниями по группам (полный, имена, смешанный, группы) по бюджету токенов, поиск BM25 со стеммером Snowball и порогом по самому редкому слову, описание схем, разбор `tool_call` и проверка обязательных полей. Отложенными становятся любые встроенные инструменты из `tools.tool_search.defer` (по умолчанию список эталона). 10 конфигураций сборки, 105 запросов поиска, 60 описаний и 123 разбора вызова сверены с эталоном (`compat/create_tool_search_fixture.py`, для отложенных берутся только инструменты с точной схемой из эталона). Не перенесены: инструменты MCP остаются в списке напрямую (эталон их откладывает), коннекторы, проверка аргументов полной JSON-схемой (в эталоне она работает только если установлен `jsonschema`), приведение типов аргументов, длина окна контекста для бюджета каталога (берётся 10 000 токенов) | — |
 | `session_search` | Сделано: четыре режима (поиск, прокрутка, чтение, обзор) без вызовов модели, строгое редактирование производного текста. 42 случая сверены с эталоном на синтетической базе (`compat/create_session_search_fixture.py`). Не перенесены: «скелеты» навыков в превью обзора, текст ошибки недоступного хранилища, защита чужих профилей для мультиплексных хостов | Скрыт по умолчанию вместе с отложенными; включается через `tools.tool_search.defer: []` до моста `tool_search` |
-| `skill_manage` | Сделано в объёме по выбору (`skill_manage.rs`, `skill_lint.rs`): пакет `operations` (до 20 операций, откат всех затронутых навыков при сбое), плоская форма, create/edit/patch/delete/write_file/remove_file, проверка имён, категорий, frontmatter, размеров и бюджета описания, поиск навыка (имя каталога, `категория/имя`, имя из frontmatter), блокировки и закрепление из `skills/.usage.json`, подсказки «Did you mean» (разбор в стиле difflib), советы линтера. 9 сценариев (около 150 вызовов) сверены с эталоном вместе с деревом файлов после каждого вызова (`compat/create_skill_manage_fixture.py`). Отличия по выбору: каждый вызов просит одобрение, как `write_file` (в эталоне записи навыков идут без подтверждения); при `skills.guard_agent_created` и `skills.write_approval` инструмент отказывает целиком. Не перенесены: нечёткий patch (только точное совпадение; в эталоне ещё 8 стратегий и автокоррекция экранов), журнал изменений, статистика использования и куратор, запись в чужие профили | Готово |
-| `process_manage` | Сделано в минимальном объёме по выбору: локальные процессы без pty, реестр в памяти (`process.rs`): list, poll, log, wait, kill; write/submit/close отвечают как эталон без pty; handoff отвечает «вы не субагент». Вывод stdout и stderr идёт в один канал, буфер 200000 символов, хвост 2000, лимит 64 процесса, 30 минут хранения, владелец — сессия. 9 сценариев сверены с эталоном (`compat/create_process_fixture.py`, команды с `exec`, чтобы login-оболочка эталона не печатала `logout`). Не перенесены: pty и ввод, уведомления о завершении и автоматическое включение уведомлений (`apply_wait_poll_policy`), результаты между запусками CLI, handoff, чистка потомков через systemd. Оставшиеся процессы убиваются при выходе CLI | Скрыт по умолчанию (в списке отложенных); включается через `tools.tool_search.defer: []` до моста `tool_search` |
+| `skill_manage` | Сделано (`skill_manage.rs`, `skill_lint.rs`, `skill_ledger.rs`): пакет `operations` (до 20 операций, откат всех затронутых навыков при сбое), плоская форма, create/edit/patch/delete/write_file/remove_file, проверка имён, категорий, frontmatter, размеров и бюджета описания, поиск навыка, блокировки и закрепление из `skills/.usage.json`, подсказки «Did you mean», советы линтера, append-only аудит-журнал `.curator_ledger.jsonl` и content-addressed резервные копии `.curator_backups/blobs/` (`skills.ledger`, `skills.ledger_max_bytes`, без записи при откате `batch`). 9 сценариев сверены с эталоном (`compat/create_skill_manage_fixture.py`). Отличия по выбору: каждый вызов просит одобрение; при `skills.guard_agent_created` и `skills.write_approval` инструмент отказывает целиком. Не перенесены: нечёткий patch (только точное совпадение), статистика использования и запись в чужие профили | Готово |
+| `process_manage` | Сделано (`process.rs`, `terminal.rs`, `turn.rs`): локальные процессы с поддержкой реального POSIX PTY (`pty=true`), реестр в памяти: `list`, `poll` (включая `acknowledge=true`), `log`, `wait`, `kill`, интерактивные `write`/`submit`/`close`; `notify_on_complete` и `watch_patterns` (cooldown, лимит срабатываний, доставка `[BACKGROUND PROCESS NOTIFICATION]` в `turn.rs`). 9 базовых сценариев сверены с эталоном (`compat/create_process_fixture.py`) + модульные тесты PTY/уведомлений. Не перенесены: результаты между запусками CLI, `handoff`, чистка потомков через systemd. Оставшиеся процессы убиваются при выходе CLI | Скрыт по умолчанию (в списке отложенных) |
 
 Порядок внутри волны: `todo_list` (сделано) → **библиотека редактирования секретов (волна 1б)** → `session_search` → `process_manage` (расширяет `terminal`) → `skill_manage`.
 
@@ -72,32 +74,33 @@
 
 Проверка: список инструментов по умолчанию совпадает с эталоном для пустого профиля; скрытый инструмент находится поиском и вызывается; запрещённый набором инструмент не вызывается и через `tool_call`.
 
-## Волна 3. Использует хранилище cron и цикл хода
+## Волна 3. Использует хранилище cron и цикл хода (сделана)
 
 | Инструмент | Что нужно |
 | --- | --- |
-| `cronjob_manage` (не сделано) | `cron add/edit/run` в CLI сделаны (без `cron.lifecycle_guard`, защиты от prompt с командами перезапуска gateway; `lifecycle_guard.py`, около 1650 строк, не портирован). Остаётся инструмент (`cronjob_tools.py`, около 1300 строк) поверх тех же функций |
-| `delegate_task` (сделано, см. раздел ниже) | Субагенты: дочерний ход в том же процессе с урезанным набором инструментов, глубина и лимиты, сессии, результаты, возобновление. Эталон — около 8000 строк в `delegate_tool*.py`. Начать с синхронного делегирования без автовозобновления |
-| `execute_code` (сделано, см. раздел ниже) | Решение нужно принять заранее (см. ниже). Запуск скрипта, который вызывает инструменты через RPC |
+| `cronjob_manage` (сделано) | Встроенный инструмент агента (`cronjob_tool.rs`) поверх `cron/{jobs,executions,cancel,script,monitor}.rs`: создание, редактирование, список, пауза, возобновление, удаление, запуск и отмена локальных cron-заданий; скрыт за `tool_search` по умолчанию, `model`/`provider`/`base_url` от модели отклоняются |
+| `delegate_task` (сделано, см. раздел ниже) | Субагенты в том же процессе: параллельные `tasks` и одиночный `goal`, настраиваемая глубина `delegation.max_spawn_depth`, `child_timeout_seconds`, уникальные `subagent_id`, управление `list`/`steer`/`stop`/`continue` |
+| `execute_code` (сделано, см. раздел ниже) | Постоянное ядро Python с RPC-мостом к инструментам Rust (`execute_code.rs`) |
 
 ## Волна 4. Требуют внешних компонентов
 
-| Инструмент | Что нужно | Решение нужно принять |
+| Инструмент | Состояние | Примечание |
 | --- | --- | --- |
-| `vision_analyze` | Передача изображений провайдерам (части сообщения `image_url` для Chat Completions, блоки `image` для Anthropic, `input_image` для Responses), подготовка изображений (изменение размера и формата), бюджет истории изображений | Вспомогательная модель для vision или основная |
-| `browser_exec` | В эталоне это Python поверх CDP («browser-harness») | Дословно портировать нельзя. Варианты ниже |
-| `browser_vault` | Хранилище логинов для браузера (1300 строк), по запросу | Только после браузера |
-| `browser_cdp` | Сделано: сквозной CDP к `BROWSER_CDP_URL` / `browser.cdp_url`, защита от приватных страниц и метаданных облака, редактирование результата с исключениями для base64, WebSocket на `tokio-tungstenite`. 50 вызовов, 25 проверок метаданных, 22 случая редактирования и 12 разборов URL сверены с эталоном через поддельный CDP-сервер (`compat/create_browser_cdp_fixture.py`). Не перенесены: живой `/browser connect`, маршрутизация `frame_id` через супервизор (всегда ответ «супервизор не подключён»), проверка наличия browser-harness (предлагается по одному URL), точный текст ошибок сети. Предлагается всегда при настроенном URL, не отложен | Готово |
-| `browser_dialog` | Отвечает на диалоги, которые держит супервизор CDP; без супервизора эталон всегда отвечает «супервизор не подключён». Не делается, пока нет супервизора (он нужен и для `frame_id`) | Нужен порт `browser_supervisor` |
-| `manage_connections` | Служебный инструмент для статуса и ссылок авторизации коннекторов; зависит от управляемого сервиса | Входит ли в объём |
-| `fact_store`, `fact_feedback` | Плагин памяти holographic. Сначала проверить, что он есть в этом коммите эталона и где хранит данные | Входит ли в объём |
+| `vision_analyze` | Сделано (`vision_tool.rs`) | Локальные файлы, `data:` URL и `http(s)` URL с SSRF/`website_blocklist`, нативное прикрепление во все основные провайдеры (`vision.native`) или маршрут `auxiliary.vision` |
+| `image_generate`, `text_to_speech`, `x_search` | Сделано (`image_gen.rs`, `tts_tool.rs`, `x_search.rs`) | FAL.ai, OpenAI/xAI/DeepInfra/Mistral/ElevenLabs/`type: command` TTS, xAI Responses `x_search` |
+| `browser_cdp` | Сделано (`browser_cdp.rs`, `browser_supervisor.rs`) | Сквозной CDP к `BROWSER_CDP_URL`/`browser.cdp_url`, защита от приватных страниц и cloud metadata, маршрутизация `frame_id` через супервизор, редактирование результата и маскировка секретов `browser_vault`. Нет живого `/browser connect` |
+| `browser_dialog` | Сделано (`browser_dialog.rs`, `browser_supervisor.rs`) | `list`/`accept`/`dismiss` для нативных CDP-диалогов и JS XHR-моста с редакцией секретов |
+| `browser_exec` | Сделано (`browser_exec.rs`, `browser_supervisor.rs`) | `python3 -I` через аутентифицированный локальный HTTP→CDP мост (`127.0.0.1:0`), проверка приватных URL и cloud metadata до запуска и на каждом CDP-вызове, stdlib-хелперы и `_hermes_multimodal_images` для скриншотов |
+| `browser_vault` | Сделано (`browser_vault.rs`) | Чистый Rust Fernet AES-128-CBC + HMAC-SHA256 (`vault.key`/`vault.json.enc`), RFC 6238 TOTP, классификатор форм, exact-origin guard, подтверждение оплаты через `Clarify`, маскировка секретов; отложен по умолчанию за `tool_search` |
+| `manage_connections` | Не сделано | Зависит от управляемого сервиса коннекторов |
+| `fact_store`, `fact_feedback` | Не сделано | Плагин памяти holographic (за рамками базового CLI) |
 
 ## Решения, которые нужны от вас
 
-1. **(решено: вариант а) `execute_code`.** (а) запускать пользовательский интерпретатор Python с RPC-мостом к инструментам Rust, как опциональный внешний процесс; (б) встроить собственную песочницу на Rust (дорого, расходится с поведением); (в) отложить. Рекомендация — (а), по аналогии с планом для плагинов.
-2. **`browser_exec`.** (а) опциональный процесс с Python-обвязкой эталона и версионированным RPC; (б) собственный CDP-слой на Rust с набором команд, который задаст модель; (в) только `browser_cdp`. Рекомендация — сначала `browser_cdp` и `browser_dialog`, затем (а).
-3. **Объём.** Нужны ли `manage_connections` и holographic (`fact_store`, `fact_feedback`) в первом выпуске или они остаются за рамками.
-4. **Видимость по умолчанию.** Повторять скрытие `todo_list`, `session_search` и браузера через `tool_search`, или показывать их сразу. Рекомендация — повторять эталон.
+1. **(решено: вариант а, сделано) `execute_code`.** Внешний процесс Python с RPC-мостом к инструментам Rust.
+2. **(решено: вариант а, сделано) `browser_exec`.** Изолированный `python3 -I` через локальный аутентифицированный HTTP→CDP мост поверх `browser_supervisor` на Rust.
+3. **Объём.** `manage_connections`, holographic (`fact_store`, `fact_feedback`), голосовой ввод (STT), `computer_use` и Kanban остаются вне текущего CLI-выпуска — решить, нужны ли они до этапа 6 (gateway).
+4. **(решено: повторять эталон, сделано) Видимость по умолчанию.** `todo_list`, `session_search`, `process_manage`, `cronjob_manage`, `browser_vault`, `image_generate`, `text_to_speech` отложены за `tool_search`.
 
 ## Общие правила для каждого инструмента
 
@@ -110,7 +113,7 @@
 
 ## Порядок и вехи
 
-Состояние на 2026-11-22: пункты 1–5, 6 (`browser_cdp`; `browser_dialog` не сделан), 9 и 10 (`execute_code`) выполнены; не сделаны 7 (`cronjob_manage`), 8 (`vision_analyze`), `browser_exec`, 11. На 2026-11-23 это не изменилось, но `cron add/edit/run`, от которых зависит пункт 7, сделаны.
+Состояние на 2026-11-24: пункты 1–10 и `browser_vault` из пункта 11 выполнены (`8bf0f21`), плюс добавлены `image_generate`, `text_to_speech` и `x_search`. Из каталога инструментов остаются только `manage_connections`, `fact_store`/`fact_feedback`, голосовой ввод (STT), `computer_use` и Kanban.
 
 1. Волна 0 целиком.
 2. `todo_list`, `session_search`.
