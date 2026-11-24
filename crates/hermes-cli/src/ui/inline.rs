@@ -10,7 +10,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -27,8 +27,9 @@ use crate::approval;
 use crate::chat::{self, Event, ManualCompress};
 use crate::ui::markdown::StreamMarkdown;
 use crate::ui::{
-    format_duration_ms, match_slash_commands, parse_stderr_event, ActiveUi, FeedEntry, NoticeKind,
-    ParsedStderr, ReplState, ToolStatus, UiOutcome, HELP_TEXT, SLASH_COMMANDS,
+    format_duration_ms, load_resumed_session, match_slash_commands, parse_stderr_event,
+    record_prompt_history, ActiveUi, FeedEntry, NoticeKind, ParsedStderr, RecapEntry, ReplState,
+    ResumeRecap, ToolStatus, UiOutcome, HELP_TEXT, SLASH_COMMANDS,
 };
 
 const PROMPT: &str = "› ";
@@ -44,6 +45,7 @@ const FG_GREEN: &str = "\x1b[32m";
 const FG_RED: &str = "\x1b[31m";
 const FG_YELLOW: &str = "\x1b[33m";
 const FG_GRAY: &str = "\x1b[90m";
+const FG_MAGENTA: &str = "\x1b[95m";
 
 #[derive(Clone, Copy)]
 pub struct SlashHelper {
@@ -217,10 +219,6 @@ async fn next_input(editor: &mut Lines, styled: bool) -> Input {
     }
 }
 
-fn history_path(home: Option<&Path>) -> Option<PathBuf> {
-    home.map(|home| home.join(".hermes_history"))
-}
-
 // ── Live Braille Spinner (stderr) ───────────────────────────────────────────────────
 
 struct SpinnerInner {
@@ -329,6 +327,7 @@ pub async fn run(
     state: &mut ReplState,
     mode: ActiveUi,
     show_banner: bool,
+    startup_recap: Option<ResumeRecap>,
 ) -> Result<UiOutcome, String> {
     let styled = mode == ActiveUi::Inline && state.color;
     let tty = io::stdin().is_terminal() && io::stdout().is_terminal();
@@ -343,9 +342,8 @@ pub async fn run(
     .map_err(|error| error.to_string())?;
     editor.set_helper(Some(SlashHelper::new(styled)));
 
-    let history = history_path(home);
-    if let Some(path) = &history {
-        let _ = editor.load_history(path);
+    for entry in &state.prompt_history {
+        let _ = editor.add_history_entry(entry.as_str());
     }
 
     if show_banner {
@@ -365,8 +363,12 @@ pub async fn run(
             eprintln!("hsr: type a request, /help for commands, Ctrl-D to leave");
         }
     }
+    if let Some(recap) = startup_recap {
+        print_resume_recap(&recap, styled, true);
+    }
 
     let mut rerun: Option<String> = None;
+    let mut pending_sessions: Vec<String> = Vec::new();
     let mut outcome = UiOutcome::Exit;
 
     loop {
@@ -374,13 +376,37 @@ pub async fn run(
             Some(line) => line,
             None => match next_input(&mut editor, styled).await {
                 Input::Line(line) => line.trim().to_owned(),
-                Input::Interrupted => continue,
+                Input::Interrupted => {
+                    pending_sessions.clear();
+                    continue;
+                }
                 Input::End => break,
             },
         };
         let line = line.as_str();
         if line.is_empty() {
+            pending_sessions.clear();
             continue;
+        }
+        if !pending_sessions.is_empty() {
+            let candidates = std::mem::take(&mut pending_sessions);
+            if line.chars().all(|c| c.is_ascii_digit()) {
+                if let Ok(index) = line.parse::<usize>() {
+                    if index >= 1 && index <= candidates.len() {
+                        resume_inline_target(home, state, &candidates[index - 1], styled);
+                        continue;
+                    }
+                    eprintln!(
+                        "Session number {index} is out of range (1..={}).",
+                        candidates.len()
+                    );
+                    continue;
+                }
+            }
+        }
+        if !matches!(line, "/exit" | "/quit") {
+            let _ = editor.add_history_entry(line);
+            record_prompt_history(home, &mut state.prompt_history, line);
         }
         if let Some(command) = line.strip_prefix('/').filter(|_| !line.contains('\n')) {
             let (name, argument) = command
@@ -433,6 +459,9 @@ pub async fn run(
                     state.feed_entries.clear();
                     state.guard.lock().unwrap().reset();
                     hermes_runtime::terminal::forget_session(&state.scope);
+                    if !state.request.has_explicit_model_override() {
+                        state.request.set_primary_model(state.default_model.clone());
+                    }
                 }
                 "model" if argument.is_empty() => {
                     println!("{}", state.request.model().unwrap_or("(not set)"));
@@ -481,16 +510,24 @@ pub async fn run(
                         );
                     }
                 }
-                "sessions" => list_sessions(home, styled),
-                "resume" if argument.is_empty() => eprintln!("Usage: /resume <session id>"),
+                "sessions"
+                    if argument.is_empty()
+                        || matches!(
+                            argument.to_ascii_lowercase().as_str(),
+                            "list" | "ls" | "browse"
+                        ) =>
+                {
+                    pending_sessions = list_sessions(home, state.session.as_deref(), styled);
+                }
+                "sessions" => {
+                    resume_inline_target(home, state, argument, styled);
+                }
+                "resume" if argument.is_empty() => {
+                    eprintln!("Usage: /resume <session id | number | title>");
+                    pending_sessions = list_sessions(home, state.session.as_deref(), styled);
+                }
                 "resume" => {
-                    announce(&state.session, styled);
-                    state.session = Some(argument.to_owned());
-                    state.unsaved = None;
-                    state.feed_entries.clear();
-                    state.guard.lock().unwrap().reset();
-                    hermes_runtime::terminal::forget_session(&state.scope);
-                    println!("The next turn continues session {argument}");
+                    resume_inline_target(home, state, argument, styled);
                 }
                 "retry" => match state.unsaved.take() {
                     Some(previous) => rerun = Some(previous),
@@ -503,7 +540,6 @@ pub async fn run(
             continue;
         }
 
-        let _ = editor.add_history_entry(line);
         state.feed_entries.push(FeedEntry::User(line.to_owned()));
         let turn = state
             .request
@@ -746,9 +782,6 @@ pub async fn run(
         }
     }
 
-    if let Some(path) = &history {
-        let _ = editor.save_history(path);
-    }
     Ok(outcome)
 }
 
@@ -770,30 +803,144 @@ pub fn announce(session: &Option<String>, styled: bool) {
     }
 }
 
-fn list_sessions(home: Option<&Path>, styled: bool) {
-    let Some(home) = home else { return };
-    let listed = hermes_runtime::storage::SessionStore::open_read_only(home)
-        .and_then(|store| store.recent(10, None));
-    match listed {
-        Ok(sessions) if sessions.is_empty() => println!("No saved sessions yet."),
-        Ok(sessions) => {
-            for session in sessions {
-                let text = session.title.or(session.preview).unwrap_or_default();
-                let preview = text.replace('\n', " ");
+fn print_resume_recap(recap: &ResumeRecap, styled: bool, to_stderr: bool) {
+    let emit = |line: &str| {
+        if to_stderr {
+            eprintln!("{line}");
+        } else {
+            println!("{line}");
+        }
+    };
+    let headline = recap.headline();
+    if styled {
+        emit(&format!("{DIM}{FG_CYAN}◈ {headline}{RESET}"));
+    } else {
+        emit(&headline);
+    }
+    if recap.skipped_entries > 0 {
+        let skipped_msg = format!("... {} earlier message(s) ...", recap.skipped_entries);
+        if styled {
+            emit(&format!("{DIM}{FG_GRAY}  {skipped_msg}{RESET}"));
+        } else {
+            emit(&format!("  {skipped_msg}"));
+        }
+    }
+    for entry in &recap.entries {
+        match entry {
+            RecapEntry::User(text) => {
                 if styled {
-                    println!(
-                        "{FG_CYAN}{}{RESET}  {DIM}{:>4} msgs{RESET}  {}",
-                        session.id, session.message_count, preview
-                    );
+                    emit(&format!("{BOLD}{FG_CYAN}You:{RESET} {text}"));
                 } else {
-                    println!(
-                        "{}  {:>4} msgs  {}",
-                        session.id, session.message_count, preview
-                    );
+                    emit(&format!("You: {text}"));
+                }
+            }
+            RecapEntry::Assistant { text, .. } => {
+                if styled {
+                    emit(&format!("{BOLD}{FG_MAGENTA}Hermes:{RESET} {text}"));
+                } else {
+                    emit(&format!("Hermes: {text}"));
                 }
             }
         }
-        Err(_) => println!("No saved sessions yet."),
+    }
+}
+
+fn resume_inline_target(home: Option<&Path>, state: &mut ReplState, target: &str, styled: bool) {
+    let mut resolved_query = target.to_owned();
+    if target.chars().all(|c| c.is_ascii_digit()) {
+        if let Ok(index) = target.parse::<usize>() {
+            if let Some(home) = home {
+                match hermes_runtime::storage::SessionStore::open_read_only(home)
+                    .and_then(|s| s.recent(20, None))
+                {
+                    Ok(sessions) if index >= 1 && index <= sessions.len() => {
+                        resolved_query = sessions[index - 1].id.clone();
+                    }
+                    Ok(sessions) => {
+                        eprintln!(
+                            "Session number {index} is out of range (1..={}).",
+                            sessions.len()
+                        );
+                        return;
+                    }
+                    Err(err) => {
+                        eprintln!("Could not read sessions: {err}");
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    let previous = state.session.clone();
+    match load_resumed_session(home, state, &resolved_query) {
+        Ok(recap) => {
+            if previous.as_deref() != Some(recap.session_id.as_str()) {
+                announce(&previous, styled);
+            }
+            print_resume_recap(&recap, styled, false);
+        }
+        Err(err) => {
+            eprintln!("Could not resume session '{target}': {err}");
+        }
+    }
+}
+
+fn list_sessions(home: Option<&Path>, active: Option<&str>, styled: bool) -> Vec<String> {
+    let Some(home) = home else {
+        println!("No saved sessions yet.");
+        return Vec::new();
+    };
+    let listed = hermes_runtime::storage::SessionStore::open_read_only(home)
+        .and_then(|store| store.recent(20, None));
+    match listed {
+        Ok(sessions) if sessions.is_empty() => {
+            println!("No saved sessions yet.");
+            Vec::new()
+        }
+        Ok(sessions) => {
+            let mut ids = Vec::with_capacity(sessions.len());
+            for (idx, session) in sessions.into_iter().enumerate() {
+                let text = session.title.or(session.preview).unwrap_or_default();
+                let preview = approval::sanitize_terminal_text(&text).replace('\n', " ");
+                let marker = if active == Some(session.id.as_str()) {
+                    " *"
+                } else {
+                    ""
+                };
+                if styled {
+                    println!(
+                        "{BOLD}{:>2}.{RESET} {FG_CYAN}{}{RESET}{FG_GREEN}{marker}{RESET}  {DIM}{:>4} msgs{RESET}  {}",
+                        idx + 1,
+                        session.id,
+                        session.message_count,
+                        preview
+                    );
+                } else {
+                    println!(
+                        "{:>2}. {}{marker}  {:>4} msgs  {}",
+                        idx + 1,
+                        session.id,
+                        session.message_count,
+                        preview
+                    );
+                }
+                ids.push(session.id);
+            }
+            let hint = format!(
+                "Type a number (1..={}) or /resume <id|num> to continue a session.",
+                ids.len()
+            );
+            if styled {
+                println!("{DIM}{hint}{RESET}");
+            } else {
+                println!("{hint}");
+            }
+            ids
+        }
+        Err(_) => {
+            println!("No saved sessions yet.");
+            Vec::new()
+        }
     }
 }
 

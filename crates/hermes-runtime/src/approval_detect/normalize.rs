@@ -122,10 +122,17 @@ impl HomeEnv {
             }
             None => account.unwrap_or_default(),
         };
-        let hermes_var = var("HERMES_HOME");
+        let hermes_var = {
+            let hsr = var("HSR_HOME");
+            if !hsr.trim().is_empty() {
+                hsr
+            } else {
+                var("HERMES_HOME")
+            }
+        };
         let hermes_home = if hermes_var.trim().is_empty() {
             format!(
-                "{}/.hermes{}",
+                "{}/.hsr{}",
                 user_home.trim_end_matches('/'),
                 var("HERMES_DATA_DIR_SUFFIX")
             )

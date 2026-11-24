@@ -87,6 +87,13 @@ impl<'a> SessionWriter<'a> {
                 Ok(_) => {
                     #[cfg(unix)]
                     fs::File::open(self.profile)?.sync_all()?;
+                    // Enable WAL mode after atomic publication so concurrent readers/writers
+                    // do not hit SQLITE_BUSY, while keeping the pre-publish temp file self-contained.
+                    if let Ok(conn) = open_write(&path) {
+                        let _ = conn.execute_batch(
+                            "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
+                        );
+                    }
                     return Ok(id);
                 }
                 Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => {}
@@ -161,10 +168,9 @@ fn open_database(path: &Path, flags: OpenFlags) -> Result<Connection, StorageErr
         .join(path.file_name().ok_or(StorageError::InvalidDatabaseFile)?);
     #[cfg(unix)]
     let path = resolved.as_path();
-    Ok(Connection::open_with_flags(
-        path,
-        flags | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    )?)
+    let connection = Connection::open_with_flags(path, flags | OpenFlags::SQLITE_OPEN_NOFOLLOW)?;
+    connection.busy_timeout(super::BUSY_TIMEOUT)?;
+    Ok(connection)
 }
 
 pub(super) fn open_write(path: &Path) -> Result<Connection, StorageError> {

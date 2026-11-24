@@ -20,6 +20,8 @@ PROMPT = "› ".encode()
 class ReplBase(ToolTestCase):
     def start(self, *args, tty=True):
         command = [str(BINARY), "chat", *args]
+        if tty and "--ui" not in args:
+            command.extend(["--ui", "inline"])
         if not tty:
             process = subprocess.Popen(
                 command, cwd=self.root, env=self.env, stdin=subprocess.PIPE,
@@ -182,6 +184,31 @@ class ReplTest(ReplBase):
                              capture_output=True, text=True, timeout=10)
         self.assertNotEqual(run.returncode, 0)
         self.assertIn("hsr config set model.base_url", run.stderr)
+
+    def test_sessions_numbered_selection_and_resume_recap_with_bare_hsr(self):
+        # Run bare `hsr` (without `chat` subcommand), create two sessions, select #2 via `/sessions`,
+        # verify dialogue recap is shown, and confirm next turn replays session 1 history.
+        proc = subprocess.Popen(
+            [str(BINARY)],
+            cwd=self.root,
+            env=self.env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(self.stop, proc)
+        out, err = proc.communicate(
+            "first topic apples\n/new\nsecond topic oranges\n/sessions\n2\nfollow up on apples\n",
+            timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0, err)
+        self.assertIn("Type a number", out)
+        self.assertIn("Resumed session", out)
+        self.assertIn("You: first topic apples", out)
+        self.assertIn("Hermes: Ответ модели", out)
+        users_last = [m["content"] for m in self.requests()[-1]["messages"] if m["role"] == "user"]
+        self.assertEqual(users_last, ["first topic apples", "follow up on apples"])
 
 
 @unittest.skipUnless(sys.platform == "linux", "requires Linux terminals")

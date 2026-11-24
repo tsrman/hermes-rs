@@ -130,11 +130,15 @@ fn render_personality_value(value: &Value) -> String {
     yaml_prompt_text(value)
 }
 
-/// Resolve the ephemeral system prompt overlay matching `hermes_cli/personality.py`:
+/// Resolve the ephemeral system prompt overlay matching `hermes_cli/personality.py` and
+/// `hermes_cli/config_migrations.py::_migrate_to_34`:
 /// 1. `HERMES_EPHEMERAL_SYSTEM_PROMPT` override (if non-empty)
 /// 2. `display.personality` looked up in `BUILTIN_PERSONALITIES` overlaid by root `personalities`
-///    and then `agent.personalities` (later wins)
-/// 3. `agent.system_prompt`
+///    and then `agent.personalities` (later wins) — skipped for legacy pre-v34 configs
+///    (`_config_version < 34`), where `display.personality` held the old default (`kawaii`)
+///    before v34's one-time personality reset
+/// 3. `agent.system_prompt` (for pre-v34 configs, scrubbed if it verbatim-equals a known
+///    personality's rendered text)
 pub fn resolve_ephemeral_system_prompt(
     config: &Value,
     env_override: Option<&str>,
@@ -164,14 +168,20 @@ pub fn resolve_ephemeral_system_prompt(
             }
         }
     }
-    if let Some(selected) = config
-        .get("display")
-        .and_then(|d| d.get("personality"))
-        .and_then(Value::as_str)
-        .and_then(normalize_personality_name)
-    {
-        if let Some(text) = merged.get(&selected).filter(|s| !s.is_empty()) {
-            return Some(text.clone());
+    let legacy_pre_v34 = config
+        .get("_config_version")
+        .and_then(Value::as_i64)
+        .is_some_and(|v| v < 34);
+    if !legacy_pre_v34 {
+        if let Some(selected) = config
+            .get("display")
+            .and_then(|d| d.get("personality"))
+            .and_then(Value::as_str)
+            .and_then(normalize_personality_name)
+        {
+            if let Some(text) = merged.get(&selected).filter(|s| !s.is_empty()) {
+                return Some(text.clone());
+            }
         }
     }
     let fallback = config
@@ -179,7 +189,13 @@ pub fn resolve_ephemeral_system_prompt(
         .and_then(|a| a.get("system_prompt"))
         .map(yaml_prompt_text)
         .unwrap_or_default();
-    (!fallback.is_empty()).then_some(fallback)
+    if fallback.is_empty() {
+        return None;
+    }
+    if legacy_pre_v34 && merged.values().any(|p| p == &fallback) {
+        return None;
+    }
+    Some(fallback)
 }
 
 impl PromptSettings {

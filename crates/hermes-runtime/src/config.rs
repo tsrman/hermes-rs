@@ -91,9 +91,79 @@ impl UiModeSetting {
     }
 }
 
+/// Display tuning for resumed-session recaps (`display.resume_*`).
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ResumeDisplaySettings {
+    /// `"full"` (default) shows the recent dialogue recap; `"minimal"` shows only the header line.
+    pub minimal: bool,
+    /// Number of user/assistant exchanges to show (default `10`).
+    pub exchanges: usize,
+    /// Max characters per user message preview (default `300`).
+    pub max_user_chars: usize,
+    /// Max characters per older assistant message preview (default `200`).
+    pub max_assistant_chars: usize,
+    /// Max lines per older assistant message preview (default `3`).
+    pub max_assistant_lines: usize,
+    /// Skip assistant turns that only called tools and produced no text (default `true`).
+    pub skip_tool_only: bool,
+}
+
+impl Default for ResumeDisplaySettings {
+    fn default() -> Self {
+        Self {
+            minimal: false,
+            exchanges: 10,
+            max_user_chars: 300,
+            max_assistant_chars: 200,
+            max_assistant_lines: 3,
+            skip_tool_only: true,
+        }
+    }
+}
+
+impl ResumeDisplaySettings {
+    pub fn from_config(config: &serde_yaml::Value) -> Self {
+        let mut out = Self::default();
+        let Some(display) = config.get("display") else {
+            return out;
+        };
+        if let Some(mode) = display
+            .get("resume_display")
+            .and_then(serde_yaml::Value::as_str)
+        {
+            out.minimal = mode.trim().eq_ignore_ascii_case("minimal");
+        }
+        let positive = |key: &str| {
+            display
+                .get(key)
+                .and_then(serde_yaml::Value::as_u64)
+                .and_then(|v| usize::try_from(v).ok())
+                .filter(|&v| v > 0)
+        };
+        if let Some(v) = positive("resume_exchanges") {
+            out.exchanges = v;
+        }
+        if let Some(v) = positive("resume_max_user_chars") {
+            out.max_user_chars = v;
+        }
+        if let Some(v) = positive("resume_max_assistant_chars") {
+            out.max_assistant_chars = v;
+        }
+        if let Some(v) = positive("resume_max_assistant_lines") {
+            out.max_assistant_lines = v;
+        }
+        if let Some(v) = display.get("resume_skip_tool_only") {
+            out.skip_tool_only = truthy(v, true);
+        }
+        out
+    }
+}
+
 pub struct ChatSettings {
     /// Interactive console UI mode (`ui.mode` / `HERMES_UI`).
     pub ui_mode: UiModeSetting,
+    /// Resumed-session dialogue recap settings (`display.resume_*`).
+    pub resume_display: ResumeDisplaySettings,
     /// Whether OpenAI Chat Completions requests use SSE streaming (`display.streaming`, fallback
     /// `streaming.enabled`; default `true`).
     pub streaming: bool,
@@ -235,6 +305,7 @@ impl Default for ChatSettings {
     fn default() -> Self {
         Self {
             ui_mode: UiModeSetting::Auto,
+            resume_display: ResumeDisplaySettings::default(),
             streaming: true,
             model: None,
             provider: "custom",
@@ -436,14 +507,15 @@ fn scoped_key(
 }
 
 pub fn profile_home(profile: Option<&str>) -> Result<Option<PathBuf>, String> {
-    let configured_home = std::env::var_os("HERMES_HOME")
+    let configured_home = std::env::var_os("HSR_HOME")
         .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var_os("HERMES_HOME").filter(|value| !value.is_empty()))
         .map(PathBuf::from);
     #[cfg(windows)]
     let default_home = std::env::home_dir;
     #[cfg(not(windows))]
     let default_home = || std::env::var_os("HOME").map(PathBuf::from);
-    let home = configured_home.or_else(|| default_home().map(|home| home.join(".hermes")));
+    let home = configured_home.or_else(|| default_home().map(|home| home.join(".hsr")));
     let Some(home) = home else {
         return if profile.is_some() {
             Err("profile root is unavailable".into())
@@ -554,6 +626,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
         ..ChatSettings::default()
     };
     settings.keep_phone_numbers = keeps_phone_numbers(&config);
+    settings.resume_display = ResumeDisplaySettings::from_config(&config);
     settings.stall_guards = crate::stall_guards::parse_stall_guards(&config);
     settings.intent_ack_continuation =
         crate::stall_guards::IntentAckContinuation::from_config(&config);

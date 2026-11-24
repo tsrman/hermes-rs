@@ -307,6 +307,116 @@ class ConsoleUiTest(unittest.TestCase):
             rows = db.execute("SELECT id, message_count FROM sessions").fetchall()
             self.assertEqual(len(rows), 1)
 
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux PTY")
+    def test_bare_hsr_defaults_to_tui_with_up_history_and_sessions_picker(self):
+        server, base_url, recorded = _start_mock_server(reply_text="DefaultTuiReply")
+        self.addCleanup(_close_server, server)
+        self._write_config(base_url)
+
+        # Spawn bare `hsr` (no `chat` subcommand, no `--ui` flag, no `ui.mode` config).
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+        self.addCleanup(os.close, master)
+
+        def setup_ctty():
+            os.setsid()
+            fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+        try:
+            proc = subprocess.Popen(
+                [str(BINARY)],
+                cwd=self.root,
+                env=self._base_env(),
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                preexec_fn=setup_ctty,
+            )
+        finally:
+            os.close(slave)
+
+        def cleanup():
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait(timeout=5)
+
+        self.addCleanup(cleanup)
+
+        buf = bytearray()
+        self._read_until(master, buf, b"\x1b[?1049h")
+        pos = self._read_until(master, buf, b"HERMES")
+
+        # Turn 1 in session 1
+        os.write(master, b"alpha_question\r")
+        pos = self._read_until(master, buf, b"DefaultTuiReply", start=pos)
+        pos = self._read_until(master, buf, b"s]", start=pos)
+
+        # Start session 2
+        os.write(master, b"/new\r")
+        pos = self._read_until(master, buf, b"conversation.", start=pos)
+        os.write(master, b"beta_question\r")
+        pos = self._read_until(master, buf, b"DefaultTuiReply", start=pos)
+        pos = self._read_until(master, buf, b"s]", start=pos)
+
+        # Up arrow recalls previous submitted message ("beta_question"), then clear with Ctrl-C
+        os.write(master, b"\x1b[A")
+        pos = self._read_until(master, buf, b"beta_question", start=pos)
+        os.write(master, b"\x03")
+        time.sleep(0.1)
+
+        # Open interactive /sessions picker modal, move down to session 1, and press Enter
+        os.write(master, b"/sessions\r")
+        pos = self._read_until(master, buf, b"Sessions", start=pos)
+        self._read_until(master, buf, b"alpha_question", start=pos - 500)
+        os.write(master, b"\x1b[B")
+        time.sleep(0.1)
+        os.write(master, b"\r")
+        pos = self._read_until(master, buf, b"(1 user message, 2 total messages)", start=pos)
+        pos = self._read_until(master, buf, b"alpha_question", start=pos)
+
+        # Follow-up message goes into session 1 with full prior history!
+        os.write(master, b"gamma_followup\r")
+        pos = self._read_until(master, buf, b"DefaultTuiReply", start=pos)
+        pos = self._read_until(master, buf, b"s]", start=pos)
+
+        os.write(master, b"\x04")
+        self.assertEqual(self._finish_pty(proc, master, buf), 0)
+
+        self.assertEqual(len(recorded), 3)
+        users_in_last = [m["content"] for m in recorded[-1]["messages"] if m["role"] == "user"]
+        self.assertEqual(users_in_last, ["alpha_question", "gamma_followup"])
+
+    def test_default_profile_home_uses_dot_hsr(self):
+        server, base_url, recorded = _start_mock_server(reply_text="DotHsrOk")
+        self.addCleanup(_close_server, server)
+        fake_home = self.root / "fakehome"
+        hsr_dir = fake_home / ".hsr"
+        hsr_dir.mkdir(parents=True)
+        (hsr_dir / "config.yaml").write_text(
+            f"model:\n  default: hsr-default-model\n  provider: custom\n  base_url: {base_url}\n",
+            encoding="utf-8",
+        )
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": str(fake_home),
+            "HERMES_API_KEY": "fixture",
+        }
+        proc = subprocess.Popen(
+            [str(BINARY)],
+            cwd=self.root,
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        out, err = proc.communicate("ping default home\n", timeout=20)
+        self.assertEqual(proc.returncode, 0, err)
+        self.assertIn("DotHsrOk", out)
+        self.assertTrue((hsr_dir / "state.db").is_file())
+        self.assertTrue((hsr_dir / ".hsr_history").is_file())
+        self.assertEqual(recorded[0]["model"], "hsr-default-model")
+
 
 if __name__ == "__main__":
     unittest.main()

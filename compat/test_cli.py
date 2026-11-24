@@ -1452,17 +1452,34 @@ class CliTest(unittest.TestCase):
             self.assertEqual(db.execute("SELECT count(*) FROM sessions").fetchone(), (1,))
             self.assertEqual(db.execute("SELECT count(*) FROM messages").fetchone(), (6,))
 
-    def test_resume_rolls_back_lease_if_stored_tool_exchange_is_incomplete(self):
+    def test_resume_repairs_incomplete_tool_exchange_and_rolls_back_lease_on_corrupt_replay(self):
         result, original = self.chat_with_profile(args=("--save-session",))
         self.assertEqual(result.returncode, 0, result.stderr)
         session = result.stderr.splitlines()[-1].removeprefix("Session: ")
         database = self.workdir / "hermes" / "state.db"
+        # Upstream repair_alternation parity: removing the tool result row leaves an
+        # unanswered assistant tool_call, which resume prunes cleanly instead of failing.
         with sqlite3.connect(database) as db:
             db.execute("UPDATE messages SET active = 0 WHERE role = 'tool'")
-        resumed, requests = self.chat_with_profile(args=("--resume", session))
-        self.assertEqual(resumed.returncode, 1)
-        self.assertIn("incompatible message or tool exchange", resumed.stderr)
-        self.assertEqual(requests, original)
+        repaired, requests = self.chat_with_profile(args=("--resume", session))
+        self.assertEqual(repaired.returncode, 0, repaired.stderr)
+        self.assertGreater(len(requests), len(original))
+        for msg in requests[len(original)]["messages"]:
+            self.assertNotIn("tool_calls", msg)
+            self.assertNotEqual(msg.get("role"), "tool")
+        with sqlite3.connect(database) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM session_turn_leases").fetchone(), (0,))
+
+        # Genuinely corrupt stored JSON still rejects replay and rolls back the lease.
+        before_corrupt = len(requests)
+        with sqlite3.connect(database) as db:
+            db.execute(
+                "UPDATE messages SET tool_calls = 'not-json' WHERE role = 'assistant' AND active = 1"
+            )
+        corrupt, requests_after = self.chat_with_profile(args=("--resume", session))
+        self.assertEqual(corrupt.returncode, 1)
+        self.assertIn("incompatible message or tool exchange", corrupt.stderr)
+        self.assertEqual(len(requests_after), before_corrupt)
         with sqlite3.connect(database) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM session_turn_leases").fetchone(), (0,))
 

@@ -5,7 +5,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use clap::{Args, ValueEnum};
-use hermes_runtime::config::{load_chat_settings, CompactionSettings, UiModeSetting};
+use hermes_runtime::config::{
+    load_chat_settings, CompactionSettings, ResumeDisplaySettings, UiModeSetting,
+};
 use hermes_runtime::mcp::{McpClients, McpServerConfig};
 use hermes_runtime::memory_tool::MemorySettings;
 use hermes_runtime::prompt::PromptSettings;
@@ -274,6 +276,8 @@ pub struct ChatRequest {
     events_json: bool,
     #[serde(default)]
     ui_mode: UiModeSetting,
+    #[serde(default)]
+    resume_display: ResumeDisplaySettings,
     #[serde(default)]
     startup_warnings: Vec<String>,
     #[serde(default)]
@@ -748,6 +752,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
     Ok(ChatRequest {
         events_json: args.events_json,
         ui_mode: args.ui.map(UiModeSetting::from).unwrap_or(settings.ui_mode),
+        resume_display: settings.resume_display.clone(),
         startup_warnings,
         state_scope: None,
         prefill,
@@ -1301,6 +1306,22 @@ impl ChatRequest {
 
     pub fn ui_mode(&self) -> UiModeSetting {
         self.ui_mode
+    }
+
+    pub fn resume_display(&self) -> &ResumeDisplaySettings {
+        &self.resume_display
+    }
+
+    pub fn has_explicit_model_override(&self) -> bool {
+        self.model_override.is_some()
+    }
+
+    pub fn set_primary_model(&mut self, model: Option<String>) {
+        self.primary.model = model;
+    }
+
+    pub fn primary_model(&self) -> Option<&str> {
+        self.primary.model.as_deref()
     }
 
     pub fn provider_name(&self) -> &str {

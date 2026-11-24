@@ -63,8 +63,8 @@ pub(super) const RULES: &[(&str, &str, bool)] = &[
     ("context_exfil", r#"(include|output|print|share)\s(?:\w+\s){0,8}(conversation|chat\shistory|previous\smessages|full\scontext|entire\scontext)"#, true),
     ("ssh_backdoor", r#"authorized_keys"#, true),
     ("ssh_access", r#"(?:\b(?:echo|cat|cp|mv|dd|tee|install|printf|rsync|scp|ln|append|add|write|sed|chmod|chown|truncate|rm|touch|curl|wget|git)\b|\bopen\s?\(|>>?)[^\n]{0,512}(?:\$HOME/\.ssh|~/\.ssh)"#, true),
-    ("hermes_env", r#"\$HOME/\.hermes/\.env|\~/\.hermes/\.env"#, true),
+    ("hermes_env", r#"\$HOME/\.(?:hermes|hsr)/\.env|\~/\.(?:hermes|hsr)/\.env"#, true),
     ("agent_config_mod", r#"(update|modify|edit|write|change|append|add\sto)\s[^\n]{0,2048}(?:AGENTS\.md|CLAUDE\.md|\.cursorrules|\.clinerules)"#, true),
-    ("hermes_config_mod", r#"(update|modify|edit|write|change|append|add\sto)\s[^\n]{0,2048}\.hermes/(config\.yaml|SOUL\.md)"#, true),
+    ("hermes_config_mod", r#"(update|modify|edit|write|change|append|add\sto)\s[^\n]{0,2048}\.(?:hermes|hsr)/(config\.yaml|SOUL\.md)"#, true),
     ("hardcoded_secret", r#"(?:api[_-]?key|token|secret|password)\s?[=:]\s?["\'](?P<value>[A-Za-z0-9+/=_-]{20,})"#, true),
 ];

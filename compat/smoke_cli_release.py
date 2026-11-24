@@ -131,7 +131,7 @@ def smoke_native(archive, work):
     replacement = second / binary.name
     shutil.copy2(binary, replacement)
     home = work / "user profile"
-    profile = home / ".hermes" / "profiles" / "fixture"
+    profile = home / ".hsr" / "profiles" / "fixture"
     profile.mkdir(parents=True)
     (profile / "config.yaml").write_text("model: fixture\n", encoding="utf-8")
     project = work / "project folder"
@@ -158,7 +158,7 @@ def smoke_native(archive, work):
         session = next(line.removeprefix("Session: ") for line in saved.stderr.splitlines()
                        if line.startswith("Session: "))
         assert (profile / "state.db").is_file()
-        assert not (home / ".hermes" / "state.db").exists()
+        assert not (home / ".hsr" / "state.db").exists()
         tool_result = json.loads(server.requests[1]["messages"][-1]["content"])
         assert "native read_file payload" in tool_result["content"]
         resumed = cli(replacement, *chat, "--resume", session, "-q", "native smoke resumed")

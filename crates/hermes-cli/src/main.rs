@@ -19,7 +19,9 @@ struct Cli {
     #[arg(short = 'p', long, global = true)]
     profile: Option<String>,
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
+    #[command(flatten)]
+    chat: chat::ChatArgs,
 }
 
 #[derive(Subcommand)]
@@ -78,9 +80,14 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<u8, String> {
-    let Cli { profile, command } = Cli::parse();
+    let Cli {
+        profile,
+        command,
+        chat,
+    } = Cli::parse();
     let home = profile_home(profile.as_deref())?;
     let home = home.as_deref();
+    let command = command.unwrap_or(Command::Chat(chat));
     match command {
         Command::Sessions { command } => {
             sessions::run(home.ok_or("profile root is unavailable")?, command)?;

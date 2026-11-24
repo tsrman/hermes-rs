@@ -219,7 +219,7 @@ pub fn is_secret_file_arg(arg: &str, homes: &[&Path]) -> bool {
     hermes_home
         || parts[..parts.len() - 1]
             .iter()
-            .any(|part| part == ".hermes")
+            .any(|part| part == ".hermes" || part == ".hsr")
         || under_hermes_home(&path, homes)
 }
 

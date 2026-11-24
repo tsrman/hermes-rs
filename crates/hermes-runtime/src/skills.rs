@@ -612,7 +612,7 @@ impl SkillCatalog {
         let metadata = frontmatter(raw).unwrap_or(Yaml::Null);
         let resolved = skill_config_values(&metadata, &self.settings.config);
         if !resolved.is_empty() {
-            let shown = home.map_or_else(|| "~/.hermes".to_owned(), display_home);
+            let shown = home.map_or_else(|| "~/.hsr".to_owned(), display_home);
             parts.push(String::new());
             parts.push(format!("[Skill config (from {shown}/config.yaml):"));
             parts.extend(
@@ -1437,7 +1437,7 @@ fn search_roots(
                         .any(|entry| resolve_config_path(entry, &cwd).as_deref() == Some(*root))
                 })
             {
-                for prefix in [".hermes", ".agents"] {
+                for prefix in [".hsr", ".hermes", ".agents"] {
                     candidates.push((Tier::Project, root.join(prefix).join("skills"), true));
                 }
             }

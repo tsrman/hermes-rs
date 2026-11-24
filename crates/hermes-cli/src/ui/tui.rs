@@ -14,11 +14,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use hermes_runtime::storage::{SessionStore, SessionSummary};
 use hermes_runtime::turn::{ApprovalAction, ApprovalDecision, ApprovalRequest};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -34,8 +35,9 @@ use crate::approval::{self, Grant};
 use crate::chat::{self, Event as ChatEvent, ManualCompress};
 use crate::ui::markdown::render_markdown_lines;
 use crate::ui::{
-    format_duration_ms, format_tokens_compact, match_slash_commands, parse_stderr_event, ActiveUi,
-    FeedEntry, NoticeKind, ParsedStderr, ReplState, ToolStatus, UiOutcome, HELP_TEXT,
+    format_duration_ms, format_tokens_compact, load_resumed_session, match_slash_commands,
+    parse_stderr_event, record_prompt_history, ActiveUi, FeedEntry, NoticeKind, ParsedStderr,
+    ReplState, ToolStatus, UiOutcome, HELP_TEXT,
 };
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -92,13 +94,17 @@ enum ActiveModal {
         answers: Map<String, Value>,
         reply: Option<oneshot::Sender<ApprovalDecision>>,
     },
+    SessionPicker {
+        sessions: Vec<SessionSummary>,
+        cursor: usize,
+        scroll: usize,
+    },
 }
 
 pub struct TuiApp {
     input: String,
     /// Byte index of cursor in `input` (always on a UTF-8 char boundary).
     cursor: usize,
-    history: Vec<String>,
     history_pos: Option<usize>,
     draft_before_history: String,
     palette_index: usize,
@@ -119,7 +125,6 @@ impl TuiApp {
         Self {
             input: String::new(),
             cursor: 0,
-            history: Vec::new(),
             history_pos: None,
             draft_before_history: String::new(),
             palette_index: 0,
@@ -143,6 +148,7 @@ impl TuiApp {
     fn insert_char(&mut self, c: char) {
         self.input.insert(self.cursor, c);
         self.cursor += c.len_utf8();
+        self.history_pos = None;
         self.palette_index = 0;
     }
 
@@ -157,6 +163,7 @@ impl TuiApp {
             .unwrap_or(0);
         self.input.drain(prev..self.cursor);
         self.cursor = prev;
+        self.history_pos = None;
         self.palette_index = 0;
     }
 
@@ -172,6 +179,7 @@ impl TuiApp {
             .unwrap_or(0);
         self.input.drain(new_pos..self.cursor);
         self.cursor = new_pos;
+        self.history_pos = None;
     }
 
     fn delete_char_forward(&mut self) {
@@ -184,6 +192,7 @@ impl TuiApp {
             .map(|c| self.cursor + c.len_utf8())
             .unwrap_or(self.cursor);
         self.input.drain(self.cursor..next);
+        self.history_pos = None;
     }
 
     fn move_left(&mut self) {
@@ -205,7 +214,11 @@ impl TuiApp {
     }
 
     fn slash_palette(&self) -> Vec<&'static crate::ui::SlashCommand> {
-        if self.is_busy() || self.modal.is_some() || self.input.contains('\n') {
+        if self.is_busy()
+            || self.modal.is_some()
+            || self.history_pos.is_some()
+            || self.input.contains('\n')
+        {
             return Vec::new();
         }
         if self.input.starts_with('/') && !self.input.contains(char::is_whitespace) {
@@ -325,6 +338,7 @@ pub async fn run(home: Option<&Path>, state: &mut ReplState) -> Result<UiOutcome
                     Some(TermEvent::Paste(pasted)) if !app.is_busy() && app.modal.is_none() => {
                         app.input.insert_str(app.cursor, &pasted);
                         app.cursor += pasted.len();
+                        app.history_pos = None;
                         dirty = true;
                     }
                     Some(TermEvent::Resize(_, _)) => {
@@ -594,6 +608,10 @@ async fn handle_key_event(
     active_handle: &mut Option<JoinHandle<()>>,
     turn_rx: &mut Option<mpsc::UnboundedReceiver<TurnMsg>>,
 ) -> Option<String> {
+    if matches!(key.kind, KeyEventKind::Release) {
+        return None;
+    }
+
     // 1. Active modal consumes keys first (except Ctrl-C which cancels the turn).
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         if let Some(handle) = active_handle.take() {
@@ -619,16 +637,21 @@ async fn handle_key_event(
             );
             return None;
         }
-        // When idle, Ctrl-C clears current composer text (or exits if already empty).
+        // When idle, Ctrl-C closes a session picker modal or clears current composer text.
+        if matches!(app.modal, Some(ActiveModal::SessionPicker { .. })) {
+            app.modal = None;
+            return None;
+        }
         if !app.input.is_empty() {
             app.input.clear();
             app.cursor = 0;
+            app.history_pos = None;
         }
         return None;
     }
 
     if app.modal.is_some() {
-        handle_modal_key(app, state, key);
+        handle_modal_key(app, state, home, key);
         return None;
     }
 
@@ -720,13 +743,17 @@ async fn handle_key_event(
             app.input.clear();
             app.cursor = 0;
             app.history_pos = None;
+            app.draft_before_history.clear();
             if text.is_empty() {
                 return None;
+            }
+            let is_exit = matches!(text.as_str(), "/exit" | "/quit");
+            if !is_exit {
+                record_prompt_history(home, &mut state.prompt_history, &text);
             }
             if let Some(cmd) = text.strip_prefix('/').filter(|_| !text.contains('\n')) {
                 return handle_slash_command(app, state, home, cmd).await;
             }
-            app.history.push(text.clone());
             return Some(text);
         }
         (KeyCode::Backspace, _) => app.backspace(),
@@ -740,23 +767,26 @@ async fn handle_key_event(
             app.cursor = app.input.len();
         }
         (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => app.delete_word_back(),
-        (KeyCode::Up, _) if !app.history.is_empty() => {
+        (KeyCode::Up, _)
+            if !state.prompt_history.is_empty()
+                && (app.history_pos.is_some() || !app.input[..app.cursor].contains('\n')) =>
+        {
             let next_idx = match app.history_pos {
                 None => {
                     app.draft_before_history = app.input.clone();
-                    app.history.len() - 1
+                    state.prompt_history.len() - 1
                 }
                 Some(i) => i.saturating_sub(1),
             };
             app.history_pos = Some(next_idx);
-            app.input = app.history[next_idx].clone();
+            app.input = state.prompt_history[next_idx].clone();
             app.cursor = app.input.len();
         }
         (KeyCode::Down, _) => {
             if let Some(i) = app.history_pos {
-                if i + 1 < app.history.len() {
+                if i + 1 < state.prompt_history.len() {
                     app.history_pos = Some(i + 1);
-                    app.input = app.history[i + 1].clone();
+                    app.input = state.prompt_history[i + 1].clone();
                 } else {
                     app.history_pos = None;
                     app.input = std::mem::take(&mut app.draft_before_history);
@@ -774,7 +804,7 @@ async fn handle_key_event(
     None
 }
 
-fn handle_modal_key(app: &mut TuiApp, state: &mut ReplState, key: KeyEvent) {
+fn handle_modal_key(app: &mut TuiApp, state: &mut ReplState, home: Option<&Path>, key: KeyEvent) {
     let Some(mut modal) = app.modal.take() else {
         return;
     };
@@ -918,6 +948,128 @@ fn handle_modal_key(app: &mut TuiApp, state: &mut ReplState, key: KeyEvent) {
                 }
             }
         }
+        ActiveModal::SessionPicker {
+            sessions,
+            cursor,
+            scroll,
+        } => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {}
+            KeyCode::Up | KeyCode::Char('k') => {
+                *cursor = cursor.saturating_sub(1);
+                if *cursor < *scroll {
+                    *scroll = *cursor;
+                }
+                app.modal = Some(modal);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if *cursor + 1 < sessions.len() {
+                    *cursor += 1;
+                }
+                app.modal = Some(modal);
+            }
+            KeyCode::PageUp => {
+                *cursor = cursor.saturating_sub(8);
+                if *cursor < *scroll {
+                    *scroll = *cursor;
+                }
+                app.modal = Some(modal);
+            }
+            KeyCode::PageDown => {
+                *cursor = (*cursor + 8).min(sessions.len().saturating_sub(1));
+                app.modal = Some(modal);
+            }
+            KeyCode::Home => {
+                *cursor = 0;
+                *scroll = 0;
+                app.modal = Some(modal);
+            }
+            KeyCode::End => {
+                *cursor = sessions.len().saturating_sub(1);
+                app.modal = Some(modal);
+            }
+            KeyCode::Enter => {
+                if let Some(chosen) = sessions.get(*cursor) {
+                    let id = chosen.id.clone();
+                    resume_tui_target(app, state, home, &id);
+                }
+            }
+            _ => {
+                app.modal = Some(modal);
+            }
+        },
+    }
+}
+
+fn open_session_picker(app: &mut TuiApp, state: &mut ReplState, home: Option<&Path>) {
+    let Some(home) = home else {
+        TuiApp::push_notice(
+            state,
+            NoticeKind::Warn,
+            "No saved sessions yet: profile root is unavailable.",
+        );
+        return;
+    };
+    match SessionStore::open_read_only(home).and_then(|s| s.recent(20, None)) {
+        Ok(sessions) if !sessions.is_empty() => {
+            let cursor = state
+                .session
+                .as_deref()
+                .and_then(|cur| sessions.iter().position(|s| s.id == cur))
+                .unwrap_or(0);
+            app.modal = Some(ActiveModal::SessionPicker {
+                sessions,
+                cursor,
+                scroll: 0,
+            });
+        }
+        Ok(_) => TuiApp::push_notice(state, NoticeKind::Info, "No saved sessions yet."),
+        Err(_) => TuiApp::push_notice(state, NoticeKind::Info, "No saved sessions yet."),
+    }
+}
+
+fn resume_tui_target(app: &mut TuiApp, state: &mut ReplState, home: Option<&Path>, target: &str) {
+    let mut resolved_query = target.to_owned();
+    if target.chars().all(|c| c.is_ascii_digit()) {
+        if let Ok(index) = target.parse::<usize>() {
+            if let Some(home) = home {
+                match SessionStore::open_read_only(home).and_then(|s| s.recent(20, None)) {
+                    Ok(sessions) if index >= 1 && index <= sessions.len() => {
+                        resolved_query = sessions[index - 1].id.clone();
+                    }
+                    Ok(sessions) => {
+                        TuiApp::push_notice(
+                            state,
+                            NoticeKind::Warn,
+                            format!(
+                                "Session number {index} is out of range (1..={}).",
+                                sessions.len()
+                            ),
+                        );
+                        return;
+                    }
+                    Err(err) => {
+                        TuiApp::push_notice(
+                            state,
+                            NoticeKind::Error,
+                            format!("Could not read sessions: {err}"),
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    match load_resumed_session(home, state, &resolved_query) {
+        Ok(_) => {
+            app.scroll_from_bottom = 0;
+        }
+        Err(err) => {
+            TuiApp::push_notice(
+                state,
+                NoticeKind::Error,
+                format!("Could not resume session '{target}': {err}"),
+            );
+        }
     }
 }
 
@@ -964,6 +1116,10 @@ async fn handle_slash_command(
             state.feed_entries.clear();
             state.guard.lock().unwrap().reset();
             hermes_runtime::terminal::forget_session(&state.scope);
+            if !state.request.has_explicit_model_override() {
+                state.request.set_primary_model(state.default_model.clone());
+            }
+            app.scroll_from_bottom = 0;
             TuiApp::push_notice(state, NoticeKind::Info, "Started a new conversation.");
         }
         "model" if argument.is_empty() => {
@@ -1000,41 +1156,23 @@ async fn handle_slash_command(
                 );
             }
         }
+        "sessions"
+            if argument.is_empty()
+                || matches!(
+                    argument.to_ascii_lowercase().as_str(),
+                    "list" | "ls" | "browse"
+                ) =>
+        {
+            open_session_picker(app, state, home);
+        }
         "sessions" => {
-            let mut text = String::new();
-            if let Some(home) = home {
-                match hermes_runtime::storage::SessionStore::open_read_only(home)
-                    .and_then(|s| s.recent(10, None))
-                {
-                    Ok(list) if !list.is_empty() => {
-                        for s in list {
-                            let preview =
-                                s.title.or(s.preview).unwrap_or_default().replace('\n', " ");
-                            text.push_str(&format!(
-                                "{}  {:>4} msgs  {}\n",
-                                s.id, s.message_count, preview
-                            ));
-                        }
-                    }
-                    _ => text.push_str("No saved sessions yet."),
-                }
-            }
-            TuiApp::push_notice(state, NoticeKind::Info, text.trim_end());
+            resume_tui_target(app, state, home, argument);
         }
         "resume" if argument.is_empty() => {
-            TuiApp::push_notice(state, NoticeKind::Warn, "Usage: /resume <session id>");
+            open_session_picker(app, state, home);
         }
         "resume" => {
-            state.session = Some(argument.to_owned());
-            state.unsaved = None;
-            state.feed_entries.clear();
-            state.guard.lock().unwrap().reset();
-            hermes_runtime::terminal::forget_session(&state.scope);
-            TuiApp::push_notice(
-                state,
-                NoticeKind::Info,
-                format!("The next turn continues session {argument}"),
-            );
+            resume_tui_target(app, state, home, argument);
         }
         "compress" | "compact" => {
             let Some(home) = home else {
@@ -1126,9 +1264,9 @@ pub fn render_frame(frame: &mut Frame<'_>, app: &TuiApp, state: &ReplState) {
         render_palette(frame, chunks[1], &palette, app.palette_index);
     }
 
-    // Centered modal for Approval or Clarify
+    // Centered modal for Approval, Clarify, or SessionPicker
     if let Some(modal) = &app.modal {
-        render_modal(frame, area, modal);
+        render_modal(frame, area, modal, state.session.as_deref());
     }
 }
 
@@ -1405,12 +1543,15 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let text = if app.modal.is_some() {
-        " Modal active · follow on-screen keys · Ctrl-C cancel turn"
-    } else if app.is_busy() {
-        " Ctrl-C stop turn · PgUp/PgDn scroll conversation"
-    } else {
-        " Enter send · Alt+Enter newline · Tab complete / · PgUp/PgDn scroll · /ui inline · Ctrl-D quit"
+    let text = match &app.modal {
+        Some(ActiveModal::SessionPicker { .. }) => {
+            " ↑/↓ select session · Enter resume · Esc cancel"
+        }
+        Some(_) => " Modal active · follow on-screen keys · Ctrl-C cancel turn",
+        None if app.is_busy() => " Ctrl-C stop turn · PgUp/PgDn scroll conversation",
+        None => {
+            " Enter send · ↑/↓ history · Alt+Enter newline · Tab complete / · PgUp/PgDn scroll · /ui inline · Ctrl-D quit"
+        }
     };
     let footer = Paragraph::new(Span::styled(text, Style::default().fg(Color::DarkGray)));
     frame.render_widget(footer, area);
@@ -1464,7 +1605,12 @@ fn render_palette(
     frame.render_widget(popup, rect);
 }
 
-fn render_modal(frame: &mut Frame<'_>, area: Rect, modal: &ActiveModal) {
+fn render_modal(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    modal: &ActiveModal,
+    active_session: Option<&str>,
+) {
     let rect = centered_rect(82, 72, area);
     frame.render_widget(Clear, rect);
 
@@ -1628,6 +1774,93 @@ fn render_modal(frame: &mut Frame<'_>, area: Rect, modal: &ActiveModal) {
                 .wrap(Wrap { trim: false });
             frame.render_widget(widget, rect);
         }
+        ActiveModal::SessionPicker {
+            sessions,
+            cursor,
+            scroll,
+        } => {
+            let visible_rows = rect.height.saturating_sub(5).max(1) as usize;
+            let eff_scroll = if *cursor < *scroll {
+                *cursor
+            } else if *cursor >= *scroll + visible_rows {
+                *cursor + 1 - visible_rows
+            } else {
+                *scroll
+            };
+            let max_preview = rect.width.saturating_sub(36) as usize;
+            let mut lines = vec![Line::from(Span::styled(
+                format!(
+                    "Select a session to resume ({} of {}):",
+                    cursor.saturating_add(1).min(sessions.len()),
+                    sessions.len()
+                ),
+                Style::default().fg(Color::DarkGray),
+            ))];
+            for (idx, sess) in sessions
+                .iter()
+                .enumerate()
+                .skip(eff_scroll)
+                .take(visible_rows)
+            {
+                let is_cur = idx == *cursor;
+                let mark = if is_cur { "▸" } else { " " };
+                let active_tag = if active_session == Some(sess.id.as_str()) {
+                    "*"
+                } else {
+                    " "
+                };
+                let short_id: String = sess.id.chars().take(16).collect();
+                let raw_preview = sess
+                    .title
+                    .as_deref()
+                    .or(sess.preview.as_deref())
+                    .unwrap_or("");
+                let clean = approval::sanitize_terminal_text(raw_preview).replace('\n', " ");
+                let preview: String = if max_preview > 3 && clean.chars().count() > max_preview {
+                    let mut p: String = clean.chars().take(max_preview - 3).collect();
+                    p.push_str("...");
+                    p
+                } else {
+                    clean
+                };
+                let style = if is_cur {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        " {mark}{active_tag}{:>2}. {:<16} {:>4}m  {}",
+                        idx + 1,
+                        short_id,
+                        sess.message_count,
+                        preview
+                    ),
+                    style,
+                )));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                " ↑/↓ or j/k select · Enter resume · Esc/q cancel",
+                Style::default().fg(Color::Cyan),
+            )));
+
+            let widget = Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(Span::styled(
+                        " Sessions ",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+            );
+            frame.render_widget(widget, rect);
+        }
     }
 }
 
@@ -1754,6 +1987,7 @@ mod tests {
         handle_modal_key(
             &mut app,
             &mut state,
+            None,
             KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
         );
         assert!(app.modal.is_none());
@@ -1789,11 +2023,13 @@ mod tests {
         handle_modal_key(
             &mut app,
             &mut state,
+            None,
             KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
         );
         handle_modal_key(
             &mut app,
             &mut state,
+            None,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         );
         assert!(app.modal.is_none());
@@ -1805,5 +2041,210 @@ mod tests {
             }
             _ => panic!("expected ApprovalDecision::Answered"),
         }
+    }
+
+    struct TempDirGuard(std::path::PathBuf);
+    impl TempDirGuard {
+        fn new(label: &str) -> Self {
+            let unique = format!(
+                "hsr-tui-{label}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+            let path = std::env::temp_dir().join(unique);
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn up_arrow_recalls_persisted_and_submitted_history_without_palette_hijack() {
+        let dir = TempDirGuard::new("history");
+        std::fs::write(
+            dir.path().join(".hsr_history"),
+            "#V2\nfirst saved prompt\n/model\nsecond saved prompt\n",
+        )
+        .unwrap();
+
+        let req = chat::prepare(
+            Some(dir.path()),
+            chat::ChatArgs::for_test("http://127.0.0.1:9/v1", "gpt-5.4", "k"),
+        )
+        .unwrap();
+        let mut state = ReplState::new(Some(dir.path()), req, true);
+        let mut app = TuiApp::new();
+        let mut handle = None;
+        let mut rx = None;
+
+        // Type draft, then walk up through persisted history (including a /command entry).
+        app.input = "draft text".into();
+        app.cursor = app.input.len();
+
+        handle_key_event(
+            &mut app,
+            &mut state,
+            Some(dir.path()),
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert_eq!(app.input, "second saved prompt");
+
+        // Second Up recalls `/model`; slash palette must stay hidden while browsing history.
+        handle_key_event(
+            &mut app,
+            &mut state,
+            Some(dir.path()),
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert_eq!(app.input, "/model");
+        assert!(app.slash_palette().is_empty());
+
+        // Third Up must still continue walking history instead of moving slash palette!
+        handle_key_event(
+            &mut app,
+            &mut state,
+            Some(dir.path()),
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert_eq!(app.input, "first saved prompt");
+
+        // Key release events must be ignored.
+        let release = KeyEvent {
+            code: KeyCode::Down,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Release,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        handle_key_event(
+            &mut app,
+            &mut state,
+            Some(dir.path()),
+            release,
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert_eq!(app.input, "first saved prompt");
+
+        // Walking back down restores the original draft.
+        for _ in 0..3 {
+            handle_key_event(
+                &mut app,
+                &mut state,
+                Some(dir.path()),
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+                &mut handle,
+                &mut rx,
+            )
+            .await;
+        }
+        assert_eq!(app.input, "draft text");
+        assert!(app.history_pos.is_none());
+
+        // Submitting a new prompt appends it to state.prompt_history and .hsr_history.
+        let submitted = handle_key_event(
+            &mut app,
+            &mut state,
+            Some(dir.path()),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert_eq!(submitted.as_deref(), Some("draft text"));
+        assert_eq!(
+            state.prompt_history.last().map(String::as_str),
+            Some("draft text")
+        );
+        let saved = std::fs::read_to_string(dir.path().join(".hsr_history")).unwrap();
+        assert!(saved.contains("draft text"));
+    }
+
+    #[tokio::test]
+    async fn sessions_modal_renders_and_navigates_with_keys() {
+        let mut state = sample_state();
+        let mut app = TuiApp::new();
+        app.modal = Some(ActiveModal::SessionPicker {
+            sessions: vec![
+                SessionSummary {
+                    id: "sess-newer-2222".into(),
+                    source: "cli".into(),
+                    model: Some("gpt-5.4".into()),
+                    title: Some("Deploy checklist".into()),
+                    started_at: 200.0,
+                    last_activity_at: Some(210.0),
+                    message_count: 6,
+                    preview: Some("second session hello".into()),
+                },
+                SessionSummary {
+                    id: "sess-older-1111".into(),
+                    source: "cli".into(),
+                    model: Some("gpt-5.4".into()),
+                    title: None,
+                    started_at: 100.0,
+                    last_activity_at: Some(110.0),
+                    message_count: 2,
+                    preview: Some("first session hello".into()),
+                },
+            ],
+            cursor: 0,
+            scroll: 0,
+        });
+
+        let backend = TestBackend::new(90, 28);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Sessions"), "missing modal title:\n{text}");
+        assert!(
+            text.contains("Deploy checklist") && text.contains("first session hello"),
+            "missing session entries:\n{text}"
+        );
+
+        let mut handle = None;
+        let mut rx = None;
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        match &app.modal {
+            Some(ActiveModal::SessionPicker { cursor, .. }) => assert_eq!(*cursor, 1),
+            _ => panic!("expected SessionPicker modal to remain open"),
+        }
+
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert!(app.modal.is_none());
     }
 }

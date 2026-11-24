@@ -1,6 +1,6 @@
 # hermes-rs
 
-A fast, standalone Rust implementation of [Hermes Agent](https://github.com/NousResearch/hermes-agent) — a single native CLI binary (`hsr`) with no Python runtime dependency, designed to live cleanly side-by-side with Python `hermes` while staying drop-in compatible with existing `~/.hermes` profiles, `config.yaml`, `.env`, `auth.json`, skills, cron jobs, and SQLite `state.db` history.
+A fast, standalone Rust implementation of [Hermes Agent](https://github.com/NousResearch/hermes-agent) — a single native CLI binary (`hsr`) with no Python runtime dependency, designed to live cleanly side-by-side with Python `hermes` using `~/.hsr` by default (override with `HSR_HOME` or `HERMES_HOME`) while staying drop-in compatible with existing `~/.hermes` profiles, `config.yaml`, `.env`, `auth.json`, skills, cron jobs, and SQLite `state.db` history.
 
 > Current release: **`v0.5.1`** (Linux x86_64/arm64 GNU & musl, macOS Apple Silicon & Intel, Windows x64)
 
@@ -8,11 +8,11 @@ A fast, standalone Rust implementation of [Hermes Agent](https://github.com/Nous
 
 - **Zero-dependency native binary**: Fast startup, low memory footprint, and static musl builds for Linux containers without Python.
 - **Interactive terminal UX**:
-  - **Inline mode** (default on TTY): streaming Markdown with syntax highlighting, live tool badges and spinners, `/` slash-command autocompletion, and native terminal scrollback.
-  - **Full-screen TUI mode** (`--ui tui` or `/ui tui`): header status bar (profile, model, context usage), scrollable Markdown feed, tool cards, command palette, multiline composer, and interactive approval/clarify modals.
+  - **Full-screen TUI mode** (default on TTY, or `--ui tui` / `/ui tui`): header status bar (profile, model, context usage), scrollable Markdown feed, tool cards, command palette, multiline composer with persisted Up/Down history, and interactive approval, clarify, and `/sessions` picker modals.
+  - **Inline mode** (`--ui inline` or `/ui inline`): streaming Markdown with syntax highlighting, live tool badges and spinners, `/` slash-command autocompletion, and native terminal scrollback.
   - **Plain & JSON modes**: automatic plain fallback for pipes/`NO_COLOR`, plus versioned NDJSON streaming via `--events-json` for programmatic integrations.
 - **Drop-in profile & database compatibility**:
-  - Reads existing `~/.hermes` profiles (`config.yaml`, `.env`, `SOUL.md`, `memories/{MEMORY,USER}.md`, `skills/`, `auth.json`, `cron/jobs.json`, `state.db`).
+  - Uses `~/.hsr` by default (or `HSR_HOME` / `HERMES_HOME`) and reads existing `~/.hermes` profile layouts (`config.yaml`, `.env`, `SOUL.md`, `memories/{MEMORY,USER}.md`, `skills/`, `auth.json`, `cron/jobs.json`, `state.db`).
   - Safe copy-based migration for early SQLite schemas (`v1..v32 → v33`, covering Hermes v0.15+ and legacy FTS layouts `v0/v1/v2 → v3`) with byte-for-byte history verification.
 - **Broad provider & multimodal support**:
   - OpenAI-compatible Chat Completions (streaming & non-streaming), OpenAI Responses API, Anthropic Messages (API key & OAuth), AWS Bedrock (Converse REST + SigV4/Bearer + Guardrails + Mantle Responses), Google Vertex AI (Service Account RS256 JWT & ADC), NVIDIA NIM, 32 named key-based providers, and OAuth refresh (`openai-codex`, `nous`, `xai-oauth`, `qwen-oauth`, `minimax-oauth`).
@@ -88,21 +88,21 @@ cargo build --release --locked -p hermes-cli
 ## Quick Start
 
 ```bash
-# Start an interactive conversation (uses ~/.hermes by default)
-hsr chat
+# Start an interactive conversation in full-screen TUI mode (uses ~/.hsr by default; `hsr chat` is equivalent)
+hsr
 
-# Start in full-screen TUI mode
-hsr chat --ui tui
+# Start in inline streaming mode
+hsr --ui inline
 
 # Run a single non-interactive query and save the session
 hsr chat --oneshot -q "Summarize the files in this directory" --save-session
 
 # Resume the last CLI session or a specific session ID
-hsr chat --continue
-hsr chat --resume <session-id>
+hsr --continue
+hsr --resume <session-id>
 
-# Use a separate profile directory
-hsr -p work chat
+# Use a separate profile directory (under ~/.hsr/profiles/work)
+hsr -p work
 
 # Stream machine-readable NDJSON events (version: 1)
 hsr chat --events-json -q "Read README.md"

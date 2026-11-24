@@ -5,12 +5,17 @@ pub mod inline;
 pub mod markdown;
 pub mod tui;
 
-use std::path::Path;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use hermes_runtime::config::UiModeSetting;
+use hermes_runtime::config::{ResumeDisplaySettings, UiModeSetting};
+use hermes_runtime::storage::{Message, SessionStore};
 use hermes_runtime::turn::CompactionGuard;
+use serde_json::Value;
 
+use crate::approval;
 use crate::chat::ChatRequest;
 
 /// Resolved runtime UI mode for an interactive `hermes chat` session.
@@ -57,7 +62,7 @@ pub fn resolve_ui_mode(
             if no_color {
                 ActiveUi::Plain
             } else {
-                ActiveUi::Inline
+                ActiveUi::Tui
             }
         }
         UiModeSetting::Inline => ActiveUi::Inline,
@@ -91,13 +96,13 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/sessions",
-        usage: "/sessions",
-        description: "list recent sessions",
+        usage: "/sessions [id|num]",
+        description: "list and select a recent session to resume",
     },
     SlashCommand {
         name: "/resume",
-        usage: "/resume <id>",
-        description: "continue another session",
+        usage: "/resume [id|num]",
+        description: "pick or continue a saved session",
     },
     SlashCommand {
         name: "/model",
@@ -145,8 +150,8 @@ pub const HELP_TEXT: &str = "\
 Commands:
   /help                  show this list
   /new                   start a new conversation (the old one stays saved)
-  /sessions              list recent sessions
-  /resume <id>           continue another session
+  /sessions [id|num]     list and select a recent session to resume
+  /resume [id|num]       pick or continue a saved session
   /model [name]          show or change the model for the next turns
   /compress [topic]      compress the current session history now
   /yolo                  toggle approving file changes and commands without asking
@@ -230,6 +235,7 @@ pub fn parse_stderr_event(text: &str) -> ParsedStderr {
 /// Shared conversation state preserved seamlessly across `/ui` switches.
 pub struct ReplState {
     pub request: ChatRequest,
+    pub default_model: Option<String>,
     pub session: Option<String>,
     pub unsaved: Option<String>,
     pub scope: String,
@@ -242,6 +248,9 @@ pub struct ReplState {
     pub profile_label: String,
     /// Conversation history snapshot kept in memory for seamless Inline ↔ TUI transitions.
     pub feed_entries: Vec<FeedEntry>,
+    /// Shared prompt input history (loaded from `<home>/.hsr_history`, persisted across sessions
+    /// and shared between Inline and TUI modes).
+    pub prompt_history: Vec<String>,
 }
 
 /// Entry displayed in the TUI conversation feed (and recorded across turns).
@@ -284,9 +293,12 @@ pub enum UiOutcome {
 impl ReplState {
     pub fn new(home: Option<&Path>, request: ChatRequest, color: bool) -> Self {
         let session = request.resume().map(str::to_owned);
+        let default_model = request.primary_model().map(str::to_owned);
         let profile_label = profile_display_name(home);
+        let prompt_history = load_prompt_history(home);
         Self {
             request,
+            default_model,
             session,
             unsaved: None,
             scope: format!("repl-{}", std::process::id()),
@@ -298,6 +310,7 @@ impl ReplState {
             color,
             profile_label,
             feed_entries: Vec::new(),
+            prompt_history,
         }
     }
 
@@ -308,6 +321,408 @@ impl ReplState {
             self.last_turn_input_tokens = input;
         }
     }
+}
+
+/// Primary history file path under the selected profile directory.
+pub fn history_path(home: Option<&Path>) -> Option<PathBuf> {
+    home.map(|home| home.join(".hsr_history"))
+}
+
+/// Decode a rustyline `#V2` escaped history line (`\n` -> newline, `\\` -> `\`).
+fn unescape_history_line(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('r') => out.push('\r'),
+                Some('\\') => out.push('\\'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn escape_history_line(entry: &str) -> String {
+    let mut out = String::with_capacity(entry.len());
+    for c in entry.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Load previous prompt history from `<home>/.hsr_history` (falling back to `.hermes_history`).
+pub fn load_prompt_history(home: Option<&Path>) -> Vec<String> {
+    let Some(home) = home else {
+        return Vec::new();
+    };
+    let primary = home.join(".hsr_history");
+    let path = if primary.is_file() {
+        primary
+    } else {
+        let legacy = home.join(".hermes_history");
+        if legacy.is_file() {
+            legacy
+        } else {
+            return Vec::new();
+        }
+    };
+    let Ok(contents) = fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let mut lines = contents.lines();
+    let v2 = lines.clone().next() == Some("#V2");
+    if v2 {
+        lines.next();
+    }
+    let mut history: Vec<String> = Vec::new();
+    for raw in lines {
+        if raw.trim().is_empty() {
+            continue;
+        }
+        let item = if v2 {
+            unescape_history_line(raw)
+        } else {
+            raw.to_owned()
+        };
+        if history.last().map(String::as_str) != Some(item.as_str()) {
+            history.push(item);
+        }
+    }
+    if history.len() > 1000 {
+        history.drain(..history.len() - 1000);
+    }
+    history
+}
+
+/// Record a submitted entry into in-memory prompt history and persist it to `<home>/.hsr_history`.
+pub fn record_prompt_history(home: Option<&Path>, history: &mut Vec<String>, entry: &str) {
+    let trimmed = entry.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if history.last().map(String::as_str) == Some(trimmed) {
+        return;
+    }
+    history.push(trimmed.to_owned());
+    if history.len() > 1000 {
+        history.drain(..history.len() - 1000);
+    }
+    let Some(path) = history_path(home) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let needs_header = !path.exists() || fs::metadata(&path).map(|m| m.len() == 0).unwrap_or(true);
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+        if needs_header {
+            let _ = writeln!(file, "#V2");
+        }
+        let _ = writeln!(file, "{}", escape_history_line(trimmed));
+    }
+}
+
+/// One displayable turn entry for a resumed-session recap.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RecapEntry {
+    User(String),
+    Assistant { text: String, is_last: bool },
+}
+
+/// Summary and displayable dialogue entries produced when resuming a session.
+#[derive(Clone, Debug)]
+pub struct ResumeRecap {
+    pub session_id: String,
+    pub title: Option<String>,
+    pub user_turns: usize,
+    pub total_messages: usize,
+    pub skipped_entries: usize,
+    pub entries: Vec<RecapEntry>,
+}
+
+impl ResumeRecap {
+    pub fn headline(&self) -> String {
+        let title_part = self
+            .title
+            .as_deref()
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| format!(" \"{t}\""))
+            .unwrap_or_default();
+        let noun = if self.user_turns == 1 {
+            "user message"
+        } else {
+            "user messages"
+        };
+        format!(
+            "Resumed session {}{} ({} {noun}, {} total messages)",
+            self.session_id, title_part, self.user_turns, self.total_messages
+        )
+    }
+}
+
+fn content_display_text(content: &Value) -> String {
+    match content {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|part| {
+                let kind = part.get("type").and_then(Value::as_str)?;
+                match kind {
+                    "text" | "input_text" | "output_text" => {
+                        part.get("text").and_then(Value::as_str).map(str::to_owned)
+                    }
+                    "image_url" | "input_image" | "image" => Some("[image]".to_owned()),
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+        other => other.to_string(),
+    }
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_owned();
+    }
+    let mut out: String = text.chars().take(max_chars).collect();
+    out.push_str("...");
+    out
+}
+
+fn tool_calls_summary(calls: &Value) -> Option<String> {
+    let items = calls.as_array()?;
+    if items.is_empty() {
+        return None;
+    }
+    let mut names: Vec<String> = Vec::new();
+    for call in items {
+        let name = call
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        if !names.iter().any(|n| n == name) {
+            names.push(name.to_owned());
+        }
+    }
+    let preview = if names.len() > 4 {
+        format!("{}, ...", names[..4].join(", "))
+    } else {
+        names.join(", ")
+    };
+    let noun = if items.len() == 1 {
+        "tool call"
+    } else {
+        "tool calls"
+    };
+    Some(format!("[{} {noun}: {preview}]", items.len()))
+}
+
+fn strip_reasoning_tags(text: &str) -> String {
+    let mut result = text.to_owned();
+    for (open, close) in [
+        ("<think>", "</think>"),
+        ("<thought>", "</thought>"),
+        ("<thinking>", "</thinking>"),
+        ("<reasoning>", "</reasoning>"),
+    ] {
+        while let Some(start) = result.find(open) {
+            if let Some(end_rel) = result[start + open.len()..].find(close) {
+                let end = start + open.len() + end_rel + close.len();
+                result.replace_range(start..end, "");
+            } else {
+                break;
+            }
+        }
+    }
+    result.trim().to_owned()
+}
+
+pub fn collect_resume_recap(
+    session_id: String,
+    title: Option<String>,
+    messages: &[Message],
+    settings: &ResumeDisplaySettings,
+) -> ResumeRecap {
+    let user_turns = messages
+        .iter()
+        .filter(|m| m.role == "user" && !m.compressed_summary)
+        .count();
+    let total_messages = messages.len();
+    if settings.minimal {
+        return ResumeRecap {
+            session_id,
+            title,
+            user_turns,
+            total_messages,
+            skipped_entries: 0,
+            entries: Vec::new(),
+        };
+    }
+
+    let mut raw_entries: Vec<(bool, String)> = Vec::new();
+    let mut last_assistant: Option<(usize, String)> = None;
+
+    for msg in messages {
+        if msg.display_kind.as_deref() == Some("hidden") {
+            continue;
+        }
+        if msg.role == "user" {
+            if msg.compressed_summary {
+                continue;
+            }
+            let text = approval::sanitize_terminal_text(&content_display_text(&msg.content));
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            raw_entries.push((true, truncate_chars(trimmed, settings.max_user_chars)));
+        } else if msg.role == "assistant" {
+            if msg.compressed_summary {
+                continue;
+            }
+            let cleaned = approval::sanitize_terminal_text(&strip_reasoning_tags(
+                &content_display_text(&msg.content),
+            ));
+            let tc_summary = msg.tool_calls.as_ref().and_then(tool_calls_summary);
+            if cleaned.is_empty() && (settings.skip_tool_only || tc_summary.is_none()) {
+                continue;
+            }
+            let mut short_parts = Vec::new();
+            let mut full_parts = Vec::new();
+            if !cleaned.is_empty() {
+                full_parts.push(cleaned.clone());
+                let lines: Vec<&str> = cleaned.lines().collect();
+                let line_clamped = if lines.len() > settings.max_assistant_lines {
+                    format!("{} ...", lines[..settings.max_assistant_lines].join("\n"))
+                } else {
+                    cleaned
+                };
+                short_parts.push(truncate_chars(&line_clamped, settings.max_assistant_chars));
+            }
+            if let Some(summary) = tc_summary {
+                short_parts.push(summary.clone());
+                full_parts.push(summary);
+            }
+            let idx = raw_entries.len();
+            raw_entries.push((false, short_parts.join(" ")));
+            last_assistant = Some((idx, full_parts.join(" ")));
+        }
+    }
+
+    let cap = settings.exchanges.saturating_mul(2).max(2);
+    let skipped = raw_entries.len().saturating_sub(cap);
+    let mut entries: Vec<RecapEntry> = raw_entries[skipped..]
+        .iter()
+        .map(|(is_user, text)| {
+            if *is_user {
+                RecapEntry::User(text.clone())
+            } else {
+                RecapEntry::Assistant {
+                    text: text.clone(),
+                    is_last: false,
+                }
+            }
+        })
+        .collect();
+    if let Some((orig_idx, full_text)) = last_assistant {
+        if orig_idx >= skipped {
+            let adj = orig_idx - skipped;
+            if let Some(slot) = entries.get_mut(adj) {
+                *slot = RecapEntry::Assistant {
+                    text: full_text,
+                    is_last: true,
+                };
+            }
+        }
+    }
+
+    ResumeRecap {
+        session_id,
+        title,
+        user_turns,
+        total_messages,
+        skipped_entries: skipped,
+        entries,
+    }
+}
+
+/// Resolve and load a saved session into `state` (updating `state.session`, restoring the saved
+/// model when no explicit CLI override is active, and populating `state.feed_entries` with the
+/// recent dialogue recap).
+pub fn load_resumed_session(
+    home: Option<&Path>,
+    state: &mut ReplState,
+    target: &str,
+) -> Result<ResumeRecap, String> {
+    let home = home.ok_or_else(|| "profile root is unavailable".to_owned())?;
+    let store = SessionStore::open_read_only(home).map_err(|e| e.to_string())?;
+    let resolved_id = store
+        .resolve_resume_target(target)
+        .map_err(|e| e.to_string())?;
+    let transcript = store
+        .resume_display_transcript(&resolved_id)
+        .map_err(|e| e.to_string())?;
+    let recap = collect_resume_recap(
+        transcript.session.id.clone(),
+        transcript.session.title.clone(),
+        &transcript.messages,
+        state.request.resume_display(),
+    );
+
+    state.session = Some(transcript.session.id.clone());
+    state.unsaved = None;
+    state.guard.lock().unwrap().reset();
+    hermes_runtime::terminal::forget_session(&state.scope);
+    if !state.request.has_explicit_model_override() {
+        if let Some(saved_model) = transcript
+            .session
+            .model
+            .as_deref()
+            .filter(|m| !m.trim().is_empty())
+        {
+            state
+                .request
+                .set_primary_model(Some(saved_model.to_owned()));
+        }
+    }
+
+    state.feed_entries.clear();
+    state.feed_entries.push(FeedEntry::Notice {
+        kind: NoticeKind::Info,
+        text: recap.headline(),
+    });
+    if recap.skipped_entries > 0 {
+        state.feed_entries.push(FeedEntry::Notice {
+            kind: NoticeKind::Info,
+            text: format!("... {} earlier message(s) ...", recap.skipped_entries),
+        });
+    }
+    for entry in &recap.entries {
+        match entry {
+            RecapEntry::User(text) => state.feed_entries.push(FeedEntry::User(text.clone())),
+            RecapEntry::Assistant { text, .. } => {
+                state.feed_entries.push(FeedEntry::Assistant(text.clone()))
+            }
+        }
+    }
+    Ok(recap)
 }
 
 pub fn profile_display_name(home: Option<&Path>) -> String {
@@ -391,10 +806,21 @@ mod tests {
             ),
             ActiveUi::Plain
         );
-        // TTY + Auto + colors => Inline (preserves native scrollback & PTY contracts).
+        // TTY + Auto + colors => Tui (default interactive experience).
         assert_eq!(
             resolve_ui_mode(
                 UiModeSetting::Auto,
+                true,
+                true,
+                false,
+                Some("xterm-256color")
+            ),
+            ActiveUi::Tui
+        );
+        // Explicit Inline on TTY => Inline.
+        assert_eq!(
+            resolve_ui_mode(
+                UiModeSetting::Inline,
                 true,
                 true,
                 false,

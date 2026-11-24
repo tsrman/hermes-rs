@@ -24,14 +24,22 @@ pub async fn run(home: Option<&Path>, request: ChatRequest) -> Result<u8, String
         term.as_deref(),
     );
     let mut state = ReplState::new(home, request, !no_color);
+    let mut startup_recap = if let Some(initial_id) = state.session.clone() {
+        ui::load_resumed_session(home, &mut state, &initial_id).ok()
+    } else {
+        None
+    };
     let mut first_entry = true;
 
     loop {
         let outcome = match active {
             ActiveUi::Plain | ActiveUi::Inline => {
-                ui::inline::run(home, &mut state, active, first_entry).await?
+                ui::inline::run(home, &mut state, active, first_entry, startup_recap.take()).await?
             }
-            ActiveUi::Tui => ui::tui::run(home, &mut state).await?,
+            ActiveUi::Tui => {
+                startup_recap = None;
+                ui::tui::run(home, &mut state).await?
+            }
         };
         first_entry = false;
         match outcome {
