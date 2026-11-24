@@ -16,8 +16,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event as TermEvent, KeyCode, KeyEvent,
-    KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -47,14 +47,19 @@ use crate::ui::{
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// RAII guard that guarantees terminal raw mode, mouse capture, and alternate screen are restored on drop.
+/// RAII guard that guarantees terminal raw mode, bracketed paste, mouse capture, and alternate screen are restored on drop.
 struct TerminalGuard;
 
 impl TerminalGuard {
     fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        execute!(
+            stdout,
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            EnableBracketedPaste
+        )?;
         Ok(Self)
     }
 }
@@ -63,7 +68,12 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
         let mut stdout = io::stdout();
-        let _ = execute!(stdout, DisableMouseCapture, LeaveAlternateScreen);
+        let _ = execute!(
+            stdout,
+            DisableBracketedPaste,
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        );
     }
 }
 
@@ -234,6 +244,49 @@ impl TuiApp {
         }
     }
 
+    fn move_line_up(&mut self) {
+        let before = &self.input[..self.cursor];
+        let Some(cur_line_nl) = before.rfind('\n') else {
+            return;
+        };
+        let col_chars = before[cur_line_nl + 1..].chars().count();
+        let prev_line_start = before[..cur_line_nl].rfind('\n').map_or(0, |i| i + 1);
+        let prev_line = &self.input[prev_line_start..cur_line_nl];
+        let offset = prev_line
+            .char_indices()
+            .nth(col_chars)
+            .map_or(prev_line.len(), |(i, _)| i);
+        self.cursor = prev_line_start + offset;
+    }
+
+    fn move_line_down(&mut self) {
+        let before = &self.input[..self.cursor];
+        let cur_line_start = before.rfind('\n').map_or(0, |i| i + 1);
+        let col_chars = before[cur_line_start..].chars().count();
+        let after = &self.input[self.cursor..];
+        let Some(rel_nl) = after.find('\n') else {
+            return;
+        };
+        let next_line_start = self.cursor + rel_nl + 1;
+        let next_line_end = self.input[next_line_start..]
+            .find('\n')
+            .map_or(self.input.len(), |i| next_line_start + i);
+        let next_line = &self.input[next_line_start..next_line_end];
+        let offset = next_line
+            .char_indices()
+            .nth(col_chars)
+            .map_or(next_line.len(), |(i, _)| i);
+        self.cursor = next_line_start + offset;
+    }
+
+    fn insert_pasted(&mut self, raw: &str) {
+        let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
+        self.input.insert_str(self.cursor, &normalized);
+        self.cursor += normalized.len();
+        self.history_pos = None;
+        self.palette_index = 0;
+    }
+
     fn slash_palette(&self) -> Vec<&'static crate::ui::SlashCommand> {
         if self.is_busy()
             || self.modal.is_some()
@@ -360,9 +413,7 @@ pub async fn run(home: Option<&Path>, state: &mut ReplState) -> Result<UiOutcome
                         dirty = true;
                     }
                     Some(TermEvent::Paste(pasted)) if !app.is_busy() && app.modal.is_none() => {
-                        app.input.insert_str(app.cursor, &pasted);
-                        app.cursor += pasted.len();
-                        app.history_pos = None;
+                        app.insert_pasted(&pasted);
                         dirty = true;
                     }
                     Some(TermEvent::Resize(_, _)) => {
@@ -760,6 +811,9 @@ async fn handle_key_event(
         (KeyCode::Enter, m) if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::SHIFT) => {
             app.insert_char('\n');
         }
+        (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => {
+            app.insert_char('\n');
+        }
         (KeyCode::Enter, _) => {
             // Support trailing `\` continuation just like inline REPL.
             if app.cursor == app.input.len() && app.input.ends_with('\\') {
@@ -795,10 +849,10 @@ async fn handle_key_event(
             app.cursor = app.input.len();
         }
         (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => app.delete_word_back(),
-        (KeyCode::Up, _)
-            if !state.prompt_history.is_empty()
-                && (app.history_pos.is_some() || !app.input[..app.cursor].contains('\n')) =>
-        {
+        (KeyCode::Up, _) if app.history_pos.is_none() && app.input[..app.cursor].contains('\n') => {
+            app.move_line_up();
+        }
+        (KeyCode::Up, _) if !state.prompt_history.is_empty() => {
             let next_idx = match app.history_pos {
                 None => {
                     app.draft_before_history = app.input.clone();
@@ -810,7 +864,7 @@ async fn handle_key_event(
             app.input = state.prompt_history[next_idx].clone();
             app.cursor = app.input.len();
         }
-        (KeyCode::Down, _) => {
+        (KeyCode::Down, _) if app.history_pos.is_some() => {
             if let Some(i) = app.history_pos {
                 if i + 1 < state.prompt_history.len() {
                     app.history_pos = Some(i + 1);
@@ -821,6 +875,9 @@ async fn handle_key_event(
                 }
                 app.cursor = app.input.len();
             }
+        }
+        (KeyCode::Down, _) if app.input[app.cursor..].contains('\n') => {
+            app.move_line_down();
         }
         (KeyCode::Char(c), m)
             if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
@@ -1361,9 +1418,70 @@ async fn handle_slash_command(
 
 // ── Pure Ratatui Frame Renderer (directly unit-testable with TestBackend) ───────────
 
+struct ComposerLayout {
+    lines: Vec<Line<'static>>,
+    cursor_row: usize,
+    cursor_col: usize,
+}
+
+/// Deterministically wrap composer input on explicit newlines and `inner_width` columns so
+/// box height, rendered rows, vertical scrolling, and visible cursor coordinates always agree.
+fn wrap_composer_lines(input: &str, cursor: usize, inner_width: usize) -> ComposerLayout {
+    let width = inner_width.max(1);
+    let clamped_cursor = cursor.min(input.len());
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut current = String::new();
+    let mut col: usize = 0;
+    let mut cursor_row: usize = 0;
+    let mut cursor_col: usize = 0;
+    let mut cursor_found = false;
+
+    for (byte_idx, ch) in input.char_indices() {
+        if !cursor_found && byte_idx >= clamped_cursor {
+            cursor_row = lines.len();
+            cursor_col = col;
+            cursor_found = true;
+        }
+        if ch == '\n' {
+            lines.push(Line::from(std::mem::take(&mut current)));
+            col = 0;
+            continue;
+        }
+        if col >= width {
+            lines.push(Line::from(std::mem::take(&mut current)));
+            col = 0;
+            if byte_idx == clamped_cursor {
+                cursor_row = lines.len();
+                cursor_col = 0;
+            }
+        }
+        current.push(ch);
+        col += 1;
+    }
+
+    if !cursor_found {
+        if col >= width {
+            lines.push(Line::from(std::mem::take(&mut current)));
+            col = 0;
+        }
+        cursor_row = lines.len();
+        cursor_col = col;
+    }
+    lines.push(Line::from(current));
+
+    ComposerLayout {
+        lines,
+        cursor_row,
+        cursor_col,
+    }
+}
+
 pub fn render_frame(frame: &mut Frame<'_>, app: &TuiApp, state: &ReplState) {
     let area = frame.area();
-    let composer_lines = (app.input.lines().count().max(1) as u16).clamp(1, 5);
+    let inner_width = area.width.saturating_sub(2).max(1) as usize;
+    let max_composer_lines = (area.height / 3).clamp(3, 8);
+    let layout = wrap_composer_lines(&app.input, app.cursor, inner_width);
+    let composer_lines = (layout.lines.len().max(1) as u16).clamp(1, max_composer_lines);
     let composer_height = composer_lines + 2;
 
     let chunks = Layout::default()
@@ -1378,7 +1496,7 @@ pub fn render_frame(frame: &mut Frame<'_>, app: &TuiApp, state: &ReplState) {
 
     render_header(frame, chunks[0], state);
     render_feed(frame, chunks[1], app, state);
-    render_composer(frame, chunks[2], app);
+    render_composer(frame, chunks[2], app, layout);
     render_footer(frame, chunks[3], app);
 
     // Floating slash-command palette above the composer
@@ -1657,7 +1775,7 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
     frame.render_widget(feed, area);
 }
 
-fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, layout: ComposerLayout) {
     let title = if let Some(started) = app.turn_started {
         let glyph = SPINNER_FRAMES[app.spinner_tick % SPINNER_FRAMES.len()];
         let secs = started.elapsed().as_secs_f64();
@@ -1678,40 +1796,36 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         Color::Cyan
     };
 
-    let display_text = if app.input.is_empty() && !app.is_busy() {
-        Line::from(Span::styled(
-            "Type a request or /help…",
-            Style::default().fg(Color::DarkGray),
-        ))
+    let visible_rows = area.height.saturating_sub(2).max(1) as usize;
+    let total_rows = layout.lines.len().max(1);
+    let scroll_y = if layout.cursor_row >= visible_rows {
+        (layout.cursor_row + 1 - visible_rows).min(total_rows.saturating_sub(visible_rows))
     } else {
-        Line::from(app.input.clone())
+        0
     };
 
-    let composer = if app.input.contains('\n') {
-        Paragraph::new(app.input.as_str())
+    let composer = if app.input.is_empty() && !app.is_busy() {
+        Paragraph::new(Line::from(Span::styled(
+            "Type a request or /help…",
+            Style::default().fg(Color::DarkGray),
+        )))
     } else {
-        Paragraph::new(display_text)
+        Paragraph::new(layout.lines).scroll((scroll_y as u16, 0))
     }
     .block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color))
             .title(title),
-    )
-    .wrap(Wrap { trim: false });
+    );
     frame.render_widget(composer, area);
 
     // Position visible terminal cursor inside the composer when idle and no modal is active.
     if !app.is_busy() && app.modal.is_none() {
-        let before = &app.input[..app.cursor];
-        let row = before.matches('\n').count() as u16;
-        let col = before
-            .rsplit('\n')
-            .next()
-            .map(|s| s.chars().count())
-            .unwrap_or(0) as u16;
-        let cx = area.x + 1 + col.min(area.width.saturating_sub(3));
-        let cy = area.y + 1 + row.min(area.height.saturating_sub(3));
+        let max_col = area.width.saturating_sub(3);
+        let max_row = area.height.saturating_sub(3);
+        let cx = area.x + 1 + (layout.cursor_col as u16).min(max_col);
+        let cy = area.y + 1 + (layout.cursor_row.saturating_sub(scroll_y) as u16).min(max_row);
         frame.set_cursor_position((cx, cy));
     }
 }
@@ -2556,5 +2670,82 @@ mod tests {
             app.modal,
             Some(ActiveModal::SessionPicker { cursor: 0, .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn multiline_composer_renders_wrapped_lines_pasted_newlines_and_scrolls_to_cursor() {
+        let mut state = sample_state();
+        let mut app = TuiApp::new();
+        let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
+
+        // 1. Long single line without `\n` wraps across multiple visible composer lines.
+        let long_line = "AlphaBetaGammaDeltaEpsilonZetaEtaThetaIotaKappaLambdaMuNuXi";
+        app.insert_pasted(long_line);
+        terminal.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let rendered = buffer_text(&terminal);
+        assert!(
+            rendered.contains("AlphaBeta") && rendered.contains("LambdaMuNuXi"),
+            "wrapped multiline input was clipped:\n{rendered}"
+        );
+
+        // 2. Pasting CRLF / CR text normalizes to `\n` and renders every line visibly.
+        app.input.clear();
+        app.cursor = 0;
+        app.insert_pasted("FirstLine\r\nSecondLine\rThirdLine");
+        assert_eq!(app.input, "FirstLine\nSecondLine\nThirdLine");
+        terminal.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let rendered_paste = buffer_text(&terminal);
+        assert!(
+            rendered_paste.contains("FirstLine")
+                && rendered_paste.contains("SecondLine")
+                && rendered_paste.contains("ThirdLine"),
+            "pasted multiline lines missing:\n{rendered_paste}"
+        );
+
+        // 3. Trailing newline (e.g. after Alt+Enter / Ctrl+J) expands box immediately and moves cursor to row + 1.
+        app.input = "LineOne\n".into();
+        app.cursor = app.input.len();
+        let layout = wrap_composer_lines(&app.input, app.cursor, 38);
+        assert_eq!(layout.lines.len(), 2);
+        assert_eq!((layout.cursor_row, layout.cursor_col), (1, 0));
+
+        // 4. Input taller than max composer rows scrolls down so the active last line stays visible.
+        app.input = (1..=12)
+            .map(|i| format!("RowNumber{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.cursor = app.input.len();
+        terminal.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let rendered_tall = buffer_text(&terminal);
+        assert!(
+            rendered_tall.contains("RowNumber12"),
+            "composer failed to scroll to keep last line visible:\n{rendered_tall}"
+        );
+
+        // 5. Up/Down inside multiline input moves between lines before touching history.
+        let mut handle = None;
+        let mut rx = None;
+        app.input = "LineA\nLineB".into();
+        app.cursor = app.input.len();
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert_eq!(app.cursor, 5); // end of "LineA"
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert_eq!(app.cursor, app.input.len());
     }
 }
