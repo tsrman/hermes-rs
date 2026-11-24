@@ -68,10 +68,20 @@ pub(crate) struct SkillSettings {
     /// `skills.config`: the values skills declare under `metadata.hermes.config`.
     #[serde(default)]
     config: Yaml,
+    /// `skills.ledger` (default on): append JSONL audit rows and blobs on `skill_manage` mutations.
+    #[serde(default = "enabled")]
+    ledger: bool,
+    /// `skills.ledger_max_bytes` (default 5 MiB; 0 disables trimming).
+    #[serde(default = "default_ledger_max_bytes")]
+    ledger_max_bytes: usize,
 }
 
 fn enabled() -> bool {
     true
+}
+
+fn default_ledger_max_bytes() -> usize {
+    5 * 1024 * 1024
 }
 
 impl Default for SkillSettings {
@@ -89,6 +99,8 @@ impl Default for SkillSettings {
             template_vars: true,
             inline_shell: false,
             config: Yaml::Null,
+            ledger: true,
+            ledger_max_bytes: default_ledger_max_bytes(),
         }
     }
 }
@@ -121,6 +133,13 @@ impl SkillSettings {
             template_vars: config.get("template_vars").is_none_or(py_truthy),
             inline_shell: py_truthy(&config["inline_shell"]),
             config: config["config"].clone(),
+            ledger: config.get("ledger").is_none_or(py_truthy),
+            ledger_max_bytes: config
+                .get("ledger_max_bytes")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str()?.trim().parse().ok()))
+                .filter(|&n| n >= 0)
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or_else(default_ledger_max_bytes),
         }
     }
 
@@ -142,6 +161,14 @@ impl SkillSettings {
 
     pub(crate) fn write_approval(&self) -> bool {
         self.write_approval
+    }
+
+    pub(crate) fn ledger_enabled(&self) -> bool {
+        self.ledger
+    }
+
+    pub(crate) fn ledger_max_bytes(&self) -> usize {
+        self.ledger_max_bytes
     }
 }
 

@@ -5,8 +5,9 @@
 //! one fails); the older flat single-operation shape is still accepted. Differences by choice:
 //! each call asks the person for approval, as `write_file` does, since skill text is loaded into
 //! later prompts; `skills.guard_agent_created` and `skills.write_approval` make the tool refuse
-//! instead of skipping a check it cannot perform. Not ported: fuzzy matching in `patch` (only
-//! exact text is replaced), the audit ledger, usage statistics and the curator.
+//! instead of skipping a check it cannot perform. Committed mutations append to the JSONL audit
+//! ledger (`.curator_ledger.jsonl`) with content-addressed blobs under `.curator_backups/blobs/`.
+//! Not ported: usage statistics and the curator.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1268,6 +1269,11 @@ impl Skills<'_> {
         let _guard = MUTATION
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let ledger_before = if self.settings.ledger_enabled() {
+            crate::skill_ledger::snapshot_paths(self.home, self.find(&op.name).as_deref())
+        } else {
+            Vec::new()
+        };
         let result = match op.action.as_str() {
             "create" => self.create(op),
             "edit" => self.edit(&op.name, op.content.as_deref().unwrap_or("")),
@@ -1285,6 +1291,25 @@ impl Skills<'_> {
                 "Unknown action '{other}'. Use: create, edit, patch, delete, write_file, remove_file"
             )),
         };
+        if result.get("success").and_then(Value::as_bool) == Some(true)
+            && self.settings.ledger_enabled()
+        {
+            let after_dir = (op.action != "delete")
+                .then(|| self.find(&op.name))
+                .flatten();
+            let ledger_after = crate::skill_ledger::snapshot_paths(self.home, after_dir.as_deref());
+            let evidence = result.get("_change").cloned().unwrap_or_else(|| json!({}));
+            crate::skill_ledger::record_mutation(
+                self.home,
+                true,
+                self.settings.ledger_max_bytes(),
+                &op.action,
+                &op.name,
+                ledger_before,
+                ledger_after,
+                evidence,
+            );
+        }
         Value::Object(result)
     }
 }
@@ -1524,10 +1549,23 @@ impl Skills<'_> {
                 ),
             ));
         }
+        struct PendingLedgerOp {
+            action: String,
+            name: String,
+            before: Vec<crate::skill_ledger::ManifestEntry>,
+            after: Vec<crate::skill_ledger::ManifestEntry>,
+            evidence: Value,
+        }
         let mut results: Vec<Applied> = Vec::new();
         let mut rows: Vec<Value> = Vec::new();
+        let mut pending_ledger: Vec<PendingLedgerOp> = Vec::new();
         for (index, op) in list.iter().enumerate() {
             let flat = Op::from_value(op, &names[index]);
+            let op_before = if self.settings.ledger_enabled() {
+                crate::skill_ledger::snapshot_paths(self.home, self.find(&names[index]).as_deref())
+            } else {
+                Vec::new()
+            };
             let parsed = self.run_one_unlocked(&flat);
             if parsed["success"].as_bool() != Some(true) {
                 let (note, rollback_failed) = self.restore(&snapshots, &results);
@@ -1557,6 +1595,20 @@ impl Skills<'_> {
                 }
                 return Value::Object(fail);
             }
+            if self.settings.ledger_enabled() {
+                let op_after = crate::skill_ledger::snapshot_paths(
+                    self.home,
+                    self.find(&names[index]).as_deref(),
+                );
+                let evidence = parsed.get("_change").cloned().unwrap_or_else(|| json!({}));
+                pending_ledger.push(PendingLedgerOp {
+                    action: flat.action.clone(),
+                    name: names[index].clone(),
+                    before: op_before,
+                    after: op_after,
+                    evidence,
+                });
+            }
             let mut row = Map::new();
             row.insert("name".into(), json!(names[index]));
             row.insert("action".into(), json!(flat.action));
@@ -1576,6 +1628,18 @@ impl Skills<'_> {
                 action: flat.action.clone(),
                 file_path: flat.file_path.clone(),
             });
+        }
+        for entry in pending_ledger {
+            crate::skill_ledger::record_mutation(
+                self.home,
+                true,
+                self.settings.ledger_max_bytes(),
+                &entry.action,
+                &entry.name,
+                entry.before,
+                entry.after,
+                entry.evidence,
+            );
         }
         json!({"success": true, "operations_applied": rows.len(), "results": rows})
     }
@@ -1882,5 +1946,93 @@ mod tests {
             schema(60)["function"]["description"],
             json!(description(60))
         );
+    }
+
+    #[tokio::test]
+    async fn ledger_records_committed_mutations_only_and_skips_rollback() {
+        let home = tempfile::tempdir().unwrap();
+        let settings = SkillSettings::from_config(&Yaml::Null);
+        let skills = Skills {
+            home: home.path(),
+            settings: &settings,
+        };
+        let mut approve = |_: ApprovalRequest| async { ApprovalDecision::Approved };
+
+        let created = call(
+            &skills,
+            &json!({
+                "action": "create",
+                "name": "ledger-skill",
+                "content": "---\nname: ledger-skill\ndescription: Test skill for ledger.\n---\n\nOriginal body.\n"
+            })
+            .to_string(),
+            Some(5),
+            &mut approve,
+        )
+        .await;
+        assert_eq!(created["success"], true, "{created}");
+
+        // Aborted batch (second op fails) must roll back and NOT write ledger rows for either op.
+        let aborted = call(
+            &skills,
+            &json!({
+                "operations": [
+                    {
+                        "action": "patch",
+                        "name": "ledger-skill",
+                        "old_string": "Original body.",
+                        "new_string": "Updated body."
+                    },
+                    {
+                        "action": "patch",
+                        "name": "ledger-skill",
+                        "old_string": "DOES NOT EXIST",
+                        "new_string": "x"
+                    }
+                ]
+            })
+            .to_string(),
+            Some(5),
+            &mut approve,
+        )
+        .await;
+        assert_eq!(aborted["success"], false, "{aborted}");
+
+        let ledger_file = crate::skill_ledger::ledger_path(home.path());
+        let rows: Vec<Value> = fs::read_to_string(&ledger_file)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 1, "aborted batch leaked into ledger: {rows:?}");
+        assert_eq!(rows[0]["action"], "create");
+        assert_eq!(rows[0]["skill"], "ledger-skill");
+
+        // Committed batch appends rows in order.
+        let committed = call(
+            &skills,
+            &json!({
+                "operations": [
+                    {
+                        "action": "patch",
+                        "name": "ledger-skill",
+                        "old_string": "Original body.",
+                        "new_string": "Updated body."
+                    }
+                ]
+            })
+            .to_string(),
+            Some(5),
+            &mut approve,
+        )
+        .await;
+        assert_eq!(committed["success"], true, "{committed}");
+        let rows: Vec<Value> = fs::read_to_string(&ledger_file)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1]["action"], "patch");
     }
 }

@@ -1,7 +1,11 @@
 pub mod approval_detect;
 pub mod approval_policy;
 mod browser_cdp;
+mod browser_dialog;
+mod browser_exec;
+mod browser_supervisor;
 mod browser_url_policy;
+mod browser_vault;
 mod clarify;
 mod compaction;
 mod compaction_window;
@@ -10,6 +14,7 @@ pub mod cron;
 pub mod cronjob_tool;
 pub mod delegation;
 mod difflib;
+mod doc_extract;
 #[cfg(unix)]
 pub mod execute_code;
 #[cfg(not(unix))]
@@ -36,6 +41,7 @@ pub mod reasoning;
 pub mod redact;
 pub mod scratch;
 mod session_search;
+mod skill_ledger;
 mod skill_lint;
 mod skill_manage;
 mod skills;

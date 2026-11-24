@@ -1,0 +1,28 @@
+{
+  "name": "browser_dialog",
+  "description": "Inspect or handle a pending browser JavaScript dialog (alert, confirm, prompt, or beforeunload) that paused the active browser session.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "list",
+          "accept",
+          "dismiss"
+        ],
+        "default": "list",
+        "description": "What to do with pending browser dialogs. Use 'list' to inspect waiting dialogs and recent dialog history, 'accept' to confirm/submit, or 'dismiss' to cancel."
+      },
+      "dialog_id": {
+        "type": "string",
+        "description": "Optional dialog id from browser_dialog(action='list'). When omitted, acts on the most recent pending dialog."
+      },
+      "prompt_text": {
+        "type": "string",
+        "description": "Optional text to enter for a prompt() dialog when action='accept'."
+      }
+    },
+    "required": []
+  }
+}

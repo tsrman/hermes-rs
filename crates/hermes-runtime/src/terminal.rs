@@ -386,6 +386,12 @@ pub(crate) fn schema(background: bool) -> Value {
     if background {
         properties["background"] = json!({"type": "boolean", "default": false,
             "description": "Run the command in the background and return a session_id at once (no timeout). Manage it with process_manage."});
+        properties["pty"] = json!({"type": "boolean", "default": false,
+            "description": "Allocate a pseudo-terminal (PTY) for a background process so process_manage write/submit/close can send interactive stdin."});
+        properties["notify_on_complete"] = json!({"type": "boolean", "default": false,
+            "description": "Queue a completion notification into the conversation when this background process exits."});
+        properties["watch_patterns"] = json!({"type": "array", "items": {"type": "string"},
+            "description": "Substring patterns in background output that trigger rate-limited notifications (falling back to notify_on_complete if noisy)."});
     }
     json!({"type": "function", "function": {
         "name": TERMINAL,
@@ -434,6 +440,9 @@ mod shell {
         workdir: Option<String>,
         timeout: Option<u32>,
         background: Option<bool>,
+        pty: Option<bool>,
+        notify_on_complete: Option<bool>,
+        watch_patterns: Option<Vec<String>>,
     }
 
     /// `background` is the owner of processes started here, when `process_manage` is available.
@@ -530,6 +539,7 @@ mod shell {
             return Err("The working directory changed while approval was pending".into());
         }
         if let Some(owner) = owner {
+            let pty = args.pty == Some(true);
             let prior = settings
                 .local_persistent
                 .then(|| session_snapshot(session))
@@ -545,8 +555,19 @@ mod shell {
                 false,
                 restore_read,
                 None,
+                pty,
             );
-            return crate::process::spawn(child, &args.command, target, owner);
+            let opts = crate::process::SpawnOptions {
+                pty,
+                notify_on_complete: args.notify_on_complete == Some(true),
+                watch_patterns: args
+                    .watch_patterns
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|p| !p.is_empty())
+                    .collect(),
+            };
+            return crate::process::spawn(child, &args.command, target, owner, opts);
         }
         let mut result = run(
             &args.command,
@@ -701,6 +722,7 @@ mod shell {
         report_directory: bool,
         restore_read: Option<OwnedFd>,
         dump_write: Option<OwnedFd>,
+        pty: bool,
     ) -> (Command, bool) {
         let bash = crate::terminal_init::find_bash();
         let using_bash = bash.is_some();
@@ -733,8 +755,10 @@ mod shell {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .process_group(0)
             .kill_on_drop(true);
+        if !pty {
+            child.process_group(0);
+        }
         // SAFETY: fchdir, dup, dup2, and fcntl are async-signal-safe; the closure owns the open
         // descriptors so the child enters the approved directory and inherits the snapshot pipes
         // before exec.
@@ -791,8 +815,15 @@ mod shell {
         } else {
             (None, None)
         };
-        let (mut child, using_bash) =
-            build_command(command, directory, settings, true, restore_read, dump_write);
+        let (mut child, using_bash) = build_command(
+            command,
+            directory,
+            settings,
+            true,
+            restore_read,
+            dump_write,
+            false,
+        );
         child
             .stdout(Stdio::from(writer))
             .stderr(Stdio::from(errors));

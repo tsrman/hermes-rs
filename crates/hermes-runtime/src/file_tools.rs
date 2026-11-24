@@ -179,16 +179,28 @@ impl<'a> FileWorkspace<'a> {
             }
             Err(error) => return Err(error),
         };
+        let extractable = crate::doc_extract::is_extractable_document(&resolved);
+        let max_read = if extractable {
+            crate::doc_extract::MAX_DOCUMENT_BYTES
+        } else {
+            READ_LIMIT
+        };
         let metadata = file.metadata().map_err(|error| error.to_string())?;
-        if !metadata.is_file() || metadata.len() > READ_LIMIT {
-            return Err("File must be a regular file no larger than 10 MB".into());
+        if !metadata.is_file() || metadata.len() > max_read {
+            return Err(format!(
+                "File must be a regular file no larger than {} MB",
+                max_read / 1_000_000
+            ));
         }
         let mut raw_bytes = Vec::new();
-        file.take(READ_LIMIT + 1)
+        file.take(max_read + 1)
             .read_to_end(&mut raw_bytes)
             .map_err(|error| error.to_string())?;
-        if raw_bytes.len() as u64 > READ_LIMIT {
-            return Err("File must be a regular file no larger than 10 MB".into());
+        if raw_bytes.len() as u64 > max_read {
+            return Err(format!(
+                "File must be a regular file no larger than {} MB",
+                max_read / 1_000_000
+            ));
         }
         if let Some(mime) = detect_image_mime(&raw_bytes) {
             let b64 = crate::providers::oauth::base64_encode(&raw_bytes);
@@ -207,16 +219,64 @@ impl<'a> FileWorkspace<'a> {
                 }]
             }));
         }
+        if extractable {
+            match crate::doc_extract::extract_document_bytes(&raw_bytes, &resolved, path) {
+                Ok(extracted) => {
+                    let observe = !crate::doc_extract::is_binary_document(&resolved);
+                    return self.paginate_text_result(
+                        path,
+                        &resolved,
+                        &extracted,
+                        raw_bytes.len(),
+                        offset,
+                        limit,
+                        observe,
+                        true,
+                    );
+                }
+                Err(err) if crate::doc_extract::is_binary_document(&resolved) => {
+                    let ext = crate::doc_extract::lower_extension(&resolved);
+                    return Err(format!(
+                        "Cannot read '{path}' ({ext}): document extraction failed — {err}. Use terminal utilities to inspect or convert the file."
+                    ));
+                }
+                Err(_) => {}
+            }
+        }
         let data = String::from_utf8(raw_bytes)
             .map_err(|_| "File must be UTF-8 text no larger than 10 MB".to_owned())?;
         if data.contains('\0') {
             return Err("File must be UTF-8 text no larger than 10 MB".into());
         }
+        self.paginate_text_result(
+            path,
+            &resolved,
+            &data,
+            data.len(),
+            offset,
+            limit,
+            true,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paginate_text_result(
+        &mut self,
+        path: &str,
+        resolved: &Path,
+        data: &str,
+        size: usize,
+        offset: u64,
+        limit: u64,
+        observe: bool,
+        extracted_document: bool,
+    ) -> Result<Value, String> {
         // A leading BOM belongs to the first page only, and is not shown.
         let shown_data = if offset == 1 {
-            data.strip_prefix('\u{feff}').unwrap_or(&data)
+            data.strip_prefix('\u{feff}').unwrap_or(data)
         } else {
-            &data
+            data
         };
         let mut lines: Vec<&str> = shown_data.split('\n').collect();
         if shown_data.ends_with('\n') || shown_data.is_empty() {
@@ -226,8 +286,7 @@ impl<'a> FileWorkspace<'a> {
         let start = usize::try_from(offset - 1).unwrap_or(usize::MAX).min(total);
         let end_line = offset.saturating_add(limit) - 1;
         let end = start.saturating_add(limit as usize).min(total);
-        let size = data.len();
-        if size == 0 {
+        if data.is_empty() && !extracted_document {
             return Ok(
                 json!({"content": "", "total_lines": 0, "file_size": 0, "hint": "File is empty (0 bytes)."}),
             );
@@ -312,11 +371,11 @@ impl<'a> FileWorkspace<'a> {
         // back as a usable key; a file known to hold credentials gets every pass.
         let homes: Vec<&Path> = self.profile.iter().map(PathBuf::as_path).collect();
         let content = redact_file_read(&content, is_secret_file_arg(path, &homes));
-        if data.len() <= WRITE_LIMIT {
+        if observe && data.len() <= WRITE_LIMIT {
             let hash = fingerprint(data.as_bytes());
             let observation = self
                 .observed
-                .entry(resolved)
+                .entry(resolved.to_path_buf())
                 .or_insert_with(|| Observation::new(hash));
             if observation.hash != hash {
                 *observation = Observation::new(hash);
@@ -333,6 +392,9 @@ impl<'a> FileWorkspace<'a> {
         result.insert("total_lines".into(), json!(total));
         result.insert("file_size".into(), json!(size));
         result.insert("truncated".into(), json!(truncated));
+        if extracted_document {
+            result.insert("extracted_document".into(), json!(true));
+        }
         if let Some(hint) = hint {
             result.insert("hint".into(), json!(hint));
         }
@@ -567,6 +629,16 @@ impl<'a> FileWorkspace<'a> {
         .any(|directory| target.starts_with(directory))
         {
             return Err("Refusing to write to a protected system path".into());
+        }
+        if crate::doc_extract::is_sqlite_sidecar(&target) {
+            return Err(format!(
+                "Refusing to write plain text to binary SQLite sidecar '{path}'. Use sqlite3 CLI or a SQLite library via the terminal."
+            ));
+        }
+        if target.exists() && crate::doc_extract::is_binary_document(&target) {
+            return Err(format!(
+                "Refusing to overwrite existing binary document '{path}' with plain text. Use appropriate libraries or utilities via the terminal to modify it."
+            ));
         }
         linux::Target::open(&root, &target)
     }
@@ -1172,6 +1244,105 @@ mod limit_tests {
         assert_eq!(
             std::fs::read_to_string(&spill_file).unwrap(),
             "alpha\nbeta\ngamma\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_file_extracts_documents_and_write_guards_reject_binary_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let nb = json!({
+            "cells": [
+                {"cell_type": "markdown", "source": "# Notebook Heading"},
+                {"cell_type": "code", "source": "x = 1", "outputs": [{"output_type": "stream", "text": "ok\n"}]}
+            ]
+        });
+        std::fs::write(dir.path().join("demo.ipynb"), nb.to_string()).unwrap();
+
+        let db_path = dir.path().join("sample.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT); INSERT INTO users VALUES (1, 'a@b.c');").unwrap();
+        }
+        std::fs::write(dir.path().join("sample.db-wal"), b"walbytes").unwrap();
+        std::fs::write(
+            dir.path().join("doc.pdf"),
+            b"%PDF-1.4\n1 0 obj\n<< /Length 25 >>\nstream\nBT (Invoice 99) Tj ET\nendstream\nendobj\n",
+        )
+        .unwrap();
+
+        let mut workspace = FileWorkspace::new(dir.path(), None);
+
+        let nb_res = workspace.read(r#"{"path": "demo.ipynb", "offset": 1, "limit": 2}"#);
+        assert_eq!(nb_res["extracted_document"], true, "{nb_res}");
+        assert_eq!(nb_res["truncated"], true, "{nb_res}");
+        assert!(nb_res["content"]
+            .as_str()
+            .unwrap()
+            .contains("1|# ── Markdown cell 1 ──"));
+
+        let db_res = workspace.read(r#"{"path": "sample.db"}"#);
+        assert_eq!(db_res["extracted_document"], true, "{db_res}");
+        assert!(
+            db_res["content"]
+                .as_str()
+                .unwrap()
+                .contains("CREATE TABLE users"),
+            "{db_res}"
+        );
+
+        let pdf_res = workspace.read(r#"{"path": "doc.pdf"}"#);
+        assert_eq!(pdf_res["extracted_document"], true, "{pdf_res}");
+        assert!(
+            pdf_res["content"].as_str().unwrap().contains("Invoice 99"),
+            "{pdf_res}"
+        );
+
+        // Binary document overwrite & SQLite sidecar writes must be rejected even after read.
+        let mut approve = |_: ApprovalRequest| async { ApprovalDecision::Approved };
+        let err_db = workspace
+            .edit(
+                WRITE_FILE,
+                &json!({"path": "sample.db", "content": "corrupt"}).to_string(),
+                Some(5),
+                &mut approve,
+            )
+            .await;
+        assert!(
+            err_db["error"]
+                .as_str()
+                .unwrap()
+                .contains("binary document"),
+            "{err_db}"
+        );
+
+        let err_wal = workspace
+            .edit(
+                WRITE_FILE,
+                &json!({"path": "sample.db-wal", "content": "corrupt"}).to_string(),
+                Some(5),
+                &mut approve,
+            )
+            .await;
+        assert!(
+            err_wal["error"]
+                .as_str()
+                .unwrap()
+                .contains("SQLite sidecar"),
+            "{err_wal}"
+        );
+
+        // Existing .ipynb remains writable as UTF-8 after full read.
+        let nb_full = workspace.read(r#"{"path": "demo.ipynb"}"#);
+        assert_eq!(nb_full["truncated"], false, "{nb_full}");
+        let bad_magic = dir.path().join("corrupt.db");
+        std::fs::write(&bad_magic, b"not sqlite").unwrap();
+        let err_magic = workspace.read(r#"{"path": "corrupt.db"}"#);
+        assert!(
+            err_magic["error"]
+                .as_str()
+                .unwrap()
+                .contains("document extraction failed"),
+            "{err_magic}"
         );
     }
 }

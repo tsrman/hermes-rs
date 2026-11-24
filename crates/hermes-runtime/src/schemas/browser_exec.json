@@ -1,0 +1,27 @@
+{
+  "name": "browser_exec",
+  "description": "Execute a Python browser automation script against the live CDP browser session. Preloaded stdlib helpers are available without imports: cdp(method, params=None, target_id=None, timeout=30.0), ensure_real_tab(), goto_url(url, wait=True), wait_for_load(timeout=15.0), page_info(), js(expression, await_promise=True), fill_input(selector, value), click_at_xy(x, y), capture_screenshot(path=None, full_page=False), new_tab(url='about:blank'), switch_tab(target_id), list_tabs(), close_tab(target_id), list_frames(). Standard output is returned verbatim; call browser_exec with one cohesive script per step.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "code": {
+        "type": "string",
+        "description": "Python script to run against the live browser via preloaded CDP helpers."
+      },
+      "session": {
+        "type": "string",
+        "description": "Optional browser session name (1-64 chars matching [A-Za-z0-9_.-]). Reuse across steps to stay attached."
+      },
+      "timeout": {
+        "type": "number",
+        "default": 300,
+        "minimum": 5,
+        "maximum": 1800,
+        "description": "Execution timeout in seconds (default 300, range 5-1800)."
+      }
+    },
+    "required": [
+      "code"
+    ]
+  }
+}

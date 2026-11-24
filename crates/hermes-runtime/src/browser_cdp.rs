@@ -182,8 +182,9 @@ pub(crate) fn redact_cdp_output(
     }
 }
 
-fn redact_method_result(method: &str, result: &Value) -> Value {
-    redact_cdp_output(result, &always_binary(method), &flagged_binary(method), 0)
+pub(crate) fn redact_method_result(method: &str, result: &Value) -> Value {
+    let redacted = redact_cdp_output(result, &always_binary(method), &flagged_binary(method), 0);
+    crate::browser_vault::scrub_value(redacted)
 }
 
 // ── Errors ───────────────────────────────────────────────────────────────────────────────────────
@@ -196,11 +197,11 @@ fn bound_error(message: &str) -> String {
     format!("{head}{ERROR_TRUNCATION_MARKER}")
 }
 
-fn tool_error(message: &str) -> Value {
+pub(crate) fn tool_error(message: &str) -> Value {
     json!({"error": bound_error(message)})
 }
 
-fn tool_error_with(message: &str, extra: &[(&str, &str)]) -> Value {
+pub(crate) fn tool_error_with(message: &str, extra: &[(&str, &str)]) -> Value {
     let mut out = Map::new();
     out.insert("error".into(), Value::String(bound_error(message)));
     for (key, value) in extra {
@@ -209,11 +210,11 @@ fn tool_error_with(message: &str, extra: &[(&str, &str)]) -> Value {
     Value::Object(out)
 }
 
-fn blocked(message: &str, method: &str) -> Value {
+pub(crate) fn blocked(message: &str, method: &str) -> Value {
     tool_error_with(message, &[("method", method), ("cdp_docs", CDP_DOCS_URL)])
 }
 
-fn docs_error(message: &str) -> Value {
+pub(crate) fn docs_error(message: &str) -> Value {
     tool_error_with(message, &[("cdp_docs", CDP_DOCS_URL)])
 }
 
@@ -478,7 +479,7 @@ fn fetched_param_urls(method: &str, params: &Value) -> Vec<String> {
 
 /// Apply the browser SSRF/private-page guard to a raw CDP call. A page whose URL cannot be
 /// verified as public refuses page-reading methods.
-async fn private_guard(
+pub(crate) async fn private_guard(
     method: &str,
     params: &Value,
     endpoint: &str,
@@ -759,13 +760,22 @@ pub(crate) async fn call(settings: &BrowserSettings, task_id: &str, arguments: &
     let method = method_value.as_str().unwrap_or("");
 
     if let Some(frame_id) = frame_id {
-        // An OOPIF's frame id is its iframe target id, so the guard judges that frame.
-        let endpoint = resolve_endpoint(raw_url).await;
-        let params = if params_value.is_object() {
+        if method.is_empty() {
+            return docs_error("'method' is required (e.g. 'Target.getTargets')");
+        }
+        let params = if truthy(&params_value) {
             params_value.clone()
         } else {
             json!({})
         };
+        if !params.is_object() {
+            return tool_error(&format!(
+                "'params' must be an object/dict, got {}",
+                python_type_name(&params)
+            ));
+        }
+        // An OOPIF's frame id is its iframe target id, so the guard judges that frame.
+        let endpoint = resolve_endpoint(raw_url).await;
         if let Some(refusal) = private_guard(
             method,
             &params,
@@ -777,11 +787,27 @@ pub(crate) async fn call(settings: &BrowserSettings, task_id: &str, arguments: &
         {
             return refusal;
         }
-        // The supervisor that serves frame routing is not ported: no task has one attached.
-        return tool_error(&format!(
-            "No CDP supervisor is attached for task={}. Call browser_exec or /browser connect first so the supervisor can attach; Page.getFrameTree lists the frame ids you can pass here.",
-            py_str_repr(task_id)
-        ));
+        let Some(supervisor) = crate::browser_supervisor::get(task_id).await else {
+            return tool_error(&format!(
+                "No CDP supervisor is attached for task={}. Call browser_exec or /browser connect first so the supervisor can attach; Page.getFrameTree lists the frame ids you can pass here.",
+                py_str_repr(task_id)
+            ));
+        };
+        let timeout = read_timeout(timeout_raw);
+        return match supervisor
+            .call_in_frame(frame_id, method, &params, timeout)
+            .await
+        {
+            Ok(result) => {
+                let mut payload = Map::new();
+                payload.insert("success".into(), json!(true));
+                payload.insert("method".into(), json!(method));
+                payload.insert("frame_id".into(), json!(frame_id));
+                payload.insert("result".into(), redact_method_result(method, &result));
+                Value::Object(payload)
+            }
+            Err(detail) => tool_error_with(&detail, &[("method", method)]),
+        };
     }
 
     if method.is_empty() {

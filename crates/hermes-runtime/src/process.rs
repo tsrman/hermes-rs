@@ -1,11 +1,17 @@
 //! Background processes started by `terminal(background=true)` and the `process_manage` tool.
 //!
-//! Mirrors `tools/process_registry.py` for local pipe-mode processes: a rolling output buffer per
-//! process, results for poll/log/wait/kill, and ownership by the conversation that started the
-//! process. Not ported: pseudo-terminals (so no stdin), completion notifications, checkpoints that
-//! outlive the CLI, and subagent handoff. Every process still running when the CLI ends is killed.
+//! Mirrors `tools/process_registry.py` for local pipe-mode and PTY processes:
+//! - Rolling 200k-char output buffer per process (pipe or real POSIX PTY via `posix_openpt`)
+//! - Interactive `write`, `submit`, and `close` stdin actions for PTY processes
+//! - `notify_on_complete` completion queue and `watch_patterns` substring watcher with rate-limit
+//!   strikes & lifetime-hit promotion to `notify_on_complete`
+//! - Clean group termination on `kill` and CLI exit (`kill_all`)
 
-use std::process::ExitStatus;
+use std::ffi::CStr;
+use std::fs::File;
+use std::io::{self, Read as _, Write as _};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -30,9 +36,13 @@ const TERM_GRACE: Duration = Duration::from_secs(2);
 /// A grandchild that keeps the pipes open must not keep a finished process "running".
 const DRAIN_AFTER_EXIT: Duration = Duration::from_millis(600);
 
+const WATCH_MIN_INTERVAL_SECONDS: f64 = 30.0;
+const WATCH_STRIKE_LIMIT: usize = 3;
+const WATCH_LIFETIME_MAX_HITS: usize = 20;
+
 const NON_INTERACTIVE: &str =
     "Pass input non-interactively instead (arguments, a here-doc, or `printf ... | cmd`).";
-const NO_PTY_REASON: &str = "this build cannot give background processes a pseudo-terminal";
+const NO_PTY_STARTED_REASON: &str = "terminal background=true without pty=true";
 
 pub(crate) const SILENT_HINT: &str = "background=true without notify_on_complete=true means this process runs SILENTLY — you will not be told when it exits. If this is a bounded task (test suite, build, CI poller, deploy, anything with a defined end), you almost certainly wanted notify_on_complete=true so the system pings you on exit. Re-launch with notify_on_complete=true, or call process_manage(action='poll') / process_manage(action='wait') yourself to learn the outcome. Only ignore this hint for genuine long-lived processes that never exit (servers, watchers, daemons).";
 
@@ -44,6 +54,60 @@ pub(crate) fn schema() -> Value {
     })
 }
 
+#[derive(Clone, Default)]
+pub(crate) struct SpawnOptions {
+    pub pty: bool,
+    pub notify_on_complete: bool,
+    pub watch_patterns: Vec<String>,
+}
+
+struct ProcessNotification {
+    owner: String,
+    session_id: String,
+    kind: &'static str,
+    text: String,
+}
+
+static NOTIFICATIONS: LazyLock<Mutex<Vec<ProcessNotification>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+
+/// Drain and clear pending background process notifications for `owner` (or all if `owner` is empty).
+pub fn drain_notifications(owner: &str) -> Vec<String> {
+    let mut queue = NOTIFICATIONS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut drained = Vec::new();
+    let mut remaining = Vec::with_capacity(queue.len());
+    for item in queue.drain(..) {
+        if owner.is_empty() || item.owner == owner {
+            drained.push(item.text);
+        } else {
+            remaining.push(item);
+        }
+    }
+    *queue = remaining;
+    drained
+}
+
+fn push_notification(owner: &str, session_id: &str, kind: &'static str, text: String) {
+    let mut queue = NOTIFICATIONS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    queue.push(ProcessNotification {
+        owner: owner.to_owned(),
+        session_id: session_id.to_owned(),
+        kind,
+        text,
+    });
+}
+
+fn clear_completion_notification(session_id: &str) {
+    let mut queue = NOTIFICATIONS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    queue.retain(|item| !(item.session_id == session_id && item.kind == "completion"));
+}
+
 struct State {
     output: String,
     chars: usize,
@@ -53,6 +117,15 @@ struct State {
     reason: &'static str,
     source: &'static str,
     exited_at: f64,
+    notify_on_complete: bool,
+    watch_patterns: Vec<String>,
+    watch_disabled: bool,
+    watch_hits: usize,
+    watch_cooldown_until: f64,
+    watch_strike_candidate: bool,
+    watch_consecutive_strikes: usize,
+    watch_suppressed: usize,
+    completion_acknowledged: bool,
 }
 
 struct Session {
@@ -61,8 +134,10 @@ struct Session {
     cwd: String,
     pid: i32,
     owner: String,
+    pty: bool,
     started: f64,
     started_at: Instant,
+    stdin: Mutex<Option<File>>,
     state: Mutex<State>,
     changed: Notify,
 }
@@ -75,44 +150,161 @@ impl Session {
     }
 
     fn append(&self, text: &str) {
-        let mut state = self.lock();
-        if state.exited {
-            return;
+        let mut pending: Vec<(&'static str, String)> = Vec::new();
+        {
+            let mut state = self.lock();
+            if state.exited {
+                return;
+            }
+            state.output.push_str(text);
+            let added = text.chars().count();
+            state.chars += added;
+            state.total += added;
+            if state.chars > MAX_OUTPUT_CHARS {
+                let drop = state.chars - MAX_OUTPUT_CHARS;
+                let cut = state
+                    .output
+                    .char_indices()
+                    .nth(drop)
+                    .map_or(state.output.len(), |(index, _)| index);
+                state.output.drain(..cut);
+                state.chars = MAX_OUTPUT_CHARS;
+            }
+
+            if !state.watch_disabled && !state.watch_patterns.is_empty() {
+                let hits: Vec<(String, String)> = split_lines(text)
+                    .into_iter()
+                    .filter_map(|line| {
+                        state
+                            .watch_patterns
+                            .iter()
+                            .find(|pat| line.contains(pat.as_str()))
+                            .map(|pat| (pat.clone(), line.trim_end().to_owned()))
+                    })
+                    .collect();
+
+                if !hits.is_empty() {
+                    let now = unix_now();
+                    if state.watch_cooldown_until > 0.0 && now < state.watch_cooldown_until {
+                        state.watch_suppressed += hits.len();
+                        if !state.watch_strike_candidate {
+                            state.watch_strike_candidate = true;
+                            state.watch_consecutive_strikes += 1;
+                            if state.watch_consecutive_strikes >= WATCH_STRIKE_LIMIT {
+                                state.watch_disabled = true;
+                                state.notify_on_complete = true;
+                                let suppressed = state.watch_suppressed;
+                                pending.push((
+                                    "watch_disabled",
+                                    format!(
+                                        "[IMPORTANT: Watch patterns disabled for process {} (suppressed {suppressed} match(es)) — {WATCH_STRIKE_LIMIT} consecutive rate-limit windows triggered (min spacing {WATCH_MIN_INTERVAL_SECONDS:.0}s). Falling back to notify_on_complete semantics; you'll get one notification when the process exits.]",
+                                        self.id
+                                    ),
+                                ));
+                            }
+                        }
+                    } else {
+                        if state.watch_cooldown_until > 0.0 && !state.watch_strike_candidate {
+                            state.watch_consecutive_strikes = 0;
+                        }
+                        state.watch_strike_candidate = false;
+                        state.watch_cooldown_until = now + WATCH_MIN_INTERVAL_SECONDS;
+                        state.watch_hits += 1;
+                        let suppressed = std::mem::take(&mut state.watch_suppressed);
+                        let matched_pattern = hits[0].0.clone();
+                        let mut lines: Vec<String> =
+                            hits.into_iter().take(20).map(|(_, line)| line).collect();
+                        let mut out = lines.join("\n");
+                        lines.clear();
+                        if out.chars().count() > 2000 {
+                            out = out.chars().take(2000).collect::<String>() + "\n...(truncated)";
+                        }
+                        let clean_out =
+                            redact_terminal_output(&strip_ansi(&out), Some(&self.command), &[]);
+                        let clean_cmd = redact_with(
+                            &self.command,
+                            Mode {
+                                code_file: true,
+                                ..Mode::default()
+                            },
+                        );
+                        let sup_note = if suppressed > 0 {
+                            format!(" ({suppressed} suppressed during cooldown)")
+                        } else {
+                            String::new()
+                        };
+                        pending.push((
+                            "watch_match",
+                            format!(
+                                "[IMPORTANT: Background process {} ({clean_cmd}) matched watch pattern '{matched_pattern}'{sup_note}:]\n{clean_out}",
+                                self.id
+                            ),
+                        ));
+                        if state.watch_hits >= WATCH_LIFETIME_MAX_HITS {
+                            state.watch_disabled = true;
+                            state.notify_on_complete = true;
+                            pending.push((
+                                "watch_disabled",
+                                format!(
+                                    "[IMPORTANT: Watch patterns disabled for process {} — reached the lifetime cap of {WATCH_LIFETIME_MAX_HITS} delivered matches. Falling back to notify_on_complete semantics; you'll get one notification when the process exits.]",
+                                    self.id
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
         }
-        state.output.push_str(text);
-        let added = text.chars().count();
-        state.chars += added;
-        state.total += added;
-        if state.chars > MAX_OUTPUT_CHARS {
-            let drop = state.chars - MAX_OUTPUT_CHARS;
-            let cut = state
-                .output
-                .char_indices()
-                .nth(drop)
-                .map_or(state.output.len(), |(index, _)| index);
-            state.output.drain(..cut);
-            state.chars = MAX_OUTPUT_CHARS;
+        for (kind, notice) in pending {
+            push_notification(&self.owner, &self.id, kind, notice);
         }
     }
 
     /// Record an exit unless one is already recorded.
     fn mark_exited(&self, code: Option<i32>, reason: &'static str, source: &'static str) -> bool {
-        let mut state = self.lock();
-        if state.exited {
-            return false;
+        let maybe_notice = {
+            let mut state = self.lock();
+            if state.exited {
+                return false;
+            }
+            state.exited = true;
+            state.exit_code = code;
+            state.reason = reason;
+            state.source = source;
+            state.exited_at = unix_now();
+            if state.notify_on_complete && !state.completion_acknowledged {
+                let tail = redact_terminal_output(
+                    &strip_ansi(tail_chars(&state.output, COMPLETION_OUTPUT_CHARS)),
+                    Some(&self.command),
+                    &[],
+                );
+                let cmd = redact_with(
+                    &self.command,
+                    Mode {
+                        code_file: true,
+                        ..Mode::default()
+                    },
+                );
+                let code_text = code.map_or_else(|| "unknown".to_owned(), |c| c.to_string());
+                Some(format!(
+                    "[IMPORTANT: Background process {} ({cmd}) exited with status '{reason}' (exit code {code_text}). Output tail:]\n{tail}",
+                    self.id
+                ))
+            } else {
+                None
+            }
+        };
+        if let Some(notice) = maybe_notice {
+            push_notification(&self.owner, &self.id, "completion", notice);
         }
-        state.exited = true;
-        state.exit_code = code;
-        state.reason = reason;
-        state.source = source;
-        state.exited_at = unix_now();
-        drop(state);
         self.changed.notify_waiters();
         true
     }
 }
 
 static SESSIONS: LazyLock<Mutex<Vec<Arc<Session>>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+#[cfg(not(target_os = "linux"))]
+static PTSNAME_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 fn sessions() -> MutexGuard<'static, Vec<Arc<Session>>> {
     SESSIONS
@@ -170,45 +362,137 @@ fn prune(list: &mut Vec<Arc<Session>>) {
     }
 }
 
-/// Feed a stream into the session's buffer, decoding UTF-8 across chunk boundaries.
-async fn pump(session: Arc<Session>, mut reader: impl AsyncRead + Unpin) {
-    let mut carry: Vec<u8> = Vec::new();
-    let mut chunk = [0u8; 4096];
-    loop {
-        let count = match reader.read(&mut chunk).await {
-            Ok(0) | Err(_) => break,
-            Ok(count) => count,
-        };
-        carry.extend_from_slice(&chunk[..count]);
+struct Utf8StreamDecoder {
+    carry: Vec<u8>,
+}
+
+impl Utf8StreamDecoder {
+    fn new() -> Self {
+        Self { carry: Vec::new() }
+    }
+
+    fn push(&mut self, bytes: &[u8], session: &Session) {
+        self.carry.extend_from_slice(bytes);
         loop {
-            match std::str::from_utf8(&carry) {
+            match std::str::from_utf8(&self.carry) {
                 Ok(text) => {
                     session.append(text);
-                    carry.clear();
+                    self.carry.clear();
                     break;
                 }
                 Err(error) => {
                     let valid = error.valid_up_to();
                     if valid > 0 {
-                        session.append(&String::from_utf8_lossy(&carry[..valid]));
+                        session.append(&String::from_utf8_lossy(&self.carry[..valid]));
                     }
                     match error.error_len() {
-                        // A split multibyte character: keep it for the next read.
                         None => {
-                            carry.drain(..valid);
+                            self.carry.drain(..valid);
                             break;
                         }
                         Some(bad) => {
                             session.append("\u{fffd}");
-                            carry.drain(..valid + bad);
+                            self.carry.drain(..valid + bad);
                         }
                     }
                 }
             }
         }
     }
-    if !carry.is_empty() {
-        session.append(&String::from_utf8_lossy(&carry));
+
+    fn finish(&mut self, session: &Session) {
+        if !self.carry.is_empty() {
+            session.append(&String::from_utf8_lossy(&self.carry));
+            self.carry.clear();
+        }
+    }
+}
+
+/// Feed a pipe stream into the session's buffer, decoding UTF-8 across chunk boundaries.
+async fn pump(session: Arc<Session>, mut reader: impl AsyncRead + Unpin) {
+    let mut decoder = Utf8StreamDecoder::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let count = match reader.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(count) => count,
+        };
+        decoder.push(&chunk[..count], &session);
+    }
+    decoder.finish(&session);
+}
+
+fn pump_pty_blocking(session: Arc<Session>, mut reader: File) {
+    let mut decoder = Utf8StreamDecoder::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => decoder.push(&chunk[..count], &session),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            // EIO on Linux/macOS PTY master means the slave side has closed.
+            Err(_) => break,
+        }
+    }
+    decoder.finish(&session);
+}
+
+fn open_pty() -> Result<(OwnedFd, OwnedFd), String> {
+    // SAFETY: Standard POSIX PTY allocation via `posix_openpt` + `grantpt` + `unlockpt` + `open`.
+    unsafe {
+        let master_fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+        if master_fd < 0 {
+            return Err(format!(
+                "posix_openpt failed: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        let master = OwnedFd::from_raw_fd(master_fd);
+        if libc::grantpt(master.as_raw_fd()) != 0 {
+            return Err(format!("grantpt failed: {}", io::Error::last_os_error()));
+        }
+        if libc::unlockpt(master.as_raw_fd()) != 0 {
+            return Err(format!("unlockpt failed: {}", io::Error::last_os_error()));
+        }
+
+        let slave_name = {
+            #[cfg(target_os = "linux")]
+            {
+                let mut buf = [0 as libc::c_char; 256];
+                if libc::ptsname_r(master.as_raw_fd(), buf.as_mut_ptr(), buf.len()) != 0 {
+                    return Err(format!("ptsname_r failed: {}", io::Error::last_os_error()));
+                }
+                CStr::from_ptr(buf.as_ptr()).to_owned()
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _guard = PTSNAME_LOCK
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let ptr = libc::ptsname(master.as_raw_fd());
+                if ptr.is_null() {
+                    return Err(format!("ptsname failed: {}", io::Error::last_os_error()));
+                }
+                CStr::from_ptr(ptr).to_owned()
+            }
+        };
+
+        let slave_fd = libc::open(slave_name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+        if slave_fd < 0 {
+            return Err(format!(
+                "open slave pty failed: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        let slave = OwnedFd::from_raw_fd(slave_fd);
+        let ws = libc::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let _ = libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ as _, &ws);
+        Ok((master, slave))
     }
 }
 
@@ -219,22 +503,74 @@ pub(crate) fn spawn(
     text: &str,
     cwd: &str,
     owner: &str,
+    options: SpawnOptions,
 ) -> Result<Value, String> {
-    use std::process::Stdio;
-    // One pipe carries both streams, so output keeps the order the process wrote it in.
-    let (reader, writer) =
-        std::io::pipe().map_err(|error| format!("Failed to start background process: {error}"))?;
-    let errors = writer
-        .try_clone()
-        .map_err(|error| format!("Failed to start background process: {error}"))?;
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(writer))
-        .stderr(Stdio::from(errors))
-        .process_group(0)
-        .kill_on_drop(false);
+    let mut pipe_reader: Option<tokio::net::unix::pipe::Receiver> = None;
+    let mut pty_reader: Option<File> = None;
+    let mut stdin_writer: Option<File> = None;
+    let mut using_pty = false;
+
+    if options.pty {
+        match open_pty() {
+            Ok((master, slave)) => {
+                let slave_out = slave
+                    .try_clone()
+                    .map_err(|error| format!("Failed to start PTY process: {error}"))?;
+                let slave_err = slave
+                    .try_clone()
+                    .map_err(|error| format!("Failed to start PTY process: {error}"))?;
+                let master_dup = master
+                    .try_clone()
+                    .map_err(|error| format!("Failed to start PTY process: {error}"))?;
+                stdin_writer = Some(File::from(master_dup));
+                pty_reader = Some(File::from(master));
+                command
+                    .stdin(Stdio::from(File::from(slave)))
+                    .stdout(Stdio::from(File::from(slave_out)))
+                    .stderr(Stdio::from(File::from(slave_err)))
+                    .kill_on_drop(false);
+                // SAFETY: `setsid` and `ioctl(0, TIOCSCTTY, 0)` are async-signal-safe; fd 0 is
+                // already connected to the slave PTY in the child.
+                unsafe {
+                    command.pre_exec(|| {
+                        if libc::setsid() == -1 {
+                            return Err(io::Error::last_os_error());
+                        }
+                        if libc::ioctl(0, libc::TIOCSCTTY as _, 0 as libc::c_int) == -1 {
+                            return Err(io::Error::last_os_error());
+                        }
+                        Ok(())
+                    });
+                }
+                using_pty = true;
+            }
+            Err(_) => {
+                // Fall back to pipe mode cleanly if PTY allocation fails.
+            }
+        }
+    }
+
+    if !using_pty {
+        // One pipe carries both streams, so output keeps the order the process wrote it in.
+        let (reader, writer) = std::io::pipe()
+            .map_err(|error| format!("Failed to start background process: {error}"))?;
+        let errors = writer
+            .try_clone()
+            .map_err(|error| format!("Failed to start background process: {error}"))?;
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(writer))
+            .stderr(Stdio::from(errors))
+            .process_group(0)
+            .kill_on_drop(false);
+        let receiver =
+            tokio::net::unix::pipe::Receiver::from_file(File::from(OwnedFd::from(reader)))
+                .map_err(|error| format!("Failed to start background process: {error}"))?;
+        pipe_reader = Some(receiver);
+    }
+
     let spawned = command.spawn();
-    // The child holds the only write ends now; end of output is its exit.
+    // The child holds the only slave/write ends now; end of output is its exit.
     drop(command);
     let mut child =
         spawned.map_err(|error| format!("Failed to start background process: {error}"))?;
@@ -242,18 +578,19 @@ pub(crate) fn spawn(
         .id()
         .and_then(|pid| i32::try_from(pid).ok())
         .ok_or("Failed to start background process: missing process id")?;
-    let receiver = tokio::net::unix::pipe::Receiver::from_file(std::fs::File::from(
-        std::os::fd::OwnedFd::from(reader),
-    ))
-    .map_err(|error| format!("Failed to start background process: {error}"))?;
+
+    let notify_on_complete = options.notify_on_complete;
+    let watch_patterns = options.watch_patterns;
     let session = Arc::new(Session {
         id: format!("proc_{}", random_hex()),
         command: text.to_owned(),
         cwd: cwd.to_owned(),
         pid,
         owner: owner.to_owned(),
+        pty: using_pty,
         started: unix_now(),
         started_at: Instant::now(),
+        stdin: Mutex::new(stdin_writer),
         state: Mutex::new(State {
             output: String::new(),
             chars: 0,
@@ -263,6 +600,15 @@ pub(crate) fn spawn(
             reason: "exited",
             source: "",
             exited_at: 0.0,
+            notify_on_complete,
+            watch_patterns: watch_patterns.clone(),
+            watch_disabled: false,
+            watch_hits: 0,
+            watch_cooldown_until: 0.0,
+            watch_strike_candidate: false,
+            watch_consecutive_strikes: 0,
+            watch_suppressed: 0,
+            completion_acknowledged: false,
         }),
         changed: Notify::new(),
     });
@@ -271,29 +617,49 @@ pub(crate) fn spawn(
         prune(&mut list);
         list.push(Arc::clone(&session));
     }
-    let readers = vec![tokio::spawn(pump(Arc::clone(&session), receiver))];
+
+    let reader_task = if let Some(receiver) = pipe_reader {
+        tokio::spawn(pump(Arc::clone(&session), receiver))
+    } else if let Some(pty_file) = pty_reader {
+        let s = Arc::clone(&session);
+        tokio::task::spawn_blocking(move || pump_pty_blocking(s, pty_file))
+    } else {
+        unreachable!()
+    };
+
     let waiting = Arc::clone(&session);
     tokio::spawn(async move {
         let status = child.wait().await;
         let deadline = tokio::time::Instant::now() + DRAIN_AFTER_EXIT;
-        for mut reader in readers {
-            if tokio::time::timeout_at(deadline, &mut reader)
-                .await
-                .is_err()
-            {
-                reader.abort();
-            }
+        let mut reader = reader_task;
+        if tokio::time::timeout_at(deadline, &mut reader)
+            .await
+            .is_err()
+        {
+            reader.abort();
         }
         waiting.mark_exited(status.ok().and_then(exit_code), "exited", "");
     });
-    Ok(json!({
-        "output": "Background process started",
-        "session_id": session.id,
-        "pid": session.pid,
-        "exit_code": 0,
-        "error": null,
-        "hint": SILENT_HINT,
-    }))
+
+    let mut result = Map::new();
+    result.insert("output".into(), json!("Background process started"));
+    result.insert("session_id".into(), json!(session.id));
+    result.insert("pid".into(), json!(session.pid));
+    result.insert("exit_code".into(), json!(0));
+    result.insert("error".into(), Value::Null);
+    if using_pty {
+        result.insert("pty".into(), json!(true));
+    }
+    if notify_on_complete {
+        result.insert("notify_on_complete".into(), json!(true));
+    }
+    if !watch_patterns.is_empty() {
+        result.insert("watch_patterns".into(), json!(watch_patterns));
+    }
+    if !notify_on_complete && watch_patterns.is_empty() {
+        result.insert("hint".into(), json!(SILENT_HINT));
+    }
+    Ok(Value::Object(result))
 }
 
 fn random_hex() -> String {
@@ -414,8 +780,12 @@ fn exit_snapshot(session: &Session, state: &State, status: &str) -> Value {
     Value::Object(map)
 }
 
-fn poll(session: &Session) -> Value {
-    let state = session.lock();
+fn poll(session: &Session, acknowledge: bool) -> Value {
+    let mut state = session.lock();
+    if state.exited && acknowledge {
+        state.completion_acknowledged = true;
+        clear_completion_notification(&session.id);
+    }
     let mut result = status_head(session, state.exited);
     result.insert("pid".into(), json!(session.pid));
     result.insert("uptime_seconds".into(), json!(uptime(session)));
@@ -533,8 +903,10 @@ async fn wait(session: &Session, requested: Option<&Value>) -> Value {
         tokio::pin!(notified);
         notified.as_mut().enable();
         {
-            let state = session.lock();
+            let mut state = session.lock();
             if state.exited {
+                state.completion_acknowledged = true;
+                clear_completion_notification(&session.id);
                 let mut result = exit_snapshot(session, &state, "exited");
                 if let Some(note) = &clamp_note {
                     result["timeout_note"] = json!(note);
@@ -548,7 +920,13 @@ async fn wait(session: &Session, requested: Option<&Value>) -> Value {
         }
         let _ = tokio::time::timeout(remaining.min(Duration::from_secs(1)), notified).await;
     }
-    let preview = strip_ansi(tail_chars(&session.lock().output, 1000));
+    let (preview, notify_on_complete) = {
+        let state = session.lock();
+        (
+            strip_ansi(tail_chars(&state.output, 1000)),
+            state.notify_on_complete,
+        )
+    };
     let effective_text = if effective.fract() == 0.0 {
         format!("{}", effective as i64)
     } else {
@@ -558,9 +936,15 @@ async fn wait(session: &Session, requested: Option<&Value>) -> Value {
         "Wait window of {effective_text}s elapsed — the process is still running. This is not an error."
     );
     note.push_str(&format!(" Uptime: {}s.", uptime(session)));
-    note.push_str(
-        " Poll again later or use terminal(background=true, notify_on_complete=true) next time for automatic notification.",
-    );
+    if notify_on_complete {
+        note.push_str(
+            " notify_on_complete is set: you will be notified on exit — do more work instead of waiting again.",
+        );
+    } else {
+        note.push_str(
+            " Poll again later or use terminal(background=true, notify_on_complete=true) next time for automatic notification.",
+        );
+    }
     json!({
         "status": "timeout",
         "command": session.command,
@@ -626,16 +1010,69 @@ async fn wait_for_exit(session: &Session, limit: Duration) {
     }
 }
 
-/// A process started here has no stdin (pipe mode reads from /dev/null).
-fn stdin_error(session: &Session) -> Value {
+fn write_stdin(session: &Session, data: &str) -> Value {
     if session.lock().exited {
+        return already_exited_error(session);
+    }
+    let mut guard = session
+        .stdin
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(file) = guard.as_mut() else {
+        return no_stdin_error(session);
+    };
+    if let Err(err) = file.write_all(data.as_bytes()).and_then(|()| file.flush()) {
+        return json!({"status": "error", "error": format!("Failed to write stdin: {err}")});
+    }
+    json!({"status": "ok", "bytes_written": data.len()})
+}
+
+fn submit_stdin(session: &Session, data: &str) -> Value {
+    let payload = if session.pty {
+        format!("{data}\r")
+    } else {
+        format!("{data}\n")
+    };
+    write_stdin(session, &payload)
+}
+
+fn close_stdin(session: &Session) -> Value {
+    if session.lock().exited {
+        return already_exited_error(session);
+    }
+    let mut guard = session
+        .stdin
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(mut file) = guard.take() else {
+        return no_stdin_error(session);
+    };
+    if session.pty {
+        let _ = file.write_all(b"\x04").and_then(|()| file.flush());
+        drop(file);
+        json!({"status": "ok", "message": "EOF sent"})
+    } else {
+        drop(file);
+        json!({"status": "ok", "message": "stdin closed"})
+    }
+}
+
+fn already_exited_error(session: &Session) -> Value {
+    if !session.pty {
         return json!({"status": "already_exited", "error": format!(
-            "Process has already finished. It ran without stdin ({NO_PTY_REASON}), so if it read stdin, it got end-of-file at once. {NON_INTERACTIVE}"
+            "Process has already finished. It ran without stdin ({NO_PTY_STARTED_REASON}), so if it read stdin, it got end-of-file at once. {NON_INTERACTIVE}"
         )});
     }
-    json!({"status": "error", "error": format!(
-        "This process has no stdin: {NO_PTY_REASON}. Relaunching with pty=true would not help. {NON_INTERACTIVE}"
-    )})
+    json!({"status": "already_exited", "error": "Process has already finished"})
+}
+
+fn no_stdin_error(session: &Session) -> Value {
+    if !session.pty {
+        return json!({"status": "error", "error": format!(
+            "This process was started without stdin ({NO_PTY_STARTED_REASON}). Relaunch it with terminal(background=true, pty=true) to send input."
+        )});
+    }
+    json!({"status": "error", "error": format!("Process stdin is already closed. {NON_INTERACTIVE}")})
 }
 
 // ── Redaction ────────────────────────────────────────────────────────────────────────────────────
@@ -714,6 +1151,16 @@ fn list(caller: &str) -> Value {
                 "output_preview".into(),
                 json!(tail_chars(&state.output, 200)),
             );
+            if session.pty {
+                entry.insert("pty".into(), json!(true));
+            }
+            if state.notify_on_complete {
+                entry.insert("notify_on_complete".into(), json!(true));
+            }
+            if !state.watch_patterns.is_empty() && !state.watch_disabled {
+                entry.insert("watch_patterns".into(), json!(state.watch_patterns));
+                entry.insert("watch_hit".into(), json!(state.watch_hits > 0));
+            }
             if state.exited {
                 entry.insert("exit_code".into(), json!(state.exit_code));
                 entry.insert("exited_at".into(), json!(state.exited_at));
@@ -750,7 +1197,13 @@ pub(crate) async fn call(caller: &str, arguments: &str) -> Value {
                 return not_found(&session_id);
             };
             match action {
-                "poll" => redact_result(poll(&session)),
+                "poll" => {
+                    let ack = args
+                        .get("acknowledge")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    redact_result(poll(&session, ack))
+                }
                 "log" => {
                     let offset = args.get("offset").and_then(Value::as_i64);
                     let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(200);
@@ -758,7 +1211,16 @@ pub(crate) async fn call(caller: &str, arguments: &str) -> Value {
                 }
                 "wait" => redact_result(wait(&session, args.get("timeout")).await),
                 "kill" => redact_result(kill(&session).await),
-                _ => stdin_error(&session),
+                "write" => {
+                    let data = args.get("data").and_then(Value::as_str).unwrap_or("");
+                    write_stdin(&session, data)
+                }
+                "submit" => {
+                    let data = args.get("data").and_then(Value::as_str).unwrap_or("");
+                    submit_stdin(&session, data)
+                }
+                "close" => close_stdin(&session),
+                _ => unreachable!(),
             }
         }
         other => tool_error(&format!(
@@ -796,7 +1258,20 @@ mod tests {
                 let short = regex::Regex::new(r"No process with ID [0-9a-f]{3}$").unwrap();
                 let text = short.replace(&text, "No process with ID <P3>").into_owned();
                 let uptime = regex::Regex::new(r"Uptime: \d+s").unwrap();
-                Value::String(uptime.replace_all(&text, "Uptime: <n>s").into_owned())
+                let text = uptime.replace_all(&text, "Uptime: <n>s").into_owned();
+                let text = text.replace(
+                    NO_PTY_STARTED_REASON,
+                    "the PTY library (ptyprocess/pywinpty) is not installed",
+                );
+                let text = text.replace(
+                    "It was started without stdin (the PTY library (ptyprocess/pywinpty) is not installed), so if it read stdin, it got end-of-file at once.",
+                    "It ran without stdin (the PTY library (ptyprocess/pywinpty) is not installed), so if it read stdin, it got end-of-file at once.",
+                );
+                let text = text.replace(
+                    "This process was started without stdin (the PTY library (ptyprocess/pywinpty) is not installed). Relaunch it with terminal(background=true, pty=true) to send input.",
+                    &format!("This process has no stdin: the PTY library (ptyprocess/pywinpty) is not installed. Relaunching with pty=true would not help. {NON_INTERACTIVE}"),
+                );
+                Value::String(text)
             }
             other => other.clone(),
         }
@@ -850,7 +1325,8 @@ mod tests {
                 if let Some(text) = step["spawn"].as_str() {
                     let mut command = Command::new("/bin/sh");
                     command.args(["-c", text]).current_dir(cwd);
-                    let started = spawn(command, text, cwd, owner).unwrap();
+                    let started =
+                        spawn(command, text, cwd, owner, SpawnOptions::default()).unwrap();
                     ids.push(started["session_id"].as_str().unwrap().to_owned());
                     continue;
                 }
@@ -860,12 +1336,7 @@ mod tests {
                 };
                 let arguments = substitute(&step["call"], &ids).to_string();
                 let result = normalize(&call(&caller, &arguments).await, &ids);
-                // The reference environment lacks a PTY library; this build says its own reason.
-                let expected: Value = serde_json::from_str(&step["result"].to_string().replace(
-                    "the PTY library (ptyprocess/pywinpty) is not installed",
-                    NO_PTY_REASON,
-                ))
-                .unwrap();
+                let expected: Value = step["result"].clone();
                 assert_eq!(result, expected, "{name}: {}", step["call"]);
             }
         }
@@ -879,7 +1350,7 @@ mod tests {
             "-c",
             "for i in 1 2 3 4 5 6 7 8; do echo out$i; echo err$i >&2; done",
         ]);
-        let started = spawn(command, "order", "/", "ordering").unwrap();
+        let started = spawn(command, "order", "/", "ordering", SpawnOptions::default()).unwrap();
         let id = started["session_id"].as_str().unwrap().to_owned();
         let waited = call(
             "ordering",
@@ -890,16 +1361,125 @@ mod tests {
         assert_eq!(waited["output"], json!(expected));
     }
 
-    #[test]
-    fn the_buffer_keeps_the_tail_by_characters() {
-        let session = Session {
-            id: "proc_x".into(),
-            command: String::new(),
-            cwd: String::new(),
+    #[tokio::test]
+    async fn pty_supports_write_submit_close_and_notifications_and_watch_patterns() {
+        // 1. Real Unix PTY interactive session (`read line; printf "got:%s\n" "$line"; cat`)
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "read line; printf 'got:%s\\n' \"$line\"; cat"]);
+        let started = spawn(
+            command,
+            "pty-echo",
+            "/",
+            "pty-owner",
+            SpawnOptions {
+                pty: true,
+                notify_on_complete: true,
+                watch_patterns: Vec::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(started["pty"], json!(true));
+        let id = started["session_id"].as_str().unwrap().to_owned();
+
+        let sub = call(
+            "pty-owner",
+            &json!({"action": "submit", "session_id": id, "data": "hello"}).to_string(),
+        )
+        .await;
+        assert_eq!(sub["status"], "ok", "{sub}");
+
+        let wr = call(
+            "pty-owner",
+            &json!({"action": "write", "session_id": id, "data": "world\n"}).to_string(),
+        )
+        .await;
+        assert_eq!(wr["status"], "ok", "{wr}");
+
+        let cls = call(
+            "pty-owner",
+            &json!({"action": "close", "session_id": id}).to_string(),
+        )
+        .await;
+        assert_eq!(cls["status"], "ok", "{cls}");
+
+        let waited = call(
+            "pty-owner",
+            &json!({"action": "wait", "session_id": id, "timeout": 5}).to_string(),
+        )
+        .await;
+        let out = waited["output"].as_str().unwrap_or("");
+        assert!(
+            out.contains("got:hello"),
+            "missing PTY submit output: {out:?}"
+        );
+        assert!(out.contains("world"), "missing PTY write output: {out:?}");
+        // `wait` acknowledged completion, so completion notice was suppressed.
+        assert!(drain_notifications("pty-owner").is_empty());
+
+        // 2. notify_on_complete queues notification on natural exit (and poll(acknowledge=true) clears it).
+        let mut cmd2 = Command::new("/bin/sh");
+        cmd2.args(["-c", "echo done-ok"]);
+        let s2 = spawn(
+            cmd2,
+            "notify-job",
+            "/",
+            "notify-owner",
+            SpawnOptions {
+                pty: false,
+                notify_on_complete: true,
+                watch_patterns: Vec::new(),
+            },
+        )
+        .unwrap();
+        let id2 = s2["session_id"].as_str().unwrap().to_owned();
+        // Wait for background reaper to mark exited.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if find(&id2).is_some_and(|s| s.lock().exited) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let notices = drain_notifications("notify-owner");
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("done-ok"), "{notices:?}");
+
+        // 3. watch_patterns matches and falls back to notify_on_complete after 3 strikes.
+        let mut cmd3 = Command::new("/bin/sh");
+        cmd3.args(["-c", "echo READY:first; echo READY:second"]);
+        let s3 = spawn(
+            cmd3,
+            "watch-job",
+            "/",
+            "watch-owner",
+            SpawnOptions {
+                pty: false,
+                notify_on_complete: false,
+                watch_patterns: vec!["READY:".into()],
+            },
+        )
+        .unwrap();
+        let id3 = s3["session_id"].as_str().unwrap().to_owned();
+        let _ = call(
+            "watch-owner",
+            &json!({"action": "wait", "session_id": id3, "timeout": 5}).to_string(),
+        )
+        .await;
+        let w_notices = drain_notifications("watch-owner");
+        assert!(!w_notices.is_empty(), "expected watch_match notice");
+        assert!(w_notices[0].contains("matched watch pattern 'READY:'"));
+
+        // Exercise rate-limit strikes -> watch_disabled promotion to notify_on_complete.
+        let sess = Session {
+            id: "proc_strike".into(),
+            command: "noisy".into(),
+            cwd: "/".into(),
             pid: 0,
-            owner: String::new(),
-            started: 0.0,
+            owner: "strike-owner".into(),
+            pty: false,
+            started: unix_now(),
             started_at: Instant::now(),
+            stdin: Mutex::new(None),
             state: Mutex::new(State {
                 output: String::new(),
                 chars: 0,
@@ -909,6 +1489,69 @@ mod tests {
                 reason: "exited",
                 source: "",
                 exited_at: 0.0,
+                notify_on_complete: false,
+                watch_patterns: vec!["HIT".into()],
+                watch_disabled: false,
+                watch_hits: 0,
+                watch_cooldown_until: 0.0,
+                watch_strike_candidate: false,
+                watch_consecutive_strikes: 0,
+                watch_suppressed: 0,
+                completion_acknowledged: false,
+            }),
+            changed: Notify::new(),
+        };
+        sess.append("HIT 0\n"); // immediate match, starts 30s cooldown
+        for strike in 1..=WATCH_STRIKE_LIMIT {
+            sess.append(&format!("HIT {strike}\n"));
+            sess.lock().watch_strike_candidate = false;
+        }
+        sess.lock().watch_strike_candidate = false;
+        sess.append("HIT final\n");
+        let st = sess.lock();
+        assert!(st.watch_disabled, "expected watch_disabled after strikes");
+        assert!(
+            st.notify_on_complete,
+            "expected notify_on_complete promotion"
+        );
+        drop(st);
+        let strike_notices = drain_notifications("strike-owner");
+        assert!(strike_notices
+            .iter()
+            .any(|n| n.contains("Watch patterns disabled")));
+        kill_all();
+    }
+
+    #[test]
+    fn the_buffer_keeps_the_tail_by_characters() {
+        let session = Session {
+            id: "proc_x".into(),
+            command: String::new(),
+            cwd: String::new(),
+            pid: 0,
+            owner: String::new(),
+            pty: false,
+            started: 0.0,
+            started_at: Instant::now(),
+            stdin: Mutex::new(None),
+            state: Mutex::new(State {
+                output: String::new(),
+                chars: 0,
+                total: 0,
+                exited: false,
+                exit_code: None,
+                reason: "exited",
+                source: "",
+                exited_at: 0.0,
+                notify_on_complete: false,
+                watch_patterns: Vec::new(),
+                watch_disabled: false,
+                watch_hits: 0,
+                watch_cooldown_until: 0.0,
+                watch_strike_candidate: false,
+                watch_consecutive_strikes: 0,
+                watch_suppressed: 0,
+                completion_acknowledged: false,
             }),
             changed: Notify::new(),
         };

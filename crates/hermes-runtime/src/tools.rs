@@ -12,6 +12,9 @@ use std::pin::Pin;
 use serde_json::{json, Value};
 
 use crate::browser_cdp::{self, BrowserSettings, BROWSER_CDP};
+use crate::browser_dialog::{self, BROWSER_DIALOG};
+use crate::browser_exec::{self, BROWSER_EXEC};
+use crate::browser_vault::{self, BROWSER_VAULT};
 use crate::clarify::{self, CLARIFY};
 use crate::cronjob_tool::{self, CRONJOB_MANAGE};
 use crate::delegation::{self, DELEGATE_TASK};
@@ -121,7 +124,7 @@ fn read_file_schema() -> Value {
         "type": "function",
         "function": {
             "name": READ_FILE,
-            "description": "Read a UTF-8 file within the current working directory with line numbers.",
+            "description": "Read a text file or extractable document within the current working directory with line numbers. Auto-extracts .ipynb, Office (.docx/.xlsx/.pptx), PDF, and SQLite (.db/.sqlite/.sqlite3) into readable paginated text, and loads images (PNG/JPEG/GIF/WebP) for vision inspection.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -301,6 +304,41 @@ fn browser_cdp_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFu
     })
 }
 
+fn browser_dialog_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
+    Box::pin(async move {
+        match cx.options.browser.filter(|browser| browser.offers_cdp()) {
+            Some(_) => browser_dialog::call(cx.options.state_key(), args).await,
+            None => json!({"error": format!("Unknown tool: {BROWSER_DIALOG}")}),
+        }
+    })
+}
+
+fn browser_exec_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
+    Box::pin(async move {
+        match cx.options.browser.filter(|browser| browser.offers_cdp()) {
+            Some(browser) => {
+                let task = cx.options.state_key();
+                let vision_native = cx.options.vision.is_some_and(|v| v.native);
+                browser_exec::call(browser, task, vision_native, args).await
+            }
+            None => json!({"error": format!("Unknown tool: {BROWSER_EXEC}")}),
+        }
+    })
+}
+
+fn browser_vault_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
+    Box::pin(async move {
+        if cx.options.browser.filter(|b| b.offers_cdp()).is_none() {
+            return json!({"error": format!("Unknown tool: {BROWSER_VAULT}")});
+        }
+        let task = cx.options.state_key().to_owned();
+        let browser = cx.options.browser;
+        let profile = cx.options.profile;
+        let approval_timeout = cx.options.approval_timeout_secs;
+        browser_vault::call(browser, &task, profile, approval_timeout, cx.approve, args).await
+    })
+}
+
 fn web_extract_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
     Box::pin(async move {
         match cx.options.web.filter(|web| web.offers_extract()) {
@@ -413,6 +451,36 @@ static TOOLS: &[ToolDef] = &[
                 .then(browser_cdp::schema)
         },
         call: browser_cdp_call,
+    },
+    ToolDef {
+        name: BROWSER_DIALOG,
+        offered: |env| {
+            env.browser
+                .as_ref()
+                .is_some_and(BrowserSettings::offers_cdp)
+                .then(browser_dialog::schema)
+        },
+        call: browser_dialog_call,
+    },
+    ToolDef {
+        name: BROWSER_EXEC,
+        offered: |env| {
+            env.browser
+                .as_ref()
+                .is_some_and(BrowserSettings::offers_cdp)
+                .then(browser_exec::schema)
+        },
+        call: browser_exec_call,
+    },
+    ToolDef {
+        name: BROWSER_VAULT,
+        offered: |env| {
+            env.browser
+                .as_ref()
+                .is_some_and(BrowserSettings::offers_cdp)
+                .then(browser_vault::schema)
+        },
+        call: browser_vault_call,
     },
     ToolDef {
         name: CLARIFY,
@@ -814,9 +882,17 @@ mod tests {
             allow_private_urls: false,
         });
         assert!(names(&env).contains(&BROWSER_CDP.to_owned()));
+        assert!(names(&env).contains(&BROWSER_DIALOG.to_owned()));
+        assert!(names(&env).contains(&BROWSER_EXEC.to_owned()));
+        assert!(!names(&env).contains(&BROWSER_VAULT.to_owned()));
+        assert!(deferred_schemas(&env)
+            .iter()
+            .any(|s| s["function"]["name"] == BROWSER_VAULT));
         let config: serde_yaml::Value =
             serde_yaml::from_str("platform_toolsets: {cli: [file]}").unwrap();
         env.policy = ToolPolicy::from_config(&config);
         assert!(!names(&env).contains(&BROWSER_CDP.to_owned()));
+        assert!(!names(&env).contains(&BROWSER_DIALOG.to_owned()));
+        assert!(!names(&env).contains(&BROWSER_EXEC.to_owned()));
     }
 }

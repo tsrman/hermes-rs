@@ -1179,6 +1179,25 @@ where
                 summary: finish_summary.as_deref(),
             });
         }
+        if let Some(scope) = options.state_scope {
+            let notices = crate::process::drain_notifications(scope);
+            if !notices.is_empty() {
+                let block = format!(
+                    "\n\n[BACKGROUND PROCESS NOTIFICATION]\n{}",
+                    notices.join("\n\n")
+                );
+                if let Some(last_tool) = sent.iter_mut().rev().find(|m| m["role"] == "tool") {
+                    if let Some(prev) = last_tool["content"].as_str() {
+                        last_tool["content"] = json!(format!("{prev}{block}"));
+                    }
+                }
+                if let Some(last_tool) = messages.iter_mut().rev().find(|m| m["role"] == "tool") {
+                    if let Some(prev) = last_tool["content"].as_str() {
+                        last_tool["content"] = json!(format!("{prev}{block}"));
+                    }
+                }
+            }
+        }
         if !attached_images.is_empty() {
             let mut parts: Vec<Value> = Vec::new();
             let mut labels: Vec<String> = Vec::new();
