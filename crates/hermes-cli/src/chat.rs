@@ -1044,7 +1044,8 @@ where
                     options,
                     history.clone(),
                     |event| {
-                        started |= matches!(event, TurnEvent::Text(_) | TurnEvent::ToolStarted(_));
+                        started |=
+                            matches!(event, TurnEvent::Text(_) | TurnEvent::ToolStarted { .. });
                         if matches!(event, TurnEvent::ContextUsage { .. })
                             && (json_mode || request.state_scope.is_none())
                         {
@@ -1054,7 +1055,7 @@ where
                             receiving = emit(if json_mode {
                                 format_json_event(event)
                             } else {
-                                format_event(event)
+                                format_event(event, request.state_scope.is_some())
                             });
                         }
                     },
@@ -1168,11 +1169,13 @@ fn format_json_event(event: TurnEvent<'_>) -> Event {
             fields.insert("model".into(), serde_json::json!(model));
             json_event("fallback", fields)
         }
-        TurnEvent::ToolStarted(name) => {
+        TurnEvent::ToolStarted { name, .. } => {
             fields.insert("name".into(), serde_json::json!(name));
             json_event("tool_started", fields)
         }
-        TurnEvent::ToolFinished { name, succeeded } => {
+        TurnEvent::ToolFinished {
+            name, succeeded, ..
+        } => {
             fields.insert("name".into(), serde_json::json!(name));
             fields.insert("succeeded".into(), serde_json::json!(succeeded));
             json_event("tool_finished", fields)
@@ -1190,14 +1193,24 @@ fn format_json_event(event: TurnEvent<'_>) -> Event {
     Event::Stdout(line)
 }
 
-fn format_event(event: TurnEvent<'_>) -> Event {
+fn format_event(event: TurnEvent<'_>, detailed: bool) -> Event {
     match event {
         TurnEvent::Text(text) => Event::Stdout(text.into()),
         TurnEvent::Fallback(model) => Event::Stderr(format!("Model fallback: {model:?}")),
-        TurnEvent::ToolStarted(name) => Event::Stderr(format!("Tool started: {name:?}")),
-        TurnEvent::ToolFinished { name, succeeded } => {
+        TurnEvent::ToolStarted { name, detail } => match detail.filter(|_| detailed) {
+            Some(detail) => Event::Stderr(format!("Tool started: {name:?}\t{detail}")),
+            None => Event::Stderr(format!("Tool started: {name:?}")),
+        },
+        TurnEvent::ToolFinished {
+            name,
+            succeeded,
+            summary,
+        } => {
             let status = if succeeded { "completed" } else { "failed" };
-            Event::Stderr(format!("Tool {status}: {name:?}"))
+            match summary.filter(|_| detailed) {
+                Some(summary) => Event::Stderr(format!("Tool {status}: {name:?}\t{summary}")),
+                None => Event::Stderr(format!("Tool {status}: {name:?}")),
+            }
         }
         TurnEvent::IterationLimit(limit) => Event::Stderr(format!(
             "Iteration limit reached ({limit}). Requesting summary."

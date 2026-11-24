@@ -515,7 +515,7 @@ fn handle_turn_event(app: &mut TuiApp, state: &mut ReplState, ev: ChatEvent) {
             ParsedStderr::ContextUsage { tokens, estimated } => {
                 state.record_context(tokens, estimated);
             }
-            ParsedStderr::ToolStarted(name) => {
+            ParsedStderr::ToolStarted { name, detail } => {
                 if !app.streaming_assistant.trim().is_empty() {
                     let flushed = std::mem::take(&mut app.streaming_assistant);
                     state
@@ -527,11 +527,17 @@ fn handle_turn_event(app: &mut TuiApp, state: &mut ReplState, ev: ChatEvent) {
                 app.active_tools.insert(name.clone(), Instant::now());
                 state.feed_entries.push(FeedEntry::Tool {
                     name,
+                    detail,
                     status: ToolStatus::Running,
+                    summary: None,
                     elapsed_ms: None,
                 });
             }
-            ParsedStderr::ToolFinished { name, succeeded } => {
+            ParsedStderr::ToolFinished {
+                name,
+                succeeded,
+                summary,
+            } => {
                 let elapsed = app
                     .active_tools
                     .remove(&name)
@@ -553,15 +559,21 @@ fn handle_turn_event(app: &mut TuiApp, state: &mut ReplState, ev: ChatEvent) {
                     )
                 });
                 if let Some(FeedEntry::Tool {
-                    status, elapsed_ms, ..
+                    status,
+                    summary: slot_summary,
+                    elapsed_ms,
+                    ..
                 }) = updated
                 {
                     *status = new_status;
+                    *slot_summary = summary;
                     *elapsed_ms = elapsed;
                 } else {
                     state.feed_entries.push(FeedEntry::Tool {
                         name,
+                        detail: None,
                         status: new_status,
+                        summary,
                         elapsed_ms: elapsed,
                     });
                 }
@@ -809,6 +821,26 @@ async fn handle_key_event(
             KeyCode::Down => {
                 if app.palette_index + 1 < palette.len() {
                     app.palette_index += 1;
+                }
+                return None;
+            }
+            KeyCode::Enter
+                if !key.modifiers.contains(KeyModifiers::ALT)
+                    && !key.modifiers.contains(KeyModifiers::SHIFT)
+                    && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                let idx = app.palette_index.min(palette.len() - 1);
+                let chosen = palette[idx].name;
+                app.input.clear();
+                app.cursor = 0;
+                app.history_pos = None;
+                app.draft_before_history.clear();
+                app.palette_index = 0;
+                if !matches!(chosen, "/exit" | "/quit") {
+                    record_prompt_history(home, &mut state.prompt_history, chosen);
+                }
+                if let Some(cmd) = chosen.strip_prefix('/') {
+                    return handle_slash_command(app, state, home, cmd).await;
                 }
                 return None;
             }
@@ -1682,27 +1714,49 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
             }
             FeedEntry::Tool {
                 name,
+                detail,
                 status,
+                summary,
                 elapsed_ms,
             } => {
-                let (icon, icon_color, state_label) = match status {
-                    ToolStatus::Running => (spinner_glyph, Color::Cyan, "running…".to_owned()),
-                    ToolStatus::Succeeded => (
-                        "✓",
-                        Color::Green,
-                        elapsed_ms
-                            .map(format_duration_ms)
-                            .unwrap_or_else(|| "ok".to_owned()),
-                    ),
-                    ToolStatus::Failed => (
-                        "✗",
-                        Color::Red,
-                        elapsed_ms
-                            .map(format_duration_ms)
-                            .unwrap_or_else(|| "failed".to_owned()),
-                    ),
+                let (icon, icon_color) = match status {
+                    ToolStatus::Running => (spinner_glyph, Color::Cyan),
+                    ToolStatus::Succeeded => ("✓", Color::Green),
+                    ToolStatus::Failed => ("✗", Color::Red),
                 };
-                lines.push(Line::from(vec![
+                let clean_detail = detail
+                    .as_deref()
+                    .map(approval::sanitize_terminal_text)
+                    .filter(|s| !s.is_empty());
+                let clean_summary = summary
+                    .as_deref()
+                    .map(approval::sanitize_terminal_text)
+                    .filter(|s| !s.is_empty());
+                // Split `exit <code> · <err>` so the header stays compact and any error message
+                // sits cleanly on a secondary indented line underneath the card.
+                let (inline_status, sub_note) = match (status, clean_summary) {
+                    (ToolStatus::Running, _) => (Some("running…".to_owned()), None),
+                    (ToolStatus::Failed, Some(s)) => {
+                        if let Some((head, tail)) = s.split_once(" · ") {
+                            (Some(head.to_owned()), Some(tail.to_owned()))
+                        } else if s.starts_with("exit ") {
+                            (Some(s), None)
+                        } else {
+                            (Some("failed".to_owned()), Some(s))
+                        }
+                    }
+                    (ToolStatus::Failed, None) => (Some("failed".to_owned()), None),
+                    (ToolStatus::Succeeded, Some(s)) => (Some(s), None),
+                    (ToolStatus::Succeeded, None) => (None, None),
+                };
+                let dur = elapsed_ms.map(format_duration_ms);
+                let meta = match (inline_status, dur) {
+                    (Some(st), Some(d)) => format!("{st} · {d}"),
+                    (Some(st), None) => st,
+                    (None, Some(d)) => d,
+                    (None, None) => "ok".to_owned(),
+                };
+                let mut card_spans = vec![
                     Span::styled("  ╭─ ", Style::default().fg(Color::DarkGray)),
                     Span::styled(
                         icon,
@@ -1715,12 +1769,27 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
                             .fg(Color::White)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(
-                        format!(" ({state_label})"),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                    Span::styled(" ─╮", Style::default().fg(Color::DarkGray)),
-                ]));
+                ];
+                if let Some(d) = clean_detail {
+                    card_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+                    card_spans.push(Span::styled(d, Style::default().fg(Color::Gray)));
+                }
+                card_spans.push(Span::styled(
+                    format!(" ({meta})"),
+                    Style::default().fg(if matches!(status, ToolStatus::Failed) {
+                        Color::LightRed
+                    } else {
+                        Color::DarkGray
+                    }),
+                ));
+                card_spans.push(Span::styled(" ─╮", Style::default().fg(Color::DarkGray)));
+                lines.push(Line::from(card_spans));
+                if let Some(note) = sub_note {
+                    lines.push(Line::from(vec![
+                        Span::styled("     ↳ ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(note, Style::default().fg(Color::Red)),
+                    ]));
+                }
             }
             FeedEntry::Notice { kind, text } => {
                 let (prefix, style) = match kind {
@@ -2203,7 +2272,9 @@ mod tests {
             .push(FeedEntry::User("Check Cargo.toml".into()));
         st.feed_entries.push(FeedEntry::Tool {
             name: "read_file".into(),
+            detail: Some("Cargo.toml".into()),
             status: ToolStatus::Succeeded,
+            summary: Some("22 lines".into()),
             elapsed_ms: Some(18),
         });
         st.feed_entries.push(FeedEntry::Assistant(
@@ -2243,8 +2314,8 @@ mod tests {
             "header missing upstream-style context meter:\n{text}"
         );
         assert!(
-            text.contains("read_file (18ms)"),
-            "missing tool card:\n{text}"
+            text.contains("read_file · Cargo.toml (22 lines · 18ms)"),
+            "missing tool card with detail/status:\n{text}"
         );
         assert!(text.contains("Result"), "missing markdown heading:\n{text}");
         assert!(
@@ -2761,5 +2832,84 @@ mod tests {
         )
         .await;
         assert_eq!(app.cursor, app.input.len());
+    }
+
+    #[tokio::test]
+    async fn slash_palette_enter_executes_highlighted_command_and_tool_cards_show_status() {
+        let mut state = sample_state();
+        let mut app = TuiApp::new();
+        let mut handle = None;
+        let mut rx = None;
+
+        // Typing `/se` matches `/sessions` uniquely; pressing Enter executes `/sessions`
+        // instead of failing with "Unknown command /se".
+        app.input = "/se".into();
+        app.cursor = 3;
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert!(app.input.is_empty());
+        assert!(
+            !state.feed_entries.iter().any(
+                |e| matches!(e, FeedEntry::Notice { text, .. } if text.contains("Unknown command"))
+            ),
+            "palette Enter should execute highlighted /sessions, not report Unknown command"
+        );
+        assert!(
+            state
+                .feed_entries
+                .iter()
+                .any(|e| matches!(e, FeedEntry::Notice { text, .. } if text.contains("No saved sessions"))),
+            "expected /sessions output in feed"
+        );
+
+        // Typing `/` + Down selects `/new`, and Enter executes `/new` (clearing session).
+        app.input = "/".into();
+        app.cursor = 1;
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert!(state.session.is_none());
+
+        // Tool cards show command/code detail, exit code, duration, and error line on failure.
+        state.feed_entries.push(FeedEntry::Tool {
+            name: "terminal".into(),
+            detail: Some("cargo test -p hermes-cli".into()),
+            status: ToolStatus::Failed,
+            summary: Some("exit 101 · 1 failed".into()),
+            elapsed_ms: Some(12_900),
+        });
+        let mut terminal = Terminal::new(TestBackend::new(96, 20)).unwrap();
+        terminal.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let rendered = buffer_text(&terminal);
+        assert!(
+            rendered.contains("terminal · cargo test -p hermes-cli (exit 101 · 12.9s)"),
+            "missing failed tool header with command & exit code:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("↳ 1 failed"),
+            "missing indented failure detail line:\n{rendered}"
+        );
     }
 }

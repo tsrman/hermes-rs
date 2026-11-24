@@ -456,6 +456,204 @@ impl ModelRoute {
     }
 }
 
+fn collapse_and_clip(raw: &str, max_chars: usize, keep_phone_numbers: bool) -> Option<String> {
+    let redacted = redact_assistant_reply(raw, keep_phone_numbers);
+    let collapsed = redacted.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    if collapsed.chars().count() <= max_chars {
+        Some(collapsed)
+    } else {
+        let head: String = collapsed
+            .chars()
+            .take(max_chars.saturating_sub(1))
+            .collect();
+        Some(format!("{head}…"))
+    }
+}
+
+fn summarize_tool_args(name: &str, raw_args: &str, keep_phone_numbers: bool) -> Option<String> {
+    let args: Value = serde_json::from_str(raw_args).ok()?;
+    let str_field = |key: &str| {
+        args.get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    };
+    let raw = match name {
+        "terminal" => str_field("command").map(str::to_owned),
+        "execute_code" => str_field("code").map(|code| {
+            let lines: Vec<&str> = code
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .collect();
+            let first = lines
+                .iter()
+                .copied()
+                .find(|l| !l.starts_with('#'))
+                .or_else(|| lines.first().copied())
+                .unwrap_or("");
+            if lines.len() > 1 {
+                format!("{first} (+{} lines)", lines.len() - 1)
+            } else {
+                first.to_owned()
+            }
+        }),
+        "read_file" => str_field("path").map(|p| {
+            match (
+                args.get("offset").and_then(Value::as_u64),
+                args.get("limit").and_then(Value::as_u64),
+            ) {
+                (Some(o), Some(l)) => format!("{p} (lines {o}..{})", o.saturating_add(l)),
+                (Some(o), None) => format!("{p} (from line {o})"),
+                _ => p.to_owned(),
+            }
+        }),
+        "write_file" | "patch" => str_field("path").map(str::to_owned),
+        "search_files" => str_field("pattern").map(|pat| match str_field("path") {
+            Some(p) => format!("{pat} in {p}"),
+            None => pat.to_owned(),
+        }),
+        "web_search" | "x_search" | "session_search" => str_field("query").map(str::to_owned),
+        "web_extract" => str_field("url").map(str::to_owned).or_else(|| {
+            args.get("urls")
+                .and_then(Value::as_array)
+                .and_then(|arr| arr.first())
+                .and_then(Value::as_str)
+                .map(|u| {
+                    let count = args["urls"].as_array().map_or(1, Vec::len);
+                    if count > 1 {
+                        format!("{u} (+{} more)", count - 1)
+                    } else {
+                        u.to_owned()
+                    }
+                })
+        }),
+        "delegate_task" => {
+            if let Some(action) = str_field("action") {
+                match str_field("task_id") {
+                    Some(id) => Some(format!("{action} {id}")),
+                    None => Some(action.to_owned()),
+                }
+            } else {
+                str_field("goal").map(str::to_owned).or_else(|| {
+                    args.get("tasks")
+                        .and_then(Value::as_array)
+                        .and_then(|t| t.first())
+                        .and_then(|t| t.get("goal"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+            }
+        }
+        "browser_cdp" | "process_manage" | "memory" | "todo_list" | "cronjob_manage"
+        | "skill_manage" => {
+            let action = str_field("action");
+            let target = str_field("url")
+                .or_else(|| str_field("name"))
+                .or_else(|| str_field("session_id"))
+                .or_else(|| str_field("job_id"))
+                .or_else(|| str_field("target"));
+            match (action, target) {
+                (Some(a), Some(t)) => Some(format!("{a} {t}")),
+                (Some(a), None) => Some(a.to_owned()),
+                (None, Some(t)) => Some(t.to_owned()),
+                (None, None) => None,
+            }
+        }
+        "skill_view" => str_field("name").map(str::to_owned),
+        _ => [
+            "command", "path", "query", "url", "action", "name", "prompt",
+        ]
+        .into_iter()
+        .find_map(str_field)
+        .map(str::to_owned),
+    }?;
+    collapse_and_clip(&raw, 76, keep_phone_numbers)
+}
+
+fn summarize_tool_result(
+    name: &str,
+    structured: &Value,
+    succeeded: bool,
+    keep_phone_numbers: bool,
+) -> Option<String> {
+    let err_text = structured
+        .get("error")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    if let Some(err) = err_text {
+        let first_line = err.lines().find(|l| !l.trim().is_empty()).unwrap_or(err);
+        let clipped = collapse_and_clip(first_line, 64, keep_phone_numbers)?;
+        return if let Some(code) = structured.get("exit_code").and_then(Value::as_i64) {
+            Some(format!("exit {code} · {clipped}"))
+        } else {
+            Some(clipped)
+        };
+    }
+
+    match name {
+        "terminal" | "execute_code" => {
+            let code = structured.get("exit_code").and_then(Value::as_i64);
+            let snippet = if !succeeded {
+                structured
+                    .get("stderr")
+                    .or_else(|| structured.get("output"))
+                    .or_else(|| structured.get("stdout"))
+                    .and_then(Value::as_str)
+                    .and_then(|s| s.lines().find(|l| !l.trim().is_empty()))
+                    .and_then(|l| collapse_and_clip(l, 56, keep_phone_numbers))
+            } else {
+                None
+            };
+            match (code, snippet) {
+                (Some(c), Some(s)) => Some(format!("exit {c} · {s}")),
+                (Some(c), None) => Some(format!("exit {c}")),
+                (None, Some(s)) => Some(s),
+                (None, None) => None,
+            }
+        }
+        "read_file" => structured
+            .get("total_lines")
+            .and_then(Value::as_u64)
+            .map(|n| format!("{n} lines")),
+        "search_files" => structured
+            .get("total_count")
+            .and_then(Value::as_u64)
+            .or_else(|| {
+                structured
+                    .get("matches")
+                    .and_then(Value::as_array)
+                    .map(|a| a.len() as u64)
+            })
+            .map(|n| format!("{n} matches")),
+        "web_search" | "session_search" => structured
+            .get("results")
+            .and_then(Value::as_array)
+            .map(|a| format!("{} results", a.len())),
+        "delegate_task" => structured
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        _ => {
+            if !succeeded {
+                structured
+                    .get("message")
+                    .or_else(|| structured.get("output"))
+                    .and_then(Value::as_str)
+                    .and_then(|s| s.lines().find(|l| !l.trim().is_empty()))
+                    .and_then(|l| collapse_and_clip(l, 64, keep_phone_numbers))
+            } else {
+                None
+            }
+        }
+    }
+}
+
 fn apply_ephemeral_prompt(base: &str, ephemeral: Option<&str>) -> String {
     match ephemeral.map(str::trim).filter(|s| !s.is_empty()) {
         Some(extra) if base.is_empty() => extra.to_owned(),
@@ -467,10 +665,14 @@ fn apply_ephemeral_prompt(base: &str, ephemeral: Option<&str>) -> String {
 pub enum TurnEvent<'a> {
     Text(&'a str),
     Fallback(&'a str),
-    ToolStarted(&'a str),
+    ToolStarted {
+        name: &'a str,
+        detail: Option<&'a str>,
+    },
     ToolFinished {
         name: &'a str,
         succeeded: bool,
+        summary: Option<&'a str>,
     },
     IterationLimit(u32),
     /// The provider rejected the request as too large and the earlier steps of this turn were
@@ -873,7 +1075,11 @@ where
                     None => (call.name.clone(), call.arguments.clone(), None),
                 };
             let through_bridge = name != call.name;
-            on_event(TurnEvent::ToolStarted(&name));
+            let start_detail = summarize_tool_args(&name, &arguments, options.keep_phone_numbers);
+            on_event(TurnEvent::ToolStarted {
+                name: &name,
+                detail: start_detail.as_deref(),
+            });
             let started = std::time::Instant::now();
             let mcp_tool = match options.mcp {
                 Some(mcp) if name.starts_with("mcp__") && !through_bridge => {
@@ -965,9 +1171,12 @@ where
             let tool_message = json!({"role": "tool", "tool_call_id": call.id, "content": content});
             sent.push(tool_message.clone());
             messages.push(tool_message);
+            let finish_summary =
+                summarize_tool_result(&name, &structured, succeeded, options.keep_phone_numbers);
             on_event(TurnEvent::ToolFinished {
                 name: &name,
                 succeeded,
+                summary: finish_summary.as_deref(),
             });
         }
         if !attached_images.is_empty() {

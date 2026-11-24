@@ -567,6 +567,7 @@ pub async fn run(
         let mut md = StreamMarkdown::new(styled);
         let mut assistant_buf = String::new();
         let mut tool_starts: HashMap<String, Instant> = HashMap::new();
+        let mut tool_details: HashMap<String, String> = HashMap::new();
         let mut has_printed_text = false;
         let started = Instant::now();
 
@@ -630,8 +631,13 @@ pub async fn run(
                                     context_usage = Some((tokens, estimated));
                                     true
                                 }
-                                ParsedStderr::ToolStarted(name) => {
+                                ParsedStderr::ToolStarted { name, detail } => {
                                     tool_starts.insert(name.clone(), Instant::now());
+                                    if let Some(d) = &detail {
+                                        tool_details.insert(name.clone(), d.clone());
+                                    } else {
+                                        tool_details.remove(&name);
+                                    }
                                     if styled {
                                         if has_printed_text {
                                             let tail = md.finish();
@@ -641,34 +647,65 @@ pub async fn run(
                                             let _ = write_stdout("\n");
                                             has_printed_text = false;
                                         }
-                                        sp_for_events.start(format!("Running {name}…"));
+                                        let label = match detail {
+                                            Some(d) => format!(
+                                                "Running {name} · {}…",
+                                                approval::sanitize_terminal_text(&d)
+                                            ),
+                                            None => format!("Running {name}…"),
+                                        };
+                                        sp_for_events.start(label);
                                     } else {
                                         output_open = chat::display(Event::Stderr(text)).is_ok();
                                     }
                                     output_open
                                 }
-                                ParsedStderr::ToolFinished { name, succeeded } => {
+                                ParsedStderr::ToolFinished {
+                                    name,
+                                    succeeded,
+                                    summary,
+                                } => {
                                     let elapsed = tool_starts
                                         .remove(&name)
                                         .map(|t| t.elapsed().as_millis() as u64);
+                                    let detail = tool_details.remove(&name);
                                     state.feed_entries.push(FeedEntry::Tool {
                                         name: name.clone(),
+                                        detail: detail.clone(),
                                         status: if succeeded {
                                             ToolStatus::Succeeded
                                         } else {
                                             ToolStatus::Failed
                                         },
+                                        summary: summary.clone(),
                                         elapsed_ms: elapsed,
                                     });
                                     if styled {
                                         sp_for_events.pause_and_clear();
-                                        let dur = elapsed
-                                            .map(|ms| format!(" ({})", format_duration_ms(ms)))
+                                        let detail_part = detail
+                                            .as_deref()
+                                            .map(|d| {
+                                                format!(
+                                                    " {DIM}· {}{RESET}",
+                                                    approval::sanitize_terminal_text(d)
+                                                )
+                                            })
                                             .unwrap_or_default();
+                                        let dur_part = elapsed.map(format_duration_ms);
+                                        let sum_part = summary
+                                            .as_deref()
+                                            .map(approval::sanitize_terminal_text)
+                                            .filter(|s| !s.is_empty());
+                                        let meta = match (sum_part, dur_part) {
+                                            (Some(s), Some(d)) => format!(" ({s} · {d})"),
+                                            (Some(s), None) => format!(" ({s})"),
+                                            (None, Some(d)) => format!(" ({d})"),
+                                            (None, None) => String::new(),
+                                        };
                                         if succeeded {
-                                            eprintln!("  {FG_GREEN}✓{RESET} {BOLD}{name}{RESET}{DIM}{dur}{RESET}");
+                                            eprintln!("  {FG_GREEN}✓{RESET} {BOLD}{name}{RESET}{detail_part}{DIM}{meta}{RESET}");
                                         } else {
-                                            eprintln!("  {FG_RED}✗{RESET} {BOLD}{name}{RESET}{DIM}{dur}{RESET}");
+                                            eprintln!("  {FG_RED}✗{RESET} {BOLD}{name}{RESET}{detail_part}{FG_RED}{meta}{RESET}");
                                         }
                                         sp_for_events.start("Thinking…");
                                     } else {

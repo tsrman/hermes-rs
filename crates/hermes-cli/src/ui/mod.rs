@@ -180,10 +180,23 @@ pub fn match_slash_commands(prefix: &str) -> Vec<&'static SlashCommand> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ParsedStderr {
     Session(String),
-    Usage { input: u64, output: u64 },
-    ContextUsage { tokens: u64, estimated: bool },
-    ToolStarted(String),
-    ToolFinished { name: String, succeeded: bool },
+    Usage {
+        input: u64,
+        output: u64,
+    },
+    ContextUsage {
+        tokens: u64,
+        estimated: bool,
+    },
+    ToolStarted {
+        name: String,
+        detail: Option<String>,
+    },
+    ToolFinished {
+        name: String,
+        succeeded: bool,
+        summary: Option<String>,
+    },
     Fallback(String),
     ContextCompressed(String),
     IterationLimit(String),
@@ -192,6 +205,19 @@ pub enum ParsedStderr {
 
 fn unquote_debug_str(raw: &str) -> String {
     serde_json::from_str::<String>(raw).unwrap_or_else(|_| raw.trim_matches('"').to_owned())
+}
+
+fn split_name_and_extra(raw: &str) -> (String, Option<String>) {
+    match raw.split_once('\t') {
+        Some((name, extra)) => {
+            let extra = extra.trim();
+            (
+                unquote_debug_str(name),
+                (!extra.is_empty()).then(|| extra.to_owned()),
+            )
+        }
+        None => (unquote_debug_str(raw), None),
+    }
 }
 
 pub fn parse_stderr_event(text: &str) -> ParsedStderr {
@@ -217,18 +243,23 @@ pub fn parse_stderr_event(text: &str) -> ParsedStderr {
         }
     }
     if let Some(raw) = text.strip_prefix("Tool started: ") {
-        return ParsedStderr::ToolStarted(unquote_debug_str(raw));
+        let (name, detail) = split_name_and_extra(raw);
+        return ParsedStderr::ToolStarted { name, detail };
     }
     if let Some(raw) = text.strip_prefix("Tool completed: ") {
+        let (name, summary) = split_name_and_extra(raw);
         return ParsedStderr::ToolFinished {
-            name: unquote_debug_str(raw),
+            name,
             succeeded: true,
+            summary,
         };
     }
     if let Some(raw) = text.strip_prefix("Tool failed: ") {
+        let (name, summary) = split_name_and_extra(raw);
         return ParsedStderr::ToolFinished {
-            name: unquote_debug_str(raw),
+            name,
             succeeded: false,
+            summary,
         };
     }
     if let Some(raw) = text.strip_prefix("Model fallback: ") {
@@ -277,7 +308,9 @@ pub enum FeedEntry {
     Assistant(String),
     Tool {
         name: String,
+        detail: Option<String>,
         status: ToolStatus,
+        summary: Option<String>,
         elapsed_ms: Option<u64>,
     },
     Notice {
@@ -966,20 +999,32 @@ mod tests {
         );
         assert_eq!(
             parse_stderr_event("Tool started: \"read_file\""),
-            ParsedStderr::ToolStarted("read_file".into())
+            ParsedStderr::ToolStarted {
+                name: "read_file".into(),
+                detail: None,
+            }
+        );
+        assert_eq!(
+            parse_stderr_event("Tool started: \"terminal\"\tgit status -sb"),
+            ParsedStderr::ToolStarted {
+                name: "terminal".into(),
+                detail: Some("git status -sb".into()),
+            }
         );
         assert_eq!(
             parse_stderr_event("Tool completed: \"read_file\""),
             ParsedStderr::ToolFinished {
                 name: "read_file".into(),
-                succeeded: true
+                succeeded: true,
+                summary: None,
             }
         );
         assert_eq!(
-            parse_stderr_event("Tool failed: \"terminal\""),
+            parse_stderr_event("Tool failed: \"terminal\"\texit 127 · command not found"),
             ParsedStderr::ToolFinished {
                 name: "terminal".into(),
-                succeeded: false
+                succeeded: false,
+                summary: Some("exit 127 · command not found".into()),
             }
         );
         assert_eq!(

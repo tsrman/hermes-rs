@@ -297,7 +297,10 @@ async fn write_file_and_patch_leave_no_temp_files_and_preserve_permissions() {
         base_options(&root, &policy, &ack, None),
         TurnHistory::default(),
         move |ev| {
-            if let TurnEvent::ToolFinished { name, succeeded } = ev {
+            if let TurnEvent::ToolFinished {
+                name, succeeded, ..
+            } = ev
+            {
                 if name == "write_file" && succeeded {
                     let _ = std::fs::set_permissions(
                         root_for_chmod.join("script.sh"),

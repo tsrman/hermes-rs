@@ -767,7 +767,9 @@ async fn run_child_inner(
             |event| match event {
                 TurnEvent::IterationLimit(_) => limit_hit = true,
                 TurnEvent::Text(text) if limit_hit => limit_text.push_str(text),
-                TurnEvent::ToolFinished { name, succeeded } => {
+                TurnEvent::ToolFinished {
+                    name, succeeded, ..
+                } => {
                     finished.push((name.to_owned(), succeeded));
                 }
                 _ => {}
