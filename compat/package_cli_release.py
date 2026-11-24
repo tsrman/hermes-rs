@@ -69,7 +69,7 @@ def package(target, output):
     binary = Path(metadata["target_directory"]) / target / "release" / executable
     output.mkdir(parents=True, exist_ok=True)
     extension = "zip" if windows else "tar.gz"
-    archive = output / f"hermes-{version}-{target}.{extension}"
+    archive = output / f"hsr-{version}-{target}.{extension}"
     archive_binary(binary, archive)
     archive.with_name(archive.name + ".sha256").write_text(checksum(archive), encoding="ascii", newline="\n")
     print(archive)

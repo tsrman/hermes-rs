@@ -144,7 +144,7 @@ jobs:
             aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc; do
             extension=tar.gz
             if [[ "$target" == *-msvc ]]; then extension=zip; fi
-            archive="hermes-${tag#v}-$target.$extension"
+            archive="hsr-${tag#v}-$target.$extension"
             sha256sum --check --strict "$archive.sha256"
             assets+=("$archive" "$archive.sha256")
           done
@@ -171,7 +171,7 @@ jobs:
           fi
 
           published="$RUNNER_TEMP/published"
-          gh release download "$tag" --pattern "hermes-${tag#v}-*" --dir "$published"
+          gh release download "$tag" --pattern "hsr-${tag#v}-*" --dir "$published"
           for asset in "${assets[@]}"; do
             cmp "$asset" "$published/$asset"
           done

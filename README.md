@@ -42,7 +42,7 @@ Download the archive and `.sha256` checksum for your platform from [Releases](ht
 ```bash
 tag=v0.5.2
 target=x86_64-unknown-linux-gnu
-archive="hermes-${tag#v}-$target.tar.gz"
+archive="hsr-${tag#v}-$target.tar.gz"
 url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
 (
   set -e
@@ -65,7 +65,7 @@ url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
 
 ```powershell
 $Tag = 'v0.5.2'
-$Archive = "hermes-$($Tag.Substring(1))-x86_64-pc-windows-msvc.zip"
+$Archive = "hsr-$($Tag.Substring(1))-x86_64-pc-windows-msvc.zip"
 $Url = "https://github.com/tsrman/hermes-rs/releases/download/$Tag"
 Invoke-WebRequest "$Url/$Archive" -OutFile $Archive
 Invoke-WebRequest "$Url/$Archive.sha256" -OutFile "$Archive.sha256"

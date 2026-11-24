@@ -176,7 +176,7 @@ fallback_providers:
 
 ## Установка CLI из GitHub Releases
 
-Выберите цель из артефактов опубликованного тега и скачайте архив вместе с файлом SHA-256. `v0.5.2`, `v0.5.1`, `v0.5.0`, `v0.4.0`, `v0.3.1`, `v0.3.0` и `v0.2.0` включают все цели из таблицы. `v0.1.0` доступен для Linux x86_64 GNU и musl. Начиная с `v0.5.1` бинарник в архиве называется `hsr` (`hsr.exe`), в более ранних версиях — `hermes` (`hermes.exe`).
+Выберите цель из артефактов опубликованного тега и скачайте архив вместе с файлом SHA-256. `v0.5.2`, `v0.5.1`, `v0.5.0`, `v0.4.0`, `v0.3.1`, `v0.3.0` и `v0.2.0` включают все цели из таблицы. `v0.1.0` доступен для Linux x86_64 GNU и musl. Начиная с `v0.5.1` бинарник в архиве называется `hsr` (`hsr.exe`), а начиная с `v0.5.2` сами архивы называются `hsr-*` (в более ранних версиях — `hermes-*`).
 
 | Система | Цель |
 | --- | --- |
@@ -191,7 +191,7 @@ fallback_providers:
 ```bash
 tag=v0.5.2
 target=x86_64-unknown-linux-gnu
-archive="hermes-${tag#v}-$target.tar.gz"
+archive="hsr-${tag#v}-$target.tar.gz"
 url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
 (
   set -e
@@ -214,7 +214,7 @@ url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
 
 ```powershell
 $Tag = 'v0.5.2'
-$Archive = "hermes-$($Tag.Substring(1))-x86_64-pc-windows-msvc.zip"
+$Archive = "hsr-$($Tag.Substring(1))-x86_64-pc-windows-msvc.zip"
 $Url = "https://github.com/tsrman/hermes-rs/releases/download/$Tag"
 Invoke-WebRequest "$Url/$Archive" -OutFile $Archive
 Invoke-WebRequest "$Url/$Archive.sha256" -OutFile "$Archive.sha256"
@@ -244,8 +244,8 @@ Workflow [Release CLI](../.github/workflows/release-cli.yml) проверяет 
 output="$(mktemp -d)"
 bash compat/package_cli_release.sh x86_64-unknown-linux-gnu "$output"
 bash compat/package_cli_release.sh x86_64-unknown-linux-musl "$output"
-python3 -m compat.smoke_cli_release "$output/hermes-0.5.2-x86_64-unknown-linux-gnu.tar.gz" debian:trixie-slim
-python3 -m compat.smoke_cli_release "$output/hermes-0.5.2-x86_64-unknown-linux-musl.tar.gz" alpine:3.24.2
+python3 -m compat.smoke_cli_release "$output/hsr-0.5.2-x86_64-unknown-linux-gnu.tar.gz" debian:trixie-slim
+python3 -m compat.smoke_cli_release "$output/hsr-0.5.2-x86_64-unknown-linux-musl.tar.gz" alpine:3.24.2
 ```
 
 Проверка запускает распакованный бинарник в контейнере без Python. Она проверяет отклонение недоверенного сертификата и успешный запрос к локальному HTTPS-имитатору после подключения тестового корня как системного хранилища. Затем проверяет сохранение сессии, `--resume` и поиск по истории.
