@@ -181,6 +181,7 @@ pub fn match_slash_commands(prefix: &str) -> Vec<&'static SlashCommand> {
 pub enum ParsedStderr {
     Session(String),
     Usage { input: u64, output: u64 },
+    ContextUsage { tokens: u64, estimated: bool },
     ToolStarted(String),
     ToolFinished { name: String, succeeded: bool },
     Fallback(String),
@@ -203,6 +204,16 @@ pub fn parse_stderr_event(text: &str) -> ParsedStderr {
             .and_then(|(i, o)| Some((i.parse::<u64>().ok()?, o.parse::<u64>().ok()?)))
         {
             return ParsedStderr::Usage { input, output };
+        }
+    }
+    if let Some(ctx) = text.strip_prefix("Context: ") {
+        if let Some((tokens, kind)) = ctx.split_once(' ') {
+            if let Ok(tokens) = tokens.parse::<u64>() {
+                return ParsedStderr::ContextUsage {
+                    tokens,
+                    estimated: kind.trim() == "est",
+                };
+            }
         }
     }
     if let Some(raw) = text.strip_prefix("Tool started: ") {
@@ -243,6 +254,12 @@ pub struct ReplState {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub last_turn_input_tokens: u64,
+    /// Current model context window occupancy (tokens from the most recent API call or estimate).
+    pub context_tokens: u64,
+    /// True when `context_tokens` is estimated (`~`) rather than provider-reported `prompt_tokens`.
+    pub context_estimated: bool,
+    /// Number of context compressions performed in this session.
+    pub compressions: u32,
     pub exit_code: u8,
     pub color: bool,
     pub profile_label: String,
@@ -306,6 +323,9 @@ impl ReplState {
             total_input_tokens: 0,
             total_output_tokens: 0,
             last_turn_input_tokens: 0,
+            context_tokens: 0,
+            context_estimated: false,
+            compressions: 0,
             exit_code: 0,
             color,
             profile_label,
@@ -319,7 +339,25 @@ impl ReplState {
         self.total_output_tokens = self.total_output_tokens.saturating_add(output);
         if input > 0 {
             self.last_turn_input_tokens = input;
+            if self.context_tokens == 0 {
+                self.context_tokens = input;
+                self.context_estimated = false;
+            }
         }
+    }
+
+    pub fn record_context(&mut self, tokens: u64, estimated: bool) {
+        self.context_tokens = tokens;
+        self.context_estimated = estimated;
+    }
+
+    pub fn reset_metrics(&mut self) {
+        self.total_input_tokens = 0;
+        self.total_output_tokens = 0;
+        self.last_turn_input_tokens = 0;
+        self.context_tokens = 0;
+        self.context_estimated = false;
+        self.compressions = 0;
     }
 }
 
@@ -688,6 +726,12 @@ pub fn load_resumed_session(
 
     state.session = Some(transcript.session.id.clone());
     state.unsaved = None;
+    state.reset_metrics();
+    let est_tokens =
+        hermes_runtime::model_metadata::estimate_active_messages_tokens(&transcript.messages);
+    if est_tokens > 0 {
+        state.record_context(est_tokens, true);
+    }
     state.guard.lock().unwrap().reset();
     hermes_runtime::terminal::forget_session(&state.scope);
     if !state.request.has_explicit_model_override() {
@@ -749,13 +793,68 @@ pub fn format_duration_ms(ms: u64) -> String {
     }
 }
 
+/// Compact token count matching upstream `cli.py::format_token_count_compact`
+/// (e.g. `0`, `850`, `1.2K`, `12.4K`, `128K`, `1.05M`).
 pub fn format_tokens_compact(n: u64) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}k", n as f64 / 1_000.0)
+    if n < 1_000 {
+        return n.to_string();
+    }
+    let units = [(1_000_000_000u64, "B"), (1_000_000, "M"), (1_000, "K")];
+    for (threshold, suffix) in units {
+        if n >= threshold {
+            let scaled = n as f64 / threshold as f64;
+            let raw = if scaled < 10.0 {
+                format!("{scaled:.2}")
+            } else if scaled < 100.0 {
+                format!("{scaled:.1}")
+            } else {
+                format!("{scaled:.0}")
+            };
+            let trimmed = if raw.contains('.') {
+                raw.trim_end_matches('0').trim_end_matches('.')
+            } else {
+                raw.as_str()
+            };
+            return format!("{trimmed}{suffix}");
+        }
+    }
+    n.to_string()
+}
+
+/// Format a context window size matching upstream `hermes_cli/banner.py::_format_context_length`
+/// (e.g. `128000` -> `"128K"`, `1048576` -> `"1M"`, `1050000` -> `"1.1M"`).
+pub fn format_context_length(tokens: u64) -> String {
+    for (unit, div) in [("M", 1_000_000.0), ("K", 1_000.0)] {
+        if (tokens as f64) >= div {
+            let val = tokens as f64 / div;
+            let rounded = val.round();
+            if (val - rounded).abs() < 0.05 {
+                return format!("{}{unit}", rounded as u64);
+            }
+            return format!("{val:.1}{unit}");
+        }
+    }
+    tokens.to_string()
+}
+
+/// Graphical 10-cell context bar matching upstream `cli_status_bar_mixin.py::_build_context_bar`.
+pub fn build_context_bar(percent: u8, width: usize) -> String {
+    let safe = percent.min(100);
+    let filled = (((safe as f64) / 100.0) * (width as f64))
+        .round()
+        .clamp(0.0, width as f64) as usize;
+    format!("[{}{}]", "█".repeat(filled), "░".repeat(width - filled))
+}
+
+/// Short display name for a model ID matching upstream `cli_status_bar_mixin.py`.
+pub fn short_model_label(model: &str) -> String {
+    let base = model.rsplit('/').next().unwrap_or(model);
+    let stripped = base.strip_suffix(".gguf").unwrap_or(base);
+    if stripped.chars().count() > 26 {
+        let head: String = stripped.chars().take(23).collect();
+        format!("{head}...")
     } else {
-        n.to_string()
+        stripped.to_owned()
     }
 }
 
@@ -886,6 +985,42 @@ mod tests {
         assert_eq!(
             parse_stderr_event("Model fallback: \"gpt-4o\""),
             ParsedStderr::Fallback("gpt-4o".into())
+        );
+        assert_eq!(
+            parse_stderr_event("Context: 12400 exact"),
+            ParsedStderr::ContextUsage {
+                tokens: 12400,
+                estimated: false
+            }
+        );
+        assert_eq!(
+            parse_stderr_event("Context: 3200 est"),
+            ParsedStderr::ContextUsage {
+                tokens: 3200,
+                estimated: true
+            }
+        );
+    }
+
+    #[test]
+    fn context_bar_and_token_formatters_match_upstream() {
+        assert_eq!(format_tokens_compact(0), "0");
+        assert_eq!(format_tokens_compact(850), "850");
+        assert_eq!(format_tokens_compact(1_200), "1.2K");
+        assert_eq!(format_tokens_compact(12_400), "12.4K");
+        assert_eq!(format_tokens_compact(128_000), "128K");
+        assert_eq!(format_tokens_compact(1_050_000), "1.05M");
+        assert_eq!(format_context_length(128_000), "128K");
+        assert_eq!(format_context_length(200_000), "200K");
+        assert_eq!(format_context_length(1_048_576), "1M");
+        assert_eq!(format_context_length(1_050_000), "1.1M");
+        assert_eq!(build_context_bar(0, 10), "[░░░░░░░░░░]");
+        assert_eq!(build_context_bar(24, 10), "[██░░░░░░░░]");
+        assert_eq!(build_context_bar(50, 10), "[█████░░░░░]");
+        assert_eq!(build_context_bar(100, 10), "[██████████]");
+        assert_eq!(
+            short_model_label("anthropic/claude-sonnet-4-6"),
+            "claude-sonnet-4-6"
         );
     }
 

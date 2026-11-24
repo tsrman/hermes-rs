@@ -27,9 +27,10 @@ use crate::approval;
 use crate::chat::{self, Event, ManualCompress};
 use crate::ui::markdown::StreamMarkdown;
 use crate::ui::{
-    format_duration_ms, load_resumed_session, match_slash_commands, parse_stderr_event,
-    record_prompt_history, ActiveUi, FeedEntry, NoticeKind, ParsedStderr, RecapEntry, ReplState,
-    ResumeRecap, ToolStatus, UiOutcome, HELP_TEXT, SLASH_COMMANDS,
+    format_context_length, format_duration_ms, format_tokens_compact, load_resumed_session,
+    match_slash_commands, parse_stderr_event, record_prompt_history, ActiveUi, FeedEntry,
+    NoticeKind, ParsedStderr, RecapEntry, ReplState, ResumeRecap, ToolStatus, UiOutcome, HELP_TEXT,
+    SLASH_COMMANDS,
 };
 
 const PROMPT: &str = "› ";
@@ -456,6 +457,7 @@ pub async fn run(
                     announce(&state.session, styled);
                     state.session = None;
                     state.unsaved = None;
+                    state.reset_metrics();
                     state.feed_entries.clear();
                     state.guard.lock().unwrap().reset();
                     hermes_runtime::terminal::forget_session(&state.scope);
@@ -476,15 +478,26 @@ pub async fn run(
                         eprintln!("Cannot compress: profile root is unavailable.");
                         continue;
                     };
-                    let Some(id) = state.session.as_deref() else {
+                    let Some(id) = state.session.clone() else {
                         println!("Nothing to compress yet: start a conversation first.");
                         continue;
                     };
                     let focus = (!argument.is_empty()).then_some(argument);
-                    match chat::compress_session(home, &state.request, id, focus, &state.guard)
+                    match chat::compress_session(home, &state.request, &id, focus, &state.guard)
                         .await
                     {
                         Ok(ManualCompress::Applied { archived }) => {
+                            state.compressions = state.compressions.saturating_add(1);
+                            if let Ok(transcript) =
+                                hermes_runtime::storage::SessionStore::open_read_only(home)
+                                    .and_then(|s| s.resume_display_transcript(&id))
+                            {
+                                let est =
+                                    hermes_runtime::model_metadata::estimate_active_messages_tokens(
+                                        &transcript.messages,
+                                    );
+                                state.record_context(est, true);
+                            }
                             println!("Compressed session {id}: archived {archived} message(s) into a summary.");
                         }
                         Ok(ManualCompress::Unchanged) => {
@@ -548,6 +561,8 @@ pub async fn run(
 
         let mut saved = None;
         let mut usage = None;
+        let mut context_usage: Option<(u64, bool)> = None;
+        let mut turn_compressions: u32 = 0;
         let mut output_open = true;
         let mut md = StreamMarkdown::new(styled);
         let mut assistant_buf = String::new();
@@ -611,6 +626,10 @@ pub async fn run(
                                     usage = Some((input, output));
                                     true
                                 }
+                                ParsedStderr::ContextUsage { tokens, estimated } => {
+                                    context_usage = Some((tokens, estimated));
+                                    true
+                                }
                                 ParsedStderr::ToolStarted(name) => {
                                     tool_starts.insert(name.clone(), Instant::now());
                                     if styled {
@@ -667,6 +686,7 @@ pub async fn run(
                                     output_open
                                 }
                                 ParsedStderr::ContextCompressed(msg) => {
+                                    turn_compressions = turn_compressions.saturating_add(1);
                                     sp_for_events.pause_and_clear();
                                     if styled {
                                         eprintln!("  {FG_CYAN}◈{RESET} {DIM}{msg}{RESET}");
@@ -719,6 +739,10 @@ pub async fn run(
         if !tail.is_empty() {
             let _ = write_stdout(&tail);
         }
+        if let Some((tokens, estimated)) = context_usage {
+            state.record_context(tokens, estimated);
+        }
+        state.compressions = state.compressions.saturating_add(turn_compressions);
 
         match turn_outcome {
             None => {
@@ -742,21 +766,40 @@ pub async fn run(
                 if let Some((input, output)) = usage {
                     state.record_usage(input, output);
                 }
+                let (ctx_len, _) = state.request.display_context_length();
+                let ctx_used = state.context_tokens.min(ctx_len);
+                let ctx_pct = ((ctx_used as f64 / ctx_len.max(1) as f64) * 100.0)
+                    .round()
+                    .clamp(0.0, 100.0) as u8;
+                let ctx_mark = if state.context_estimated && ctx_used > 0 {
+                    "~"
+                } else {
+                    ""
+                };
+                let ctx_suffix = if ctx_used > 0 {
+                    format!(
+                        " · ctx {ctx_mark}{}/{} ({ctx_mark}{ctx_pct}%)",
+                        format_tokens_compact(ctx_used),
+                        format_context_length(ctx_len)
+                    )
+                } else {
+                    String::new()
+                };
                 match usage {
                     Some((input, output)) if input + output > 0 => {
                         if styled {
                             eprintln!(
-                                "{DIM}{FG_GRAY}[{seconds:.1}s · {input} in / {output} out]{RESET}"
+                                "{DIM}{FG_GRAY}[{seconds:.1}s · {input} in / {output} out{ctx_suffix}]{RESET}"
                             );
                         } else {
-                            eprintln!("[{seconds:.1}s · {input} in / {output} out]");
+                            eprintln!("[{seconds:.1}s · {input} in / {output} out{ctx_suffix}]");
                         }
                     }
                     _ => {
                         if styled {
-                            eprintln!("{DIM}{FG_GRAY}[{seconds:.1}s]{RESET}");
+                            eprintln!("{DIM}{FG_GRAY}[{seconds:.1}s{ctx_suffix}]{RESET}");
                         } else {
-                            eprintln!("[{seconds:.1}s]");
+                            eprintln!("[{seconds:.1}s{ctx_suffix}]");
                         }
                     }
                 }

@@ -22,6 +22,7 @@ pub mod journal;
 pub mod mcp;
 pub mod mcp_media;
 pub mod memory_tool;
+pub mod model_metadata;
 #[cfg(unix)]
 pub mod process;
 #[cfg(not(unix))]

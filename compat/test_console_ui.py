@@ -344,7 +344,10 @@ class ConsoleUiTest(unittest.TestCase):
 
         buf = bytearray()
         self._read_until(master, buf, b"\x1b[?1049h")
-        pos = self._read_until(master, buf, b"HERMES")
+        self._read_until(master, buf, b"HERMES")
+        # Status bar renders upstream-style context meter from startup (0/128K + graphical bar)
+        pos = self._read_until(master, buf, "[░░░░░░░░░░]".encode())
+        self.assertIn(b"0/128K", bytes(buf))
 
         # Turn 1 in session 1
         os.write(master, b"alpha_question\r")

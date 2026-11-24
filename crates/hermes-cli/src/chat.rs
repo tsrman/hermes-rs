@@ -1045,6 +1045,11 @@ where
                     history.clone(),
                     |event| {
                         started |= matches!(event, TurnEvent::Text(_) | TurnEvent::ToolStarted(_));
+                        if matches!(event, TurnEvent::ContextUsage { .. })
+                            && (json_mode || request.state_scope.is_none())
+                        {
+                            return;
+                        }
                         if receiving {
                             receiving = emit(if json_mode {
                                 format_json_event(event)
@@ -1180,6 +1185,7 @@ fn format_json_event(event: TurnEvent<'_>) -> Event {
             fields.insert("reason".into(), serde_json::json!("midturn"));
             json_event("context_compressed", fields)
         }
+        TurnEvent::ContextUsage { .. } => String::new(),
     };
     Event::Stdout(line)
 }
@@ -1200,6 +1206,13 @@ fn format_event(event: TurnEvent<'_>) -> Event {
             "Context window exceeded: replacing earlier steps of this turn with a summary and retrying."
                 .into(),
         ),
+        TurnEvent::ContextUsage {
+            prompt_tokens,
+            estimated,
+        } => Event::Stderr(format!(
+            "Context: {prompt_tokens} {}",
+            if estimated { "est" } else { "exact" }
+        )),
     }
 }
 
@@ -1330,6 +1343,15 @@ impl ChatRequest {
 
     pub fn context_length(&self) -> Option<u64> {
         self.compression.context_window()
+    }
+
+    /// Context window for status-bar display `(tokens, is_fallback)`:
+    /// explicit config/provider window → known model table → 128K fallback.
+    pub fn display_context_length(&self) -> (u64, bool) {
+        hermes_runtime::model_metadata::resolve_display_context_length(
+            self.context_length(),
+            self.model(),
+        )
     }
 
     #[cfg(unix)]

@@ -53,6 +53,8 @@ pub struct CompletedTurn {
     pub(crate) compaction: Option<Box<CompactedHistory>>,
     pub(crate) input_tokens: u64,
     pub(crate) output_tokens: u64,
+    pub(crate) context_tokens: u64,
+    pub(crate) context_estimated: bool,
 }
 
 impl CompletedTurn {
@@ -67,6 +69,11 @@ impl CompletedTurn {
     /// Tokens the provider reported for the turn.
     pub fn usage(&self) -> (u64, u64) {
         (self.input_tokens, self.output_tokens)
+    }
+
+    /// Current context window occupancy `(prompt_tokens, estimated)` from the last API call.
+    pub fn context_usage(&self) -> (u64, bool) {
+        (self.context_tokens, self.context_estimated)
     }
 
     /// The text of the last assistant message.
@@ -469,6 +476,12 @@ pub enum TurnEvent<'a> {
     /// The provider rejected the request as too large and the earlier steps of this turn were
     /// replaced by a summary; the request is sent again.
     ContextSqueezed,
+    /// Live context window occupancy after an API response (exact provider `prompt_tokens` or
+    /// byte/4 estimate when the provider did not report usage).
+    ContextUsage {
+        prompt_tokens: u64,
+        estimated: bool,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -624,6 +637,7 @@ where
     let mut stall_tracker = crate::stall_guards::StallGuardTracker::new();
     let mut stall_continuations = 0usize;
     let mut usage = (0u64, 0u64);
+    let mut last_context = (0u64, false);
     let mut approve_dyn =
         |request: ApprovalRequest| -> tools::BoxFuture<'static, ApprovalDecision> {
             Box::pin(approve(request))
@@ -646,6 +660,8 @@ where
                 compaction: history.compaction,
                 input_tokens: usage.0,
                 output_tokens: usage.1,
+                context_tokens: last_context.0,
+                context_estimated: last_context.1,
             }));
         }
         let result = loop {
@@ -690,7 +706,20 @@ where
                     if let Some(reported) = result.usage {
                         usage.0 += reported.input_tokens;
                         usage.1 += reported.output_tokens;
+                        if reported.input_tokens > 0 {
+                            last_context = (reported.input_tokens, false);
+                        } else {
+                            let est = ((messages_bytes(&sent) + messages_bytes(&tools)) / 4) as u64;
+                            last_context = (est, true);
+                        }
+                    } else {
+                        let est = ((messages_bytes(&sent) + messages_bytes(&tools)) / 4) as u64;
+                        last_context = (est, true);
                     }
+                    on_event(TurnEvent::ContextUsage {
+                        prompt_tokens: last_context.0,
+                        estimated: last_context.1,
+                    });
                     if let Some(journal) = options.journal {
                         journal.record_for(
                             options.child,
@@ -808,6 +837,8 @@ where
                     compaction: history.compaction,
                     input_tokens: usage.0,
                     output_tokens: usage.1,
+                    context_tokens: last_context.0,
+                    context_estimated: last_context.1,
                 }));
             }
             Some("tool_calls") if !result.tool_calls.is_empty() => {}

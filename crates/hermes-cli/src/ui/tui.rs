@@ -7,6 +7,7 @@
 //! - Multiline input composer with cursor, history, Alt+Enter/Shift+Enter newlines, live spinner
 //! - Centered interactive modals for `approval` and `clarify`
 
+use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::path::Path;
@@ -14,7 +15,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event as TermEvent, KeyCode, KeyEvent,
+    KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -35,21 +39,22 @@ use crate::approval::{self, Grant};
 use crate::chat::{self, Event as ChatEvent, ManualCompress};
 use crate::ui::markdown::render_markdown_lines;
 use crate::ui::{
-    format_duration_ms, format_tokens_compact, load_resumed_session, match_slash_commands,
-    parse_stderr_event, record_prompt_history, ActiveUi, FeedEntry, NoticeKind, ParsedStderr,
-    ReplState, ToolStatus, UiOutcome, HELP_TEXT,
+    build_context_bar, format_context_length, format_duration_ms, format_tokens_compact,
+    load_resumed_session, match_slash_commands, parse_stderr_event, record_prompt_history,
+    short_model_label, ActiveUi, FeedEntry, NoticeKind, ParsedStderr, ReplState, ToolStatus,
+    UiOutcome, HELP_TEXT,
 };
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// RAII guard that guarantees terminal raw mode and alternate screen are restored on drop.
+/// RAII guard that guarantees terminal raw mode, mouse capture, and alternate screen are restored on drop.
 struct TerminalGuard;
 
 impl TerminalGuard {
     fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
         Ok(Self)
     }
 }
@@ -58,7 +63,7 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
         let mut stdout = io::stdout();
-        let _ = execute!(stdout, LeaveAlternateScreen);
+        let _ = execute!(stdout, DisableMouseCapture, LeaveAlternateScreen);
     }
 }
 
@@ -109,6 +114,9 @@ pub struct TuiApp {
     draft_before_history: String,
     palette_index: usize,
     scroll_from_bottom: usize,
+    /// Last rendered maximum scroll offset (updated in `render_feed`) so scrolling up clamps
+    /// cleanly at the top and never builds up dead scroll debt when scrolling back down.
+    last_max_scroll: Cell<usize>,
     spinner_tick: usize,
     streaming_assistant: String,
     active_tools: HashMap<String, Instant>,
@@ -129,6 +137,7 @@ impl TuiApp {
             draft_before_history: String::new(),
             palette_index: 0,
             scroll_from_bottom: 0,
+            last_max_scroll: Cell::new(0),
             spinner_tick: 0,
             streaming_assistant: String::new(),
             active_tools: HashMap::new(),
@@ -143,6 +152,18 @@ impl TuiApp {
 
     pub fn is_busy(&self) -> bool {
         self.turn_started.is_some()
+    }
+
+    fn scroll_feed_up(&mut self, lines: usize) {
+        let max_scroll = self.last_max_scroll.get();
+        self.scroll_from_bottom = self
+            .scroll_from_bottom
+            .saturating_add(lines)
+            .min(max_scroll);
+    }
+
+    fn scroll_feed_down(&mut self, lines: usize) {
+        self.scroll_from_bottom = self.scroll_from_bottom.saturating_sub(lines);
     }
 
     fn insert_char(&mut self, c: char) {
@@ -335,6 +356,9 @@ pub async fn run(home: Option<&Path>, state: &mut ReplState) -> Result<UiOutcome
                             start_turn(home, &mut app, state, query, &mut active_handle, &mut turn_rx);
                         }
                     }
+                    Some(TermEvent::Mouse(mouse)) if handle_mouse_event(&mut app, mouse) => {
+                        dirty = true;
+                    }
                     Some(TermEvent::Paste(pasted)) if !app.is_busy() && app.modal.is_none() => {
                         app.input.insert_str(app.cursor, &pasted);
                         app.cursor += pasted.len();
@@ -427,6 +451,9 @@ fn handle_turn_event(app: &mut TuiApp, state: &mut ReplState, ev: ChatEvent) {
         ChatEvent::Stderr(text) => match parse_stderr_event(&text) {
             ParsedStderr::Session(id) => app.turn_saved_session = Some(id),
             ParsedStderr::Usage { input, output } => app.turn_usage = Some((input, output)),
+            ParsedStderr::ContextUsage { tokens, estimated } => {
+                state.record_context(tokens, estimated);
+            }
             ParsedStderr::ToolStarted(name) => {
                 if !app.streaming_assistant.trim().is_empty() {
                     let flushed = std::mem::take(&mut app.streaming_assistant);
@@ -482,6 +509,7 @@ fn handle_turn_event(app: &mut TuiApp, state: &mut ReplState, ev: ChatEvent) {
                 TuiApp::push_notice(state, NoticeKind::Warn, format!("Model fallback → {model}"));
             }
             ParsedStderr::ContextCompressed(msg) => {
+                state.compressions = state.compressions.saturating_add(1);
                 TuiApp::push_notice(state, NoticeKind::Info, msg);
             }
             ParsedStderr::IterationLimit(msg) => {
@@ -666,23 +694,23 @@ async fn handle_key_event(
     // Feed scrolling keys (always active, even during streaming).
     match (key.code, key.modifiers) {
         (KeyCode::PageUp, _) => {
-            app.scroll_from_bottom = app.scroll_from_bottom.saturating_add(10);
+            app.scroll_feed_up(10);
             return None;
         }
         (KeyCode::PageDown, _) => {
-            app.scroll_from_bottom = app.scroll_from_bottom.saturating_sub(10);
+            app.scroll_feed_down(10);
             return None;
         }
         (KeyCode::Up, m) if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::SHIFT) => {
-            app.scroll_from_bottom = app.scroll_from_bottom.saturating_add(3);
+            app.scroll_feed_up(3);
             return None;
         }
         (KeyCode::Down, m) if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::SHIFT) => {
-            app.scroll_from_bottom = app.scroll_from_bottom.saturating_sub(3);
+            app.scroll_feed_down(3);
             return None;
         }
         (KeyCode::Char('u'), m) if m.contains(KeyModifiers::CONTROL) => {
-            app.scroll_from_bottom = app.scroll_from_bottom.saturating_add(12);
+            app.scroll_feed_up(12);
             return None;
         }
         (KeyCode::End, m) if m.contains(KeyModifiers::CONTROL) => {
@@ -802,6 +830,89 @@ async fn handle_key_event(
         _ => {}
     }
     None
+}
+
+/// Handle mouse wheel scrolling in the conversation feed and scrollable modals.
+/// Returns `true` when state changed and the frame should be redrawn.
+fn handle_mouse_event(app: &mut TuiApp, mouse: MouseEvent) -> bool {
+    const WHEEL_LINES: usize = 3;
+    match mouse.kind {
+        MouseEventKind::ScrollUp => match &mut app.modal {
+            Some(ActiveModal::Approval { scroll, .. }) => {
+                let before = *scroll;
+                *scroll = scroll.saturating_sub(WHEEL_LINES as u16);
+                *scroll != before
+            }
+            Some(ActiveModal::SessionPicker { cursor, scroll, .. }) => {
+                let before = *cursor;
+                *cursor = cursor.saturating_sub(1);
+                if *cursor < *scroll {
+                    *scroll = *cursor;
+                }
+                *cursor != before
+            }
+            Some(ActiveModal::Clarify {
+                questions,
+                current,
+                cursor,
+                ..
+            }) => {
+                if questions
+                    .get(*current)
+                    .is_some_and(|q| !q.choices.is_empty())
+                {
+                    let before = *cursor;
+                    *cursor = cursor.saturating_sub(1);
+                    *cursor != before
+                } else {
+                    false
+                }
+            }
+            None => {
+                let before = app.scroll_from_bottom;
+                app.scroll_feed_up(WHEEL_LINES);
+                app.scroll_from_bottom != before
+            }
+        },
+        MouseEventKind::ScrollDown => match &mut app.modal {
+            Some(ActiveModal::Approval { scroll, .. }) => {
+                let before = *scroll;
+                *scroll = scroll.saturating_add(WHEEL_LINES as u16);
+                *scroll != before
+            }
+            Some(ActiveModal::SessionPicker {
+                sessions, cursor, ..
+            }) => {
+                let before = *cursor;
+                if *cursor + 1 < sessions.len() {
+                    *cursor += 1;
+                }
+                *cursor != before
+            }
+            Some(ActiveModal::Clarify {
+                questions,
+                current,
+                cursor,
+                ..
+            }) => {
+                if let Some(q) = questions.get(*current) {
+                    let before = *cursor;
+                    if *cursor + 1 < q.choices.len() {
+                        *cursor += 1;
+                    }
+                    *cursor != before
+                } else {
+                    false
+                }
+            }
+            None => {
+                let before = app.scroll_from_bottom;
+                app.scroll_feed_down(WHEEL_LINES);
+                app.scroll_from_bottom != before
+            }
+        },
+        _ => false,
+    }
 }
 
 fn handle_modal_key(app: &mut TuiApp, state: &mut ReplState, home: Option<&Path>, key: KeyEvent) {
@@ -1113,6 +1224,7 @@ async fn handle_slash_command(
         "new" => {
             state.session = None;
             state.unsaved = None;
+            state.reset_metrics();
             state.feed_entries.clear();
             state.guard.lock().unwrap().reset();
             hermes_runtime::terminal::forget_session(&state.scope);
@@ -1183,7 +1295,7 @@ async fn handle_slash_command(
                 );
                 return None;
             };
-            let Some(id) = state.session.as_deref() else {
+            let Some(id) = state.session.clone() else {
                 TuiApp::push_notice(
                     state,
                     NoticeKind::Info,
@@ -1192,14 +1304,25 @@ async fn handle_slash_command(
                 return None;
             };
             let focus = (!argument.is_empty()).then_some(argument);
-            match chat::compress_session(home, &state.request, id, focus, &state.guard).await {
-                Ok(ManualCompress::Applied { archived }) => TuiApp::push_notice(
-                    state,
-                    NoticeKind::Info,
-                    format!(
-                        "Compressed session {id}: archived {archived} message(s) into a summary."
-                    ),
-                ),
+            match chat::compress_session(home, &state.request, &id, focus, &state.guard).await {
+                Ok(ManualCompress::Applied { archived }) => {
+                    state.compressions = state.compressions.saturating_add(1);
+                    if let Ok(transcript) = SessionStore::open_read_only(home)
+                        .and_then(|s| s.resume_display_transcript(&id))
+                    {
+                        let est = hermes_runtime::model_metadata::estimate_active_messages_tokens(
+                            &transcript.messages,
+                        );
+                        state.record_context(est, true);
+                    }
+                    TuiApp::push_notice(
+                        state,
+                        NoticeKind::Info,
+                        format!(
+                            "Compressed session {id}: archived {archived} message(s) into a summary."
+                        ),
+                    );
+                }
                 Ok(ManualCompress::Unchanged) => TuiApp::push_notice(
                     state,
                     NoticeKind::Info,
@@ -1270,15 +1393,43 @@ pub fn render_frame(frame: &mut Frame<'_>, app: &TuiApp, state: &ReplState) {
     }
 }
 
+fn context_usage_style(percent: u8) -> Style {
+    if percent >= 95 {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    } else if percent > 80 {
+        Style::default().fg(Color::LightRed)
+    } else if percent >= 50 {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::Green)
+    }
+}
+
 fn render_header(frame: &mut Frame<'_>, area: Rect, state: &ReplState) {
-    let model = state.request.model().unwrap_or("(unset)");
-    let provider = state.request.provider_name();
+    let model_raw = state.request.model().unwrap_or("(unset)");
+    let model = short_model_label(model_raw);
     let sess = state
         .session
         .as_deref()
         .map(|s| s.chars().take(10).collect::<String>())
         .unwrap_or_else(|| "new".to_owned());
     let yolo = hermes_runtime::approval_policy::installed().is_some_and(|p| p.approves_all());
+
+    let (ctx_len, _is_fallback) = state.request.display_context_length();
+    let ctx_used = state.context_tokens.min(ctx_len);
+    let pct = ((ctx_used as f64 / ctx_len.max(1) as f64) * 100.0)
+        .round()
+        .clamp(0.0, 100.0) as u8;
+    let mark = if state.context_estimated && ctx_used > 0 {
+        "~"
+    } else {
+        ""
+    };
+    let ctx_style = context_usage_style(pct);
+    let pct_label = format!("{mark}{pct}%");
+    let wide = area.width >= 76;
+    let narrow = area.width < 52;
+    let sep = if wide { " │ " } else { " · " };
 
     let mut spans = vec![
         Span::styled(
@@ -1289,21 +1440,51 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &ReplState) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
+        Span::styled("☤ ", Style::default().fg(Color::Cyan)),
         Span::styled(
             model,
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!(" ({provider})"),
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
-        Span::styled(&state.profile_label, Style::default().fg(Color::Cyan)),
-        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
-        Span::styled(format!("sess:{sess}"), Style::default().fg(Color::DarkGray)),
     ];
+
+    if wide {
+        let ctx_detail = format!(
+            "{mark}{}/{}",
+            format_tokens_compact(ctx_used),
+            format_context_length(ctx_len)
+        );
+        spans.push(Span::styled(sep, Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(ctx_detail, Style::default().fg(Color::Gray)));
+        spans.push(Span::styled(sep, Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(build_context_bar(pct, 10), ctx_style));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(pct_label, ctx_style));
+    } else if !narrow {
+        spans.push(Span::styled(sep, Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(build_context_bar(pct, 10), ctx_style));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(pct_label, ctx_style));
+    } else {
+        spans.push(Span::styled(sep, Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(pct_label, ctx_style));
+    }
+
+    if state.compressions > 0 && !narrow {
+        let comp_style = if state.compressions >= 10 {
+            Style::default().fg(Color::LightRed)
+        } else if state.compressions >= 5 {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        spans.push(Span::styled(sep, Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            format!("🗜 {}", state.compressions),
+            comp_style,
+        ));
+    }
 
     if yolo {
         spans.push(Span::raw(" "));
@@ -1316,25 +1497,16 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &ReplState) {
         ));
     }
 
-    let total = state.total_input_tokens + state.total_output_tokens;
-    if total > 0 {
-        let ctx_pct = state
-            .request
-            .context_length()
-            .filter(|&w| w > 0)
-            .map(|w| {
-                let pct = ((state.last_turn_input_tokens as f64 / w as f64) * 100.0).min(100.0);
-                format!(" · ctx {pct:.0}%")
-            })
-            .unwrap_or_default();
+    if wide {
+        spans.push(Span::styled(sep, Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            &state.profile_label,
+            Style::default().fg(Color::Cyan),
+        ));
         spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
         spans.push(Span::styled(
-            format!(
-                "{} in / {} out{ctx_pct}",
-                format_tokens_compact(state.total_input_tokens),
-                format_tokens_compact(state.total_output_tokens)
-            ),
-            Style::default().fg(Color::Green),
+            format!("sess:{sess}"),
+            Style::default().fg(Color::DarkGray),
         ));
     }
 
@@ -1463,10 +1635,12 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
         })
         .sum();
     let max_scroll = total_visual_lines.saturating_sub(inner_height);
-    let scroll_y = max_scroll.saturating_sub(app.scroll_from_bottom) as u16;
+    app.last_max_scroll.set(max_scroll);
+    let clamped_from_bottom = app.scroll_from_bottom.min(max_scroll);
+    let scroll_y = max_scroll.saturating_sub(clamped_from_bottom) as u16;
 
-    let title = if app.scroll_from_bottom > 0 {
-        " Conversation [scrolled · Ctrl+End to jump ↓] "
+    let title = if clamped_from_bottom > 0 {
+        " Conversation [scrolled · Wheel/PgDn or Ctrl+End ↓] "
     } else {
         " Conversation "
     };
@@ -1937,8 +2111,8 @@ mod tests {
         assert!(text.contains("HERMES"), "header missing HERMES:\n{text}");
         assert!(text.contains("gpt-5.4"), "header missing model:\n{text}");
         assert!(
-            text.contains("1.2k in / 350 out"),
-            "header missing usage:\n{text}"
+            text.contains("1.2K/1.1M") && text.contains("[░░░░░░░░░░] 0%"),
+            "header missing upstream-style context meter:\n{text}"
         );
         assert!(
             text.contains("read_file (18ms)"),
@@ -1952,6 +2126,49 @@ mod tests {
         assert!(
             text.contains("/compress"),
             "missing /compress in palette:\n{text}"
+        );
+    }
+
+    #[test]
+    fn status_bar_renders_upstream_context_bar_tiers_thresholds_and_estimates() {
+        let mut state = sample_state();
+        let app = TuiApp::new();
+
+        // 50% of gpt-5.4 (1.05M) -> 525K/1.1M, [█████░░░░░] 50%, Yellow
+        state.record_context(525_000, false);
+        state.compressions = 2;
+        let mut wide = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        wide.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let wide_text = buffer_text(&wide);
+        assert!(
+            wide_text.contains("525K/1.1M")
+                && wide_text.contains("[█████░░░░░] 50%")
+                && wide_text.contains("🗜 2"),
+            "wide header mismatch:\n{wide_text}"
+        );
+        assert_eq!(context_usage_style(49).fg, Some(Color::Green));
+        assert_eq!(context_usage_style(50).fg, Some(Color::Yellow));
+        assert_eq!(context_usage_style(80).fg, Some(Color::Yellow));
+        assert_eq!(context_usage_style(81).fg, Some(Color::LightRed));
+        assert_eq!(context_usage_style(95).fg, Some(Color::Red));
+
+        // Estimated context (~) shown with tilde prefix; medium width omits token ratio but keeps bar.
+        state.record_context(840_000, true);
+        let mut medium = Terminal::new(TestBackend::new(64, 20)).unwrap();
+        medium.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let medium_text = buffer_text(&medium);
+        assert!(
+            medium_text.contains("[████████░░] ~80%"),
+            "medium header mismatch:\n{medium_text}"
+        );
+
+        // Narrow width keeps compact percentage.
+        let mut narrow = Terminal::new(TestBackend::new(44, 20)).unwrap();
+        narrow.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let narrow_text = buffer_text(&narrow);
+        assert!(
+            narrow_text.contains("~80%"),
+            "narrow header mismatch:\n{narrow_text}"
         );
     }
 
@@ -2246,5 +2463,98 @@ mod tests {
         )
         .await;
         assert!(app.modal.is_none());
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_conversation_feed_with_clamping_and_modals() {
+        let mut state = sample_state();
+        for i in 0..30 {
+            state
+                .feed_entries
+                .push(FeedEntry::User(format!("Message line {i}")));
+        }
+        let mut app = TuiApp::new();
+        let mut terminal = Terminal::new(TestBackend::new(90, 20)).unwrap();
+        terminal.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let max_scroll = app.last_max_scroll.get();
+        assert!(
+            max_scroll > 10,
+            "expected scrollable feed, got {max_scroll}"
+        );
+
+        let wheel = |kind| MouseEvent {
+            kind,
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        // Scroll up moves away from bottom by 3 lines.
+        assert!(handle_mouse_event(
+            &mut app,
+            wheel(MouseEventKind::ScrollUp)
+        ));
+        assert_eq!(app.scroll_from_bottom, 3);
+
+        // Scrolling past top clamps cleanly at `max_scroll` (no overscroll debt).
+        for _ in 0..100 {
+            handle_mouse_event(&mut app, wheel(MouseEventKind::ScrollUp));
+        }
+        assert_eq!(app.scroll_from_bottom, max_scroll);
+        assert!(!handle_mouse_event(
+            &mut app,
+            wheel(MouseEventKind::ScrollUp)
+        ));
+
+        // One notch down immediately moves back down by 3 lines.
+        assert!(handle_mouse_event(
+            &mut app,
+            wheel(MouseEventKind::ScrollDown)
+        ));
+        assert_eq!(app.scroll_from_bottom, max_scroll.saturating_sub(3));
+
+        // Mouse wheel also navigates SessionPicker modal.
+        app.modal = Some(ActiveModal::SessionPicker {
+            sessions: vec![
+                SessionSummary {
+                    id: "s1".into(),
+                    source: "cli".into(),
+                    model: None,
+                    title: Some("One".into()),
+                    started_at: 2.0,
+                    last_activity_at: Some(2.0),
+                    message_count: 1,
+                    preview: None,
+                },
+                SessionSummary {
+                    id: "s2".into(),
+                    source: "cli".into(),
+                    model: None,
+                    title: Some("Two".into()),
+                    started_at: 1.0,
+                    last_activity_at: Some(1.0),
+                    message_count: 1,
+                    preview: None,
+                },
+            ],
+            cursor: 0,
+            scroll: 0,
+        });
+        assert!(handle_mouse_event(
+            &mut app,
+            wheel(MouseEventKind::ScrollDown)
+        ));
+        assert!(matches!(
+            app.modal,
+            Some(ActiveModal::SessionPicker { cursor: 1, .. })
+        ));
+        assert!(handle_mouse_event(
+            &mut app,
+            wheel(MouseEventKind::ScrollUp)
+        ));
+        assert!(matches!(
+            app.modal,
+            Some(ActiveModal::SessionPicker { cursor: 0, .. })
+        ));
     }
 }
