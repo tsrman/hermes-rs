@@ -12,6 +12,7 @@ mod owner;
 mod profile;
 mod repl;
 mod sessions;
+mod ui;
 
 #[derive(Parser)]
 struct Cli {

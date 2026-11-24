@@ -31,7 +31,7 @@ P0 относится к первому CLI-релизу, P3 — к заключ
 | Команда | Что делает | Статус |
 | --- | --- | --- |
 | `hermes chat -q <запрос>` | Один ход, потоковый ответ, инструменты. `--oneshot` запрещает вопросы человеку; `--events-json` выводит версионированный NDJSON (`version: 1`). | Проверено |
-| `hermes chat` (без `-q`) | Интерактивный диалог: `rustyline`, история, Ctrl-C останавливает ход, `/sessions`, `/resume`, `/model`, `/compress` (`/compact`), `/yolo`, `/retry`. | Проверено |
+| `hermes chat` (без `-q`) | Интерактивный диалог в двух режимах: потоковый `inline` (по умолчанию на TTY: стартовый баннер, потоковый Markdown + подсветка кода, живой спиннер и бейджи инструментов с таймингом, `rustyline` с автодополнением/подсказками `/`, нативная прокрутка) и полноэкранный `tui` (`ratatui` + `crossterm`: верхний статус-бар с токенами/окном, лента Markdown + карточки инструментов, палитра `/`, многострочный ввод, интерактивные модалки `approval` и `clarify`). Переключение `--ui <auto\|inline\|tui\|plain>`, `HERMES_UI`, `ui.mode` или `/ui [inline\|tui\|plain]`; автоматический `plain`-fallback для pipe/`TERM=dumb`/`NO_COLOR`. Команды `/help`, `/new`, `/sessions`, `/resume`, `/model`, `/compress` (`/compact`), `/yolo`, `/retry`, `/ui`, `/exit`. | Проверено (`compat/test_repl.py`, `compat/test_console_ui.py`, `TestBackend`) |
 | `chat --save-session`, `--resume <id>`, `--continue` | Сохранение хода, продолжение сессии с арендой SQLite, последняя сессия CLI. | Проверено, включая `SIGKILL` посреди хода и отмену |
 | `chat --yolo`, `approvals.mode: off` | Одобрять всё, кроме `approvals.deny` и пола детектора (hardline). | Проверено |
 | `hermes sessions list \| show \| search \| migrate` | Чтение схем 32 и 33, поиск FTS5, миграция копии 32 → 33. | Проверено |

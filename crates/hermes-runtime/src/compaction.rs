@@ -199,6 +199,13 @@ pub struct CompactionSettings {
     min_tail_users: usize,
 }
 
+impl CompactionSettings {
+    /// Configured or resolved context window in tokens, if known.
+    pub fn context_window(&self) -> Option<u64> {
+        self.context_length.map(|n| n as u64)
+    }
+}
+
 /// Python's `float(value)` as the reference applies it to `target_ratio`: booleans count as 0 and 1,
 /// numeric strings are read, and anything else is a config error the port reads as the default.
 fn python_float(value: &Yaml) -> Option<f64> {

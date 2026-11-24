@@ -4,8 +4,8 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::time::Duration;
 
-use clap::Args;
-use hermes_runtime::config::{load_chat_settings, CompactionSettings};
+use clap::{Args, ValueEnum};
+use hermes_runtime::config::{load_chat_settings, CompactionSettings, UiModeSetting};
 use hermes_runtime::mcp::{McpClients, McpServerConfig};
 use hermes_runtime::memory_tool::MemorySettings;
 use hermes_runtime::prompt::PromptSettings;
@@ -146,6 +146,25 @@ fn side_route(
 /// What to do when the provider is not set up yet.
 const SETUP_HINT: &str = "Set it once with `hermes config set model.provider custom`, `hermes config set model.base_url <url>`, `hermes config set model.default <model>` and put the key in the profile .env as HERMES_API_KEY (or in config.yaml as model.api_key); --base-url, --model and --api-key do the same for one run.";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum UiModeArg {
+    Auto,
+    Inline,
+    Tui,
+    Plain,
+}
+
+impl From<UiModeArg> for UiModeSetting {
+    fn from(arg: UiModeArg) -> Self {
+        match arg {
+            UiModeArg::Auto => Self::Auto,
+            UiModeArg::Inline => Self::Inline,
+            UiModeArg::Tui => Self::Tui,
+            UiModeArg::Plain => Self::Plain,
+        }
+    }
+}
+
 #[derive(Args)]
 pub struct ChatArgs {
     /// The request to run. Without it, an interactive conversation starts.
@@ -179,6 +198,30 @@ pub struct ChatArgs {
     /// Emit versioned JSON Lines events on stdout instead of plain text (requires --query).
     #[arg(long)]
     pub events_json: bool,
+    /// Interactive console interface mode: auto, inline, tui, or plain.
+    #[arg(long, value_enum, env = "HERMES_UI")]
+    pub ui: Option<UiModeArg>,
+}
+
+#[cfg(test)]
+impl ChatArgs {
+    pub fn for_test(base_url: &str, model: &str, api_key: &str) -> Self {
+        Self {
+            query: None,
+            oneshot: false,
+            save_session: false,
+            resume: None,
+            continue_last: false,
+            max_turns: None,
+            base_url: Some(base_url.to_owned()),
+            model: Some(model.to_owned()),
+            api_key: Some(api_key.to_owned()),
+            yolo: false,
+            debug_log: None,
+            events_json: false,
+            ui: None,
+        }
+    }
 }
 
 pub const EVENTS_JSON_VERSION: u32 = 1;
@@ -228,6 +271,8 @@ pub fn write_stdout_line(line: &str) {
 pub struct ChatRequest {
     #[serde(default)]
     events_json: bool,
+    #[serde(default)]
+    ui_mode: UiModeSetting,
     #[serde(default)]
     startup_warnings: Vec<String>,
     #[serde(default)]
@@ -683,6 +728,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
     };
     Ok(ChatRequest {
         events_json: args.events_json,
+        ui_mode: args.ui.map(UiModeSetting::from).unwrap_or(settings.ui_mode),
         startup_warnings,
         state_scope: None,
         prefill,
@@ -1122,6 +1168,7 @@ pub async fn run_text(
         yolo: false,
         debug_log: None,
         events_json: false,
+        ui: None,
     };
     let mut request = prepare(home, args)?;
     if let Some(dir) = workdir.filter(|dir| dir.is_absolute() && dir.is_dir()) {
@@ -1195,6 +1242,18 @@ impl ChatRequest {
 
     pub fn approvals(&self) -> &hermes_runtime::approval_policy::ApprovalSettings {
         &self.approvals
+    }
+
+    pub fn ui_mode(&self) -> UiModeSetting {
+        self.ui_mode
+    }
+
+    pub fn provider_name(&self) -> &str {
+        &self.primary.provider
+    }
+
+    pub fn context_length(&self) -> Option<u64> {
+        self.compression.context_window()
     }
 
     #[cfg(unix)]

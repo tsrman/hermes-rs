@@ -52,7 +52,48 @@ pub fn keeps_phone_numbers(config: &serde_yaml::Value) -> bool {
     }
 }
 
+/// Interactive console UI mode (`ui.mode` in `config.yaml` or `HERMES_UI`).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UiModeSetting {
+    #[default]
+    Auto,
+    Inline,
+    Tui,
+    Plain,
+}
+
+impl UiModeSetting {
+    pub fn parse_lossy(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "inline" | "stream" | "repl" => Some(Self::Inline),
+            "tui" | "fullscreen" | "full" => Some(Self::Tui),
+            "plain" | "off" | "none" => Some(Self::Plain),
+            _ => None,
+        }
+    }
+
+    pub fn from_config(config: &serde_yaml::Value, secrets: &HashMap<String, String>) -> Self {
+        let env_val = std::env::var("HERMES_UI")
+            .ok()
+            .or_else(|| secrets.get("HERMES_UI").cloned())
+            .filter(|v| !v.trim().is_empty());
+        if let Some(parsed) = env_val.as_deref().and_then(Self::parse_lossy) {
+            return parsed;
+        }
+        config
+            .get("ui")
+            .and_then(|ui| ui.get("mode"))
+            .and_then(serde_yaml::Value::as_str)
+            .and_then(Self::parse_lossy)
+            .unwrap_or(Self::Auto)
+    }
+}
+
 pub struct ChatSettings {
+    /// Interactive console UI mode (`ui.mode` / `HERMES_UI`).
+    pub ui_mode: UiModeSetting,
     /// `security.redact_phone_numbers: false`: the assistant's reply keeps its phone numbers.
     pub keep_phone_numbers: bool,
     /// `agent.stall_guards` (default `true`): identical-call loop notices/stubbing and
@@ -184,6 +225,7 @@ pub struct FallbackSettings {
 impl Default for ChatSettings {
     fn default() -> Self {
         Self {
+            ui_mode: UiModeSetting::Auto,
             model: None,
             provider: "custom",
             responses: false,
@@ -476,7 +518,9 @@ pub(crate) fn read_config(path: &Path) -> Result<serde_yaml::Value, String> {
 pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     let terminal_env = std::env::var_os("TERMINAL_ENV");
     let Some(home) = home else {
+        let ui_mode = UiModeSetting::from_config(&serde_yaml::Value::Null, &HashMap::new());
         return Ok(ChatSettings {
+            ui_mode,
             terminal_local: terminal_env
                 .as_deref()
                 .is_none_or(|backend| backend == "local"),
@@ -603,6 +647,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
         }
     }
     settings.secrets = secrets.clone();
+    settings.ui_mode = UiModeSetting::from_config(&config, &secrets);
     let policy = std::env::var("HERMES_REDACT_SECRETS")
         .ok()
         .or_else(|| secrets.get("HERMES_REDACT_SECRETS").cloned())

@@ -21,7 +21,7 @@ pub fn install(settings: ApprovalSettings) {
 
 /// How far an approval reaches.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Grant {
+pub enum Grant {
     Once,
     /// The rest of this conversation.
     Session,
@@ -29,27 +29,65 @@ enum Grant {
     Always,
 }
 
-pub async fn prompt(request: ApprovalRequest) -> ApprovalDecision {
-    if let Some(policy) = approval_policy::installed() {
-        match policy.decide(&request) {
-            Verdict::Allow => return ApprovalDecision::Approved,
-            Verdict::Deny => return ApprovalDecision::Denied,
-            Verdict::Ask => {}
+/// Evaluate the installed approval policy before prompting a person.
+/// Returns `Some(decision)` when policy decides automatically, or `None` when a person must decide.
+pub fn precheck_policy(request: &ApprovalRequest) -> Option<ApprovalDecision> {
+    let policy = approval_policy::installed()?;
+    match policy.decide(request) {
+        Verdict::Allow => Some(ApprovalDecision::Approved),
+        Verdict::Deny => Some(ApprovalDecision::Denied),
+        Verdict::Ask => None,
+    }
+}
+
+/// Persist a session/always approval grant in the installed policy, returning any save error.
+pub fn record_grant(request: &ApprovalRequest, grant: Grant) -> Option<String> {
+    let policy = approval_policy::installed()?;
+    match grant {
+        Grant::Once => None,
+        Grant::Session => {
+            policy.remember(request);
+            None
         }
+        Grant::Always => policy.remember_always(request).1,
+    }
+}
+
+/// Explain why a command was flagged by the installed approval policy, if applicable.
+pub fn explain_flagged(request: &ApprovalRequest) -> Option<String> {
+    approval_policy::installed()?.explain(request)
+}
+
+/// Parse a `clarify` answer line (choice index/indices or custom text). `None` = skipped.
+pub fn parse_clarify_answer(
+    line: &str,
+    choices: &[String],
+    multi: bool,
+) -> Option<serde_json::Value> {
+    parse_answer_impl(line, choices, multi)
+}
+
+/// Sanitize control characters before displaying untrusted tool text in a terminal.
+pub fn sanitize_terminal_text(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() && c != '\n' && c != '\t' {
+                '\u{fffd}'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+pub async fn prompt(request: ApprovalRequest) -> ApprovalDecision {
+    if let Some(decision) = precheck_policy(&request) {
+        return decision;
     }
     let (decision, grant) = ask_person(&request).await;
     if matches!(decision, ApprovalDecision::Approved) {
-        if let Some(policy) = approval_policy::installed() {
-            match grant {
-                Grant::Once => {}
-                Grant::Session => policy.remember(&request),
-                Grant::Always => {
-                    let (_, error) = policy.remember_always(&request);
-                    if let Some(error) = error {
-                        eprintln!("Could not save command_allowlist: {error}");
-                    }
-                }
-            }
+        if let Some(error) = record_grant(&request, grant) {
+            eprintln!("Could not save command_allowlist: {error}");
         }
     }
     decision
@@ -352,21 +390,17 @@ mod terminal {
 /// Text for the terminal with control characters (escape sequences included) made harmless.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn printable(text: &str) -> String {
-    text.chars()
-        .map(|c| {
-            if c.is_control() && c != '\n' && c != '\t' {
-                '\u{fffd}'
-            } else {
-                c
-            }
-        })
-        .collect()
+    sanitize_terminal_text(text)
 }
 
 /// An answer line as the value for the question: a choice by number, or the typed text.
 /// `None` is a skipped question.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn parse_answer(line: &str, choices: &[String], multi: bool) -> Option<serde_json::Value> {
+    parse_answer_impl(line, choices, multi)
+}
+
+fn parse_answer_impl(line: &str, choices: &[String], multi: bool) -> Option<serde_json::Value> {
     use serde_json::Value;
 
     let line = line.trim();

@@ -1,0 +1,854 @@
+//! Enhanced inline streaming REPL (with automatic plain-text fallback).
+//!
+//! Preserves native terminal scrollback while adding:
+//! - Styled startup banner (profile, provider/model, session, shortcuts)
+//! - Tab completion & inline hints for `/` slash commands
+//! - Streaming Markdown & syntax-highlighted code blocks
+//! - Live braille spinners & timed tool badges (`✓ read_file (14ms)`, `✗ terminal`)
+//! - Clean `/ui [inline|tui|plain]` mode switching
+
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::io::{self, IsTerminal, Write};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use rustyline::completion::{Completer, Pair};
+use rustyline::error::ReadlineError;
+use rustyline::highlight::Highlighter;
+use rustyline::hint::Hinter;
+use rustyline::history::FileHistory;
+use rustyline::validate::Validator;
+use rustyline::{Config, Context, Editor, Helper};
+use tokio::task::spawn_blocking;
+
+use crate::approval;
+use crate::chat::{self, Event, ManualCompress};
+use crate::ui::markdown::StreamMarkdown;
+use crate::ui::{
+    format_duration_ms, match_slash_commands, parse_stderr_event, ActiveUi, FeedEntry, NoticeKind,
+    ParsedStderr, ReplState, ToolStatus, UiOutcome, HELP_TEXT, SLASH_COMMANDS,
+};
+
+const PROMPT: &str = "› ";
+const CONTINUATION: &str = "… ";
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+const RESET: &str = "\x1b[0m";
+const BOLD: &str = "\x1b[1m";
+const DIM: &str = "\x1b[2m";
+const FG_CYAN: &str = "\x1b[36m";
+const FG_BRIGHT_CYAN: &str = "\x1b[96m";
+const FG_GREEN: &str = "\x1b[32m";
+const FG_RED: &str = "\x1b[31m";
+const FG_YELLOW: &str = "\x1b[33m";
+const FG_GRAY: &str = "\x1b[90m";
+
+#[derive(Clone, Copy)]
+pub struct SlashHelper {
+    styled: bool,
+}
+
+impl SlashHelper {
+    pub fn new(styled: bool) -> Self {
+        Self { styled }
+    }
+}
+
+impl Helper for SlashHelper {}
+impl Validator for SlashHelper {}
+
+impl Completer for SlashHelper {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        let before = &line[..pos];
+        if !before.starts_with('/') {
+            return Ok((0, Vec::new()));
+        }
+        // Complete sub-arguments for `/ui <mode>`
+        if let Some(arg) = before.strip_prefix("/ui ") {
+            let start = "/ui ".len();
+            let prefix = arg.to_ascii_lowercase();
+            let candidates = ["inline", "tui", "plain"]
+                .into_iter()
+                .filter(|m| m.starts_with(&prefix))
+                .map(|m| Pair {
+                    display: m.to_owned(),
+                    replacement: m.to_owned(),
+                })
+                .collect();
+            return Ok((start, candidates));
+        }
+        if before.contains(char::is_whitespace) {
+            return Ok((pos, Vec::new()));
+        }
+        let matches = match_slash_commands(before)
+            .into_iter()
+            .map(|c| Pair {
+                display: format!("{:<14} {}", c.name, c.description),
+                replacement: c.name.to_owned(),
+            })
+            .collect();
+        Ok((0, matches))
+    }
+}
+
+impl Hinter for SlashHelper {
+    type Hint = String;
+
+    fn hint(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> Option<String> {
+        if !self.styled || pos < line.len() || !line.starts_with('/') || line.len() < 2 {
+            return None;
+        }
+        if let Some(arg) = line.strip_prefix("/ui ") {
+            let prefix = arg.to_ascii_lowercase();
+            return ["inline", "tui", "plain"]
+                .into_iter()
+                .find(|m| m.starts_with(&prefix) && *m != prefix)
+                .map(|m| m[prefix.len()..].to_owned());
+        }
+        if line.contains(char::is_whitespace) {
+            return None;
+        }
+        let lower = line.to_ascii_lowercase();
+        SLASH_COMMANDS
+            .iter()
+            .find(|c| c.name.starts_with(&lower) && c.name != lower)
+            .map(|c| c.name[lower.len()..].to_owned())
+    }
+}
+
+impl Highlighter for SlashHelper {
+    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
+        &'s self,
+        prompt: &'p str,
+        _default: bool,
+    ) -> Cow<'b, str> {
+        if !self.styled {
+            return Cow::Borrowed(prompt);
+        }
+        // Keep the exact contiguous `"› "` bytes intact inside the ANSI wrapper so PTY callers
+        // matching `"› "` continue to work identically.
+        if prompt == PROMPT {
+            Cow::Owned(format!("{BOLD}{FG_BRIGHT_CYAN}{PROMPT}{RESET}"))
+        } else if prompt == CONTINUATION {
+            Cow::Owned(format!("{DIM}{FG_CYAN}{CONTINUATION}{RESET}"))
+        } else {
+            Cow::Borrowed(prompt)
+        }
+    }
+
+    fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
+        if self.styled {
+            Cow::Owned(format!("{DIM}{FG_GRAY}{hint}{RESET}"))
+        } else {
+            Cow::Borrowed(hint)
+        }
+    }
+
+    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
+        if !self.styled || !line.starts_with('/') {
+            return Cow::Borrowed(line);
+        }
+        if let Some((cmd, rest)) = line.split_once(char::is_whitespace) {
+            Cow::Owned(format!("{BOLD}{FG_CYAN}{cmd}{RESET} {rest}"))
+        } else {
+            Cow::Owned(format!("{BOLD}{FG_CYAN}{line}{RESET}"))
+        }
+    }
+
+    fn highlight_char(&self, line: &str, _pos: usize, _forced: bool) -> bool {
+        self.styled && line.starts_with('/')
+    }
+}
+
+type Lines = Editor<SlashHelper, FileHistory>;
+
+enum Input {
+    Line(String),
+    Interrupted,
+    End,
+}
+
+fn placeholder(styled: bool) -> Lines {
+    let mut ed = Editor::with_config(Config::default()).expect("a line editor can be created");
+    ed.set_helper(Some(SlashHelper::new(styled)));
+    ed
+}
+
+async fn read(editor: Lines, prompt: &'static str) -> (Lines, Result<String, ReadlineError>) {
+    spawn_blocking(move || {
+        let mut editor = editor;
+        let line = editor.readline(prompt);
+        (editor, line)
+    })
+    .await
+    .expect("the line reader does not panic")
+}
+
+async fn next_input(editor: &mut Lines, styled: bool) -> Input {
+    let mut text = String::new();
+    let mut prompt = PROMPT;
+    loop {
+        let (returned, line) = read(std::mem::replace(editor, placeholder(styled)), prompt).await;
+        *editor = returned;
+        match line {
+            Ok(line) => match line.strip_suffix('\\') {
+                Some(head) => {
+                    text.push_str(head);
+                    text.push('\n');
+                    prompt = CONTINUATION;
+                }
+                None => {
+                    text.push_str(&line);
+                    return Input::Line(text);
+                }
+            },
+            Err(ReadlineError::Interrupted) => return Input::Interrupted,
+            Err(_) => return Input::End,
+        }
+    }
+}
+
+fn history_path(home: Option<&Path>) -> Option<PathBuf> {
+    home.map(|home| home.join(".hermes_history"))
+}
+
+// ── Live Braille Spinner (stderr) ───────────────────────────────────────────────────
+
+struct SpinnerInner {
+    active: bool,
+    visible: bool,
+    label: String,
+    frame: usize,
+}
+
+#[derive(Clone)]
+struct InlineSpinner {
+    enabled: bool,
+    inner: Arc<Mutex<SpinnerInner>>,
+}
+
+impl InlineSpinner {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            inner: Arc::new(Mutex::new(SpinnerInner {
+                active: false,
+                visible: false,
+                label: String::new(),
+                frame: 0,
+            })),
+        }
+    }
+
+    fn start(&self, label: impl Into<String>) {
+        if !self.enabled {
+            return;
+        }
+        let mut guard = self.inner.lock().unwrap();
+        guard.active = true;
+        guard.label = label.into();
+    }
+
+    fn pause_and_clear(&self) {
+        if !self.enabled {
+            return;
+        }
+        let mut guard = self.inner.lock().unwrap();
+        guard.active = false;
+        if guard.visible {
+            let mut err = io::stderr().lock();
+            let _ = write!(err, "\r\x1b[2K");
+            let _ = err.flush();
+            guard.visible = false;
+        }
+    }
+
+    fn tick(&self) {
+        if !self.enabled {
+            return;
+        }
+        let mut guard = self.inner.lock().unwrap();
+        if !guard.active {
+            return;
+        }
+        let glyph = SPINNER_FRAMES[guard.frame % SPINNER_FRAMES.len()];
+        guard.frame = guard.frame.wrapping_add(1);
+        let mut err = io::stderr().lock();
+        let _ = write!(
+            err,
+            "\r\x1b[2K{FG_CYAN}{glyph}{RESET} {DIM}{}{RESET}",
+            guard.label
+        );
+        let _ = err.flush();
+        guard.visible = true;
+    }
+}
+
+/// Format the startup banner shown in Inline mode (pure function for testing).
+pub fn format_banner(
+    profile: &str,
+    provider: &str,
+    model: &str,
+    session: Option<&str>,
+    yolo: bool,
+    color: bool,
+) -> String {
+    let sess = session
+        .map(|s| {
+            let short: String = s.chars().take(12).collect();
+            format!("session {short}")
+        })
+        .unwrap_or_else(|| "new session".to_owned());
+    let yolo_tag = if yolo { " · YOLO" } else { "" };
+    if !color {
+        return format!(
+            "Hermes · {profile} · {provider}:{model} · {sess}{yolo_tag}\n\
+             /help for commands · /ui tui for fullscreen · Ctrl-C stop · Ctrl-D exit"
+        );
+    }
+    format!(
+        "{FG_GRAY}╭─ {BOLD}{FG_BRIGHT_CYAN}Hermes{RESET}{FG_GRAY} ─────────────────────────────────────────────╮{RESET}\n\
+         {FG_GRAY}│{RESET} {BOLD}{model}{RESET} {DIM}({provider}){RESET}  {FG_GRAY}·{RESET}  profile {FG_CYAN}{profile}{RESET}  {FG_GRAY}·{RESET}  {DIM}{sess}{RESET}{FG_YELLOW}{yolo_tag}{RESET}\n\
+         {FG_GRAY}│{RESET} {DIM}/help commands · /ui tui fullscreen · Ctrl-C stop · Ctrl-D exit{RESET}\n\
+         {FG_GRAY}╰───────────────────────────────────────────────────────╯{RESET}"
+    )
+}
+
+/// Run the inline streaming REPL (or plain mode when `mode == ActiveUi::Plain`).
+pub async fn run(
+    home: Option<&Path>,
+    state: &mut ReplState,
+    mode: ActiveUi,
+    show_banner: bool,
+) -> Result<UiOutcome, String> {
+    let styled = mode == ActiveUi::Inline && state.color;
+    let tty = io::stdin().is_terminal() && io::stdout().is_terminal();
+
+    let mut editor: Lines = Editor::with_config(
+        Config::builder()
+            .auto_add_history(false)
+            .history_ignore_dups(true)
+            .map_err(|error| error.to_string())?
+            .build(),
+    )
+    .map_err(|error| error.to_string())?;
+    editor.set_helper(Some(SlashHelper::new(styled)));
+
+    let history = history_path(home);
+    if let Some(path) = &history {
+        let _ = editor.load_history(path);
+    }
+
+    if show_banner {
+        if styled {
+            let yolo =
+                hermes_runtime::approval_policy::installed().is_some_and(|p| p.approves_all());
+            let banner = format_banner(
+                &state.profile_label,
+                state.request.provider_name(),
+                state.request.model().unwrap_or("(unset)"),
+                state.session.as_deref(),
+                yolo,
+                true,
+            );
+            eprintln!("{banner}");
+        } else if io::stdin().is_terminal() {
+            eprintln!("hermes: type a request, /help for commands, Ctrl-D to leave");
+        }
+    }
+
+    let mut rerun: Option<String> = None;
+    let mut outcome = UiOutcome::Exit;
+
+    loop {
+        let line = match rerun.take() {
+            Some(line) => line,
+            None => match next_input(&mut editor, styled).await {
+                Input::Line(line) => line.trim().to_owned(),
+                Input::Interrupted => continue,
+                Input::End => break,
+            },
+        };
+        let line = line.as_str();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(command) = line.strip_prefix('/').filter(|_| !line.contains('\n')) {
+            let (name, argument) = command
+                .split_once(char::is_whitespace)
+                .map_or((command, ""), |(name, rest)| (name, rest.trim()));
+            match name {
+                "exit" | "quit" => break,
+                "help" => println!("{HELP_TEXT}"),
+                "ui" if argument.is_empty() => {
+                    println!(
+                        "Current UI mode: {} (options: inline, tui, plain)",
+                        mode.label()
+                    );
+                }
+                "ui" => match argument.to_ascii_lowercase().as_str() {
+                    "tui" | "fullscreen" | "full" => {
+                        if !tty {
+                            eprintln!("Fullscreen TUI requires an interactive terminal; staying in plain mode.");
+                        } else {
+                            outcome = UiOutcome::Switch(ActiveUi::Tui);
+                            break;
+                        }
+                    }
+                    "inline" | "stream" | "repl" => {
+                        if mode == ActiveUi::Inline {
+                            println!("Already in inline mode.");
+                        } else if !tty {
+                            eprintln!("Inline mode requires an interactive terminal; staying in plain mode.");
+                        } else {
+                            outcome = UiOutcome::Switch(ActiveUi::Inline);
+                            break;
+                        }
+                    }
+                    "plain" | "off" | "none" => {
+                        if mode == ActiveUi::Plain {
+                            println!("Already in plain mode.");
+                        } else {
+                            outcome = UiOutcome::Switch(ActiveUi::Plain);
+                            break;
+                        }
+                    }
+                    other => {
+                        eprintln!("Unknown UI mode '{other}'. Expected: inline, tui, or plain.");
+                    }
+                },
+                "new" => {
+                    announce(&state.session, styled);
+                    state.session = None;
+                    state.unsaved = None;
+                    state.feed_entries.clear();
+                    state.guard.lock().unwrap().reset();
+                    hermes_runtime::terminal::forget_session(&state.scope);
+                }
+                "model" if argument.is_empty() => {
+                    println!("{}", state.request.model().unwrap_or("(not set)"));
+                }
+                "model" => {
+                    state.request.set_model(argument);
+                    state.guard.lock().unwrap().reset();
+                    println!("Model for the next turns: {argument}");
+                }
+                "compress" | "compact" => {
+                    let Some(home) = home else {
+                        eprintln!("Cannot compress: profile root is unavailable.");
+                        continue;
+                    };
+                    let Some(id) = state.session.as_deref() else {
+                        println!("Nothing to compress yet: start a conversation first.");
+                        continue;
+                    };
+                    let focus = (!argument.is_empty()).then_some(argument);
+                    match chat::compress_session(home, &state.request, id, focus, &state.guard)
+                        .await
+                    {
+                        Ok(ManualCompress::Applied { archived }) => {
+                            println!("Compressed session {id}: archived {archived} message(s) into a summary.");
+                        }
+                        Ok(ManualCompress::Unchanged) => {
+                            println!("Nothing to compress: conversation is short enough already.");
+                        }
+                        Ok(ManualCompress::Skipped) => {
+                            eprintln!("Compression skipped: summary failed or did not shorten the conversation.");
+                        }
+                        Err(error) => eprintln!("Compression failed: {error}"),
+                    }
+                }
+                "yolo" => {
+                    if let Some(policy) = hermes_runtime::approval_policy::installed() {
+                        let on = !policy.approves_all();
+                        policy.set_approve_all(on);
+                        println!(
+                            "{}",
+                            if on {
+                                "yolo on: file changes and commands run without asking, except what approvals.deny names"
+                            } else {
+                                "yolo off: you will be asked again"
+                            }
+                        );
+                    }
+                }
+                "sessions" => list_sessions(home, styled),
+                "resume" if argument.is_empty() => eprintln!("Usage: /resume <session id>"),
+                "resume" => {
+                    announce(&state.session, styled);
+                    state.session = Some(argument.to_owned());
+                    state.unsaved = None;
+                    state.feed_entries.clear();
+                    state.guard.lock().unwrap().reset();
+                    hermes_runtime::terminal::forget_session(&state.scope);
+                    println!("The next turn continues session {argument}");
+                }
+                "retry" => match state.unsaved.take() {
+                    Some(previous) => rerun = Some(previous),
+                    None => eprintln!(
+                        "Nothing to retry: the last turn finished and is saved. Ask again to add to it."
+                    ),
+                },
+                other => eprintln!("Unknown command /{other}; /help lists the commands."),
+            }
+            continue;
+        }
+
+        let _ = editor.add_history_entry(line);
+        state.feed_entries.push(FeedEntry::User(line.to_owned()));
+        let turn = state
+            .request
+            .clone()
+            .for_turn(line, &state.scope, state.session.as_deref());
+
+        let mut saved = None;
+        let mut usage = None;
+        let mut output_open = true;
+        let mut md = StreamMarkdown::new(styled);
+        let mut assistant_buf = String::new();
+        let mut tool_starts: HashMap<String, Instant> = HashMap::new();
+        let mut has_printed_text = false;
+        let started = Instant::now();
+
+        let spinner = InlineSpinner::new(styled);
+        spinner.start("Thinking…");
+        let spinner_task = if styled {
+            let sp = spinner.clone();
+            Some(tokio::spawn(async move {
+                let mut tick = tokio::time::interval(Duration::from_millis(85));
+                loop {
+                    tick.tick().await;
+                    sp.tick();
+                }
+            }))
+        } else {
+            None
+        };
+
+        let sp_for_events = spinner.clone();
+        let sp_for_approve = spinner.clone();
+
+        let turn_outcome = tokio::select! {
+            result = chat::execute_with_guard(
+                home,
+                turn,
+                Some(&state.guard),
+                |event| {
+                    match event {
+                        Event::Stdout(chunk) => {
+                            sp_for_events.pause_and_clear();
+                            if chunk == "\n" && has_printed_text {
+                                let tail = md.finish();
+                                if !tail.is_empty() {
+                                    let _ = write_stdout(&tail);
+                                }
+                            } else {
+                                has_printed_text = true;
+                                assistant_buf.push_str(&chunk);
+                            }
+                            let rendered = if chunk == "\n" {
+                                "\n".to_owned()
+                            } else {
+                                md.push(&chunk)
+                            };
+                            if !rendered.is_empty() {
+                                output_open = write_stdout(&rendered).is_ok();
+                            }
+                            output_open
+                        }
+                        Event::Stderr(text) => {
+                            match parse_stderr_event(&text) {
+                                ParsedStderr::Session(id) => {
+                                    saved = Some(id);
+                                    true
+                                }
+                                ParsedStderr::Usage { input, output } => {
+                                    usage = Some((input, output));
+                                    true
+                                }
+                                ParsedStderr::ToolStarted(name) => {
+                                    tool_starts.insert(name.clone(), Instant::now());
+                                    if styled {
+                                        if has_printed_text {
+                                            let tail = md.finish();
+                                            if !tail.is_empty() {
+                                                let _ = write_stdout(&tail);
+                                            }
+                                            let _ = write_stdout("\n");
+                                            has_printed_text = false;
+                                        }
+                                        sp_for_events.start(format!("Running {name}…"));
+                                    } else {
+                                        output_open = chat::display(Event::Stderr(text)).is_ok();
+                                    }
+                                    output_open
+                                }
+                                ParsedStderr::ToolFinished { name, succeeded } => {
+                                    let elapsed = tool_starts
+                                        .remove(&name)
+                                        .map(|t| t.elapsed().as_millis() as u64);
+                                    state.feed_entries.push(FeedEntry::Tool {
+                                        name: name.clone(),
+                                        status: if succeeded {
+                                            ToolStatus::Succeeded
+                                        } else {
+                                            ToolStatus::Failed
+                                        },
+                                        elapsed_ms: elapsed,
+                                    });
+                                    if styled {
+                                        sp_for_events.pause_and_clear();
+                                        let dur = elapsed
+                                            .map(|ms| format!(" ({})", format_duration_ms(ms)))
+                                            .unwrap_or_default();
+                                        if succeeded {
+                                            eprintln!("  {FG_GREEN}✓{RESET} {BOLD}{name}{RESET}{DIM}{dur}{RESET}");
+                                        } else {
+                                            eprintln!("  {FG_RED}✗{RESET} {BOLD}{name}{RESET}{DIM}{dur}{RESET}");
+                                        }
+                                        sp_for_events.start("Thinking…");
+                                    } else {
+                                        output_open = chat::display(Event::Stderr(text)).is_ok();
+                                    }
+                                    output_open
+                                }
+                                ParsedStderr::Fallback(model) => {
+                                    sp_for_events.pause_and_clear();
+                                    if styled {
+                                        eprintln!("  {FG_YELLOW}⚡{RESET} {DIM}Fallback → {model}{RESET}");
+                                    } else {
+                                        output_open = chat::display(Event::Stderr(text)).is_ok();
+                                    }
+                                    output_open
+                                }
+                                ParsedStderr::ContextCompressed(msg) => {
+                                    sp_for_events.pause_and_clear();
+                                    if styled {
+                                        eprintln!("  {FG_CYAN}◈{RESET} {DIM}{msg}{RESET}");
+                                    } else {
+                                        output_open = chat::display(Event::Stderr(text)).is_ok();
+                                    }
+                                    output_open
+                                }
+                                ParsedStderr::IterationLimit(msg) => {
+                                    sp_for_events.pause_and_clear();
+                                    if styled {
+                                        eprintln!("  {FG_YELLOW}⚠{RESET} {msg}");
+                                    } else {
+                                        output_open = chat::display(Event::Stderr(text)).is_ok();
+                                    }
+                                    output_open
+                                }
+                                ParsedStderr::Other(msg) => {
+                                    sp_for_events.pause_and_clear();
+                                    output_open = chat::display(Event::Stderr(msg)).is_ok();
+                                    output_open
+                                }
+                            }
+                        }
+                        other => {
+                            output_open = chat::display(other).is_ok();
+                            output_open
+                        }
+                    }
+                },
+                move |req| {
+                    let sp = sp_for_approve.clone();
+                    async move {
+                        sp.pause_and_clear();
+                        approval::prompt(req).await
+                    }
+                },
+            ) => Some(result),
+            signal = tokio::signal::ctrl_c() => {
+                signal.map_err(|error| format!("signal handler failed: {error}"))?;
+                None
+            }
+        };
+
+        if let Some(handle) = spinner_task {
+            handle.abort();
+        }
+        spinner.pause_and_clear();
+        let tail = md.finish();
+        if !tail.is_empty() {
+            let _ = write_stdout(&tail);
+        }
+
+        match turn_outcome {
+            None => {
+                hermes_runtime::mcp::flush_cancellations().await;
+                if styled {
+                    eprintln!("\n{FG_YELLOW}interrupted{RESET} {DIM}(the turn is not saved; /retry sends it again){RESET}");
+                } else {
+                    eprintln!("\ninterrupted (the turn is not saved; /retry sends it again)");
+                }
+                state.unsaved = Some(line.to_owned());
+            }
+            Some(Ok(status)) => {
+                state.exit_code = status;
+                state.unsaved = None;
+                if !assistant_buf.trim().is_empty() {
+                    state
+                        .feed_entries
+                        .push(FeedEntry::Assistant(assistant_buf.trim_end().to_owned()));
+                }
+                let seconds = started.elapsed().as_secs_f64();
+                if let Some((input, output)) = usage {
+                    state.record_usage(input, output);
+                }
+                match usage {
+                    Some((input, output)) if input + output > 0 => {
+                        if styled {
+                            eprintln!(
+                                "{DIM}{FG_GRAY}[{seconds:.1}s · {input} in / {output} out]{RESET}"
+                            );
+                        } else {
+                            eprintln!("[{seconds:.1}s · {input} in / {output} out]");
+                        }
+                    }
+                    _ => {
+                        if styled {
+                            eprintln!("{DIM}{FG_GRAY}[{seconds:.1}s]{RESET}");
+                        } else {
+                            eprintln!("[{seconds:.1}s]");
+                        }
+                    }
+                }
+            }
+            Some(Err(error)) => {
+                if styled {
+                    eprintln!("{FG_RED}Error:{RESET} {error}");
+                } else {
+                    eprintln!("{error}");
+                }
+                state.feed_entries.push(FeedEntry::Notice {
+                    kind: NoticeKind::Error,
+                    text: error,
+                });
+                state.unsaved = Some(line.to_owned());
+                if !output_open {
+                    break;
+                }
+            }
+        }
+        if let Some(id) = saved {
+            state.session = Some(id);
+        }
+    }
+
+    if let Some(path) = &history {
+        let _ = editor.save_history(path);
+    }
+    Ok(outcome)
+}
+
+fn write_stdout(text: &str) -> io::Result<()> {
+    let mut out = io::stdout().lock();
+    out.write_all(text.as_bytes())?;
+    out.flush()
+}
+
+pub fn announce(session: &Option<String>, styled: bool) {
+    if let Some(id) = session {
+        if styled {
+            eprintln!(
+                "{DIM}Session: {RESET}{FG_CYAN}{id}{RESET}  {DIM}(continue with: hermes chat --resume {id}){RESET}"
+            );
+        } else {
+            eprintln!("Session: {id}  (continue with: hermes chat --resume {id})");
+        }
+    }
+}
+
+fn list_sessions(home: Option<&Path>, styled: bool) {
+    let Some(home) = home else { return };
+    let listed = hermes_runtime::storage::SessionStore::open_read_only(home)
+        .and_then(|store| store.recent(10, None));
+    match listed {
+        Ok(sessions) if sessions.is_empty() => println!("No saved sessions yet."),
+        Ok(sessions) => {
+            for session in sessions {
+                let text = session.title.or(session.preview).unwrap_or_default();
+                let preview = text.replace('\n', " ");
+                if styled {
+                    println!(
+                        "{FG_CYAN}{}{RESET}  {DIM}{:>4} msgs{RESET}  {}",
+                        session.id, session.message_count, preview
+                    );
+                } else {
+                    println!(
+                        "{}  {:>4} msgs  {}",
+                        session.id, session.message_count, preview
+                    );
+                }
+            }
+        }
+        Err(_) => println!("No saved sessions yet."),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slash_helper_completes_commands_and_ui_modes() {
+        let helper = SlashHelper::new(true);
+        let history = rustyline::history::MemHistory::new();
+        let ctx = Context::new(&history);
+
+        let (start, pairs) = helper.complete("/mo", 3, &ctx).unwrap();
+        assert_eq!(start, 0);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].replacement, "/model");
+
+        let (start, pairs) = helper.complete("/ui t", 5, &ctx).unwrap();
+        assert_eq!(start, 4);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].replacement, "tui");
+
+        assert_eq!(helper.hint("/co", 3, &ctx).as_deref(), Some("mpress"));
+        assert_eq!(helper.hint("/ui i", 5, &ctx).as_deref(), Some("nline"));
+    }
+
+    #[test]
+    fn styled_prompt_preserves_contiguous_prompt_marker_bytes() {
+        let helper = SlashHelper::new(true);
+        let styled = helper.highlight_prompt(PROMPT, true);
+        assert!(styled
+            .as_bytes()
+            .windows(PROMPT.len())
+            .any(|w| w == PROMPT.as_bytes()));
+    }
+
+    #[test]
+    fn banner_includes_profile_provider_model_and_yolo() {
+        let plain = format_banner(
+            "work",
+            "openai",
+            "gpt-5.4",
+            Some("sess-123456"),
+            true,
+            false,
+        );
+        assert!(plain.contains("work"));
+        assert!(plain.contains("openai:gpt-5.4"));
+        assert!(plain.contains("YOLO"));
+        assert!(!plain.contains('\x1b'));
+
+        let colored = format_banner("default", "anthropic", "claude-sonnet-4", None, false, true);
+        assert!(colored.contains("Hermes"));
+        assert!(colored.contains("claude-sonnet-4"));
+        assert!(colored.contains('\x1b'));
+    }
+}
