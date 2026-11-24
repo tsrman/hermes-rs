@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+    Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
+    MouseEvent, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -47,7 +48,8 @@ use crate::ui::{
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// RAII guard that guarantees terminal raw mode, bracketed paste, mouse capture, and alternate screen are restored on drop.
+/// RAII guard that guarantees terminal raw mode, Kitty keyboard disambiguation (for Shift+Enter /
+/// Ctrl+Enter), bracketed paste, mouse capture, and alternate screen are restored on drop.
 struct TerminalGuard;
 
 impl TerminalGuard {
@@ -60,6 +62,13 @@ impl TerminalGuard {
             EnableMouseCapture,
             EnableBracketedPaste
         )?;
+        // Enable Kitty keyboard protocol (CSI u) so Shift+Enter and Ctrl+Enter arrive distinctly
+        // from plain Enter on terminals that support it (Kitty, Ghostty, WezTerm, Alacritty,
+        // iTerm2, Konsole, Foot, Windows Terminal, VS Code). Unsupported terminals ignore it.
+        let _ = execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
         Ok(Self)
     }
 }
@@ -70,6 +79,7 @@ impl Drop for TerminalGuard {
         let mut stdout = io::stdout();
         let _ = execute!(
             stdout,
+            PopKeyboardEnhancementFlags,
             DisableBracketedPaste,
             DisableMouseCapture,
             LeaveAlternateScreen
@@ -808,7 +818,11 @@ async fn handle_key_event(
 
     // Composer editing & submission
     match (key.code, key.modifiers) {
-        (KeyCode::Enter, m) if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::SHIFT) => {
+        (KeyCode::Enter, m)
+            if m.contains(KeyModifiers::ALT)
+                || m.contains(KeyModifiers::SHIFT)
+                || m.contains(KeyModifiers::CONTROL) =>
+        {
             app.insert_char('\n');
         }
         (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => {
@@ -1838,7 +1852,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         Some(_) => " Modal active · follow on-screen keys · Ctrl-C cancel turn",
         None if app.is_busy() => " Ctrl-C stop turn · PgUp/PgDn scroll conversation",
         None => {
-            " Enter send · ↑/↓ history · Alt+Enter newline · Tab complete / · PgUp/PgDn scroll · /ui inline · Ctrl-D quit"
+            " Enter send · Shift+Enter newline · ↑/↓ history · Tab complete / · Wheel/PgUp scroll · Ctrl-D quit"
         }
     };
     let footer = Paragraph::new(Span::styled(text, Style::default().fg(Color::DarkGray)));

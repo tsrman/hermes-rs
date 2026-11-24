@@ -420,6 +420,53 @@ class ConsoleUiTest(unittest.TestCase):
         self.assertTrue((hsr_dir / ".hsr_history").is_file())
         self.assertEqual(recorded[0]["model"], "hsr-default-model")
 
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux PTY")
+    def test_tui_shift_enter_and_bracketed_paste_multiline_input(self):
+        server, base_url, recorded = _start_mock_server(reply_text="MultiOk")
+        self.addCleanup(_close_server, server)
+        self._write_config(base_url)
+
+        proc, master = self._spawn_pty(["--ui", "tui"], self._base_env())
+        buf = bytearray()
+        self._read_until(master, buf, b"\x1b[?1049h")
+        pos = self._read_until(master, buf, "[░░░░░░░░░░]".encode())
+        # Verify Kitty keyboard disambiguation & bracketed paste were enabled on entry.
+        self.assertIn(b"\x1b[>1u", bytes(buf))
+        self.assertIn(b"\x1b[?2004h", bytes(buf))
+
+        # Type 3 lines using Kitty CSI-u Shift+Enter (\x1b[13;2u) and Ctrl+J (\x0a)
+        os.write(master, b"LineOne\x1b[13;2uLineTwo\x0aLineThree")
+        # Wait until the composer expands to 3 rows (row 26 shows LineOne, row 27 shows LineTwo,
+        # and cursor reaches col 10 on row 28 after typing the 9 chars of LineThree).
+        pos = self._read_until(master, buf, b"\x1b[28;11H", start=pos)
+        self.assertIn(b"LineOne", bytes(buf))
+        self.assertIn(b"Two", bytes(buf))
+        # Must NOT have submitted before plain Enter!
+        self.assertEqual(len(recorded), 0)
+
+        # Submit multiline prompt with plain Enter
+        os.write(master, b"\r")
+        pos = self._read_until(master, buf, b"MultiOk", start=pos)
+        pos = self._read_until(master, buf, b"s]", start=pos)
+
+        # Bracketed paste with CRLF inserts multiline text without submitting prematurely
+        os.write(master, b"\x1b[200~PasteA\r\nPasteB\x1b[201~")
+        pos = self._read_until(master, buf, b"PasteB", start=pos)
+        self.assertEqual(len(recorded), 1)
+        os.write(master, b"\r")
+        pos = self._read_until(master, buf, b"MultiOk", start=pos)
+        pos = self._read_until(master, buf, b"s]", start=pos)
+
+        os.write(master, b"\x04")
+        self.assertEqual(self._finish_pty(proc, master, buf), 0)
+        # Verify terminal protocols are cleanly disabled on exit.
+        self.assertIn(b"\x1b[<1u", bytes(buf))
+        self.assertIn(b"\x1b[?2004l", bytes(buf))
+
+        self.assertEqual(len(recorded), 2)
+        self.assertEqual(recorded[0]["messages"][-1]["content"], "LineOne\nLineTwo\nLineThree")
+        self.assertEqual(recorded[1]["messages"][-1]["content"], "PasteA\nPasteB")
+
 
 if __name__ == "__main__":
     unittest.main()
