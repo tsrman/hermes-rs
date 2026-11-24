@@ -928,6 +928,9 @@ where
         system_prompt_override: None,
         ephemeral_system_prompt: request.prompt.ephemeral_system_prompt.as_deref(),
         child: None,
+        delegate_depth: 0,
+        cancel_flag: None,
+        steer_queue: None,
         prefill: (!request.prefill.is_empty()).then_some(request.prefill.as_slice()),
         state_scope: request.state_scope.as_deref(),
         mcp: Some(&mcp),
@@ -1093,6 +1096,12 @@ where
                 emit(Event::Stdout(json_done(0, "completed")));
             }
             Ok(0)
+        }
+        TurnOutcome::Interrupted(_) => {
+            if json_mode {
+                emit(Event::Stdout(json_done(130, "interrupted")));
+            }
+            Ok(130)
         }
         TurnOutcome::IterationLimit => {
             if json_mode {
@@ -1316,6 +1325,9 @@ pub async fn compress_session(
         system_prompt_override: None,
         ephemeral_system_prompt: request.prompt.ephemeral_system_prompt.as_deref(),
         child: None,
+        delegate_depth: 0,
+        cancel_flag: None,
+        steer_queue: None,
         prefill: None,
         state_scope: request.state_scope.as_deref(),
         mcp: None,

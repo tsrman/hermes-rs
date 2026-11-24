@@ -8,7 +8,9 @@
 //! returns when all have finished; background dispatch and the `list`/`steer`/`stop`/`continue`
 //! actions are not ported.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures_util::future::join_all;
@@ -24,7 +26,7 @@ use crate::turn::{
 
 pub(crate) const DELEGATE_TASK: &str = "delegate_task";
 
-/// Tools a child never has.
+/// Tools a leaf child never has.
 pub(crate) const BLOCKED_FOR_CHILDREN: [&str; 5] = [
     "delegate_task",
     "clarify",
@@ -33,8 +35,16 @@ pub(crate) const BLOCKED_FOR_CHILDREN: [&str; 5] = [
     "cronjob_manage",
 ];
 
+/// Tools blocked for every child regardless of `max_spawn_depth`.
+const ALWAYS_BLOCKED_FOR_CHILDREN: [&str; 4] =
+    ["clarify", "memory", "send_message", "cronjob_manage"];
+
 const MIN_BATCH_GOAL_LEN: usize = 10;
 const COMPLETION_INSTRUCTIONS: &str = "\nComplete this task using the tools available to you. When finished, provide a clear, concise summary of:\n- What you did\n- What you found or accomplished\n- Any files you created or modified\n- Any issues encountered\n\nImportant workspace rule: Never assume a repository lives at /workspace/... or any other container-style path unless the task/context explicitly gives that path. If no exact local path is provided, discover it first before issuing git/workdir-specific commands.\n\nKeep your final summary tight: lead with outcomes, prefer bullet points over paragraphs, and don't replay your whole process. Your response is returned to the parent agent as a summary, and overlong summaries crowd out the parent's context window.";
+
+fn default_max_spawn_depth() -> u32 {
+    1
+}
 
 /// `delegation.*` from the profile's configuration.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -49,6 +59,9 @@ pub struct DelegationSettings {
     /// Per-child timeout in seconds (`delegation.child_timeout_seconds`, floor 30s; `None` = no cap).
     #[serde(default)]
     pub child_timeout_seconds: Option<f64>,
+    /// Maximum delegation nesting depth (`delegation.max_spawn_depth`, default 1, floor 1).
+    #[serde(default = "default_max_spawn_depth")]
+    pub max_spawn_depth: u32,
 }
 
 impl Default for DelegationSettings {
@@ -59,6 +72,7 @@ impl Default for DelegationSettings {
             max_iterations: 250,
             subagent_auto_approve: false,
             child_timeout_seconds: None,
+            max_spawn_depth: 1,
         }
     }
 }
@@ -98,6 +112,14 @@ impl DelegationSettings {
                 .or_else(|| secrets.get("DELEGATION_CHILD_TIMEOUT_SECONDS").cloned())
                 .and_then(|raw| parse_child_timeout_seconds(&serde_yaml::Value::String(raw))),
         };
+        let max_spawn_depth = number("max_spawn_depth")
+            .or_else(|| {
+                std::env::var("DELEGATION_MAX_SPAWN_DEPTH")
+                    .ok()
+                    .or_else(|| secrets.get("DELEGATION_MAX_SPAWN_DEPTH").cloned())
+                    .and_then(|raw| raw.trim().parse::<i64>().ok())
+            })
+            .map_or(defaults.max_spawn_depth, |n| n.max(1) as u32);
         Self {
             max_concurrent_children: number("max_concurrent_children")
                 .map_or(defaults.max_concurrent_children, |n| n.max(1) as usize),
@@ -117,11 +139,33 @@ impl DelegationSettings {
                 },
             ),
             child_timeout_seconds,
+            max_spawn_depth,
         }
     }
 }
 
-/// The settings with what one run has spent.
+struct LiveSubagent {
+    subagent_id: String,
+    goal: String,
+    started_at: Instant,
+    stop_flag: Arc<AtomicBool>,
+    steer_queue: Arc<Mutex<Vec<String>>>,
+}
+
+struct FinishedSubagent {
+    task: Task,
+    history: Option<TurnHistory>,
+    claimed: bool,
+}
+
+#[derive(Default)]
+struct SubagentRegistry {
+    next_seq: u64,
+    live: BTreeMap<String, LiveSubagent>,
+    finished: BTreeMap<String, FinishedSubagent>,
+}
+
+/// The settings with what one run has spent, plus its in-process subagent control registry.
 pub struct Delegation {
     pub settings: DelegationSettings,
     /// Whether this is a finite one-shot run, whose child budget is limited.
@@ -130,6 +174,7 @@ pub struct Delegation {
     /// route never borrows the parent's fallback chain.
     route: Option<ModelRoute>,
     spawned: AtomicU32,
+    registry: Mutex<SubagentRegistry>,
 }
 
 impl Delegation {
@@ -139,12 +184,147 @@ impl Delegation {
             oneshot,
             route: None,
             spawned: AtomicU32::new(0),
+            registry: Mutex::new(SubagentRegistry::default()),
         }
     }
 
     pub fn with_route(mut self, route: Option<ModelRoute>) -> Self {
         self.route = route;
         self
+    }
+
+    fn allocate_id(&self) -> String {
+        let mut reg = self.registry.lock().unwrap_or_else(|p| p.into_inner());
+        reg.next_seq += 1;
+        format!("sa_{:08x}", reg.next_seq)
+    }
+
+    fn register_live(
+        &self,
+        subagent_id: String,
+        goal: String,
+    ) -> (Arc<AtomicBool>, Arc<Mutex<Vec<String>>>) {
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let steer_queue = Arc::new(Mutex::new(Vec::new()));
+        let mut reg = self.registry.lock().unwrap_or_else(|p| p.into_inner());
+        reg.live.insert(
+            subagent_id.clone(),
+            LiveSubagent {
+                subagent_id,
+                goal,
+                started_at: Instant::now(),
+                stop_flag: Arc::clone(&stop_flag),
+                steer_queue: Arc::clone(&steer_queue),
+            },
+        );
+        (stop_flag, steer_queue)
+    }
+
+    fn finish_live(
+        &self,
+        subagent_id: &str,
+        task: Task,
+        history: Option<TurnHistory>,
+    ) -> Vec<String> {
+        let mut reg = self.registry.lock().unwrap_or_else(|p| p.into_inner());
+        let missed = reg
+            .live
+            .remove(subagent_id)
+            .map(|live| {
+                let mut q = live.steer_queue.lock().unwrap_or_else(|p| p.into_inner());
+                std::mem::take(&mut *q)
+            })
+            .unwrap_or_default();
+        if let Some(hist) = history {
+            reg.finished.insert(
+                subagent_id.to_owned(),
+                FinishedSubagent {
+                    task,
+                    history: Some(hist),
+                    claimed: false,
+                },
+            );
+        } else {
+            reg.finished.remove(subagent_id);
+        }
+        missed
+    }
+
+    /// Snapshot of currently running subagents (for `action="list"` and external callers).
+    pub fn list_live(&self) -> Vec<Value> {
+        let reg = self.registry.lock().unwrap_or_else(|p| p.into_inner());
+        reg.live
+            .values()
+            .map(|entry| {
+                json!({
+                    "subagent_id": entry.subagent_id,
+                    "goal": entry.goal,
+                    "status": if entry.stop_flag.load(Ordering::SeqCst) { "stopping" } else { "running" },
+                    "elapsed_seconds": round2(entry.started_at.elapsed()),
+                })
+            })
+            .collect()
+    }
+
+    /// Queue steering guidance for a currently running subagent (`action="steer"`).
+    pub fn steer_live(&self, subagent_id: &str, message: &str) -> bool {
+        let reg = self.registry.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(entry) = reg.live.get(subagent_id) else {
+            return false;
+        };
+        if entry.stop_flag.load(Ordering::SeqCst) {
+            return false;
+        }
+        entry
+            .steer_queue
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(message.to_owned());
+        true
+    }
+
+    /// Request cooperative cancellation of a running subagent (`action="stop"`).
+    pub fn stop_live(&self, subagent_id: &str) -> bool {
+        let reg = self.registry.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(entry) = reg.live.get(subagent_id) else {
+            return false;
+        };
+        entry.stop_flag.store(true, Ordering::SeqCst);
+        true
+    }
+
+    fn claim_finished(&self, subagent_id: &str) -> Result<(Task, TurnHistory), String> {
+        let mut reg = self.registry.lock().unwrap_or_else(|p| p.into_inner());
+        if reg.live.contains_key(subagent_id) {
+            return Err(format!(
+                "Subagent '{subagent_id}' is still running: use action='steer' to send it this message."
+            ));
+        }
+        let Some(record) = reg.finished.get_mut(subagent_id) else {
+            return Err(format!(
+                "No finished subagent '{subagent_id}' in this conversation's spawn tree can be continued (unknown id, not yours, or no longer retained). Spawn a new task instead."
+            ));
+        };
+        if record.claimed {
+            return Err(format!(
+                "Subagent '{subagent_id}' is already being continued. Wait for that run to finish before continuing it again."
+            ));
+        }
+        let Some(history) = record.history.take() else {
+            return Err(format!(
+                "Subagent '{subagent_id}' has no saved transcript to continue from. Spawn a new task instead."
+            ));
+        };
+        record.claimed = true;
+        Ok((record.task.clone(), history))
+    }
+
+    fn release_finished(&self, subagent_id: &str, history: TurnHistory) {
+        let mut reg = self.registry.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(record) = reg.finished.get_mut(subagent_id) {
+            record.history = Some(history);
+            record.claimed = false;
+        }
     }
 
     /// Charge `requested` children against the one-shot budget; the error says to do the work inline.
@@ -189,7 +369,7 @@ pub(crate) fn schema(max_children: usize) -> Value {
     json!({"type": "function", "function": schema})
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Task {
     goal: String,
     context: Option<String>,
@@ -198,6 +378,19 @@ struct Task {
 
 fn normalize(args: &Value, max_children: usize) -> Result<Vec<Task>, String> {
     let mut tasks = args.get("tasks").cloned().unwrap_or(Value::Null);
+    if tasks.is_null() {
+        if let Some(goal) = args.get("goal").and_then(Value::as_str) {
+            let mut single = Map::new();
+            single.insert("goal".into(), Value::String(goal.to_owned()));
+            if let Some(ctx) = args.get("context") {
+                single.insert("context".into(), ctx.clone());
+            }
+            if let Some(schema) = args.get("output_schema") {
+                single.insert("output_schema".into(), schema.clone());
+            }
+            tasks = Value::Array(vec![Value::Object(single)]);
+        }
+    }
     if let Value::String(text) = &tasks {
         tasks = match serde_json::from_str::<Value>(text) {
             Ok(Value::Array(items)) => Value::Array(items),
@@ -422,6 +615,7 @@ fn validate(text: &str, schema: &Value) -> Vec<String> {
 }
 
 struct ChildRun {
+    subagent_id: String,
     status: &'static str,
     exit_reason: &'static str,
     summary: String,
@@ -430,6 +624,8 @@ struct ChildRun {
     input_tokens: u64,
     output_tokens: u64,
     trace: Vec<Value>,
+    missed_steer: Vec<String>,
+    history: Option<TurnHistory>,
 }
 
 /// What a child does when something needs approval and nobody can be asked.
@@ -455,13 +651,33 @@ struct Family<'a> {
     session: String,
 }
 
-async fn run_child(index: usize, task: &Task, family: &Family<'_>) -> ChildRun {
-    let inner = run_child_inner(index, task, family);
-    match family.delegation.settings.child_timeout_seconds {
+async fn run_child(
+    index: usize,
+    subagent_id: String,
+    task: &Task,
+    initial_history: Option<TurnHistory>,
+    followup_query: Option<String>,
+    family: &Family<'_>,
+) -> ChildRun {
+    let (stop_flag, steer_queue) = family
+        .delegation
+        .register_live(subagent_id.clone(), task.goal.clone());
+    let inner = run_child_inner(
+        index,
+        subagent_id.clone(),
+        task,
+        initial_history,
+        followup_query,
+        Arc::clone(&stop_flag),
+        Arc::clone(&steer_queue),
+        family,
+    );
+    let mut run = match family.delegation.settings.child_timeout_seconds {
         Some(secs) if secs > 0.0 => {
             match tokio::time::timeout(Duration::from_secs_f64(secs), inner).await {
                 Ok(run) => run,
                 Err(_) => ChildRun {
+                    subagent_id: subagent_id.clone(),
                     status: "timeout",
                     exit_reason: "timeout",
                     summary: String::new(),
@@ -472,14 +688,31 @@ async fn run_child(index: usize, task: &Task, family: &Family<'_>) -> ChildRun {
                     input_tokens: 0,
                     output_tokens: 0,
                     trace: Vec::new(),
+                    missed_steer: Vec::new(),
+                    history: None,
                 },
             }
         }
         _ => inner.await,
-    }
+    };
+    let missed = family
+        .delegation
+        .finish_live(&subagent_id, task.clone(), run.history.take());
+    run.missed_steer = missed;
+    run
 }
 
-async fn run_child_inner(index: usize, task: &Task, family: &Family<'_>) -> ChildRun {
+#[allow(clippy::too_many_arguments)]
+async fn run_child_inner(
+    index: usize,
+    subagent_id: String,
+    task: &Task,
+    initial_history: Option<TurnHistory>,
+    followup_query: Option<String>,
+    stop_flag: Arc<AtomicBool>,
+    steer_queue: Arc<Mutex<Vec<String>>>,
+    family: &Family<'_>,
+) -> ChildRun {
     let Family {
         options: parent,
         delegation,
@@ -489,7 +722,12 @@ async fn run_child_inner(index: usize, task: &Task, family: &Family<'_>) -> Chil
         session: parent_session,
     } = family;
     let session = format!("{parent_session}#child{index}");
-    let policy = parent.tools.without_tools(&BLOCKED_FOR_CHILDREN);
+    let next_depth = parent.delegate_depth.saturating_add(1);
+    let policy = if next_depth >= delegation.settings.max_spawn_depth {
+        parent.tools.without_tools(&BLOCKED_FOR_CHILDREN)
+    } else {
+        parent.tools.without_tools(&ALWAYS_BLOCKED_FOR_CHILDREN)
+    };
     let prompt = child_system_prompt(workspace);
     let options = TurnOptions {
         single_query: false,
@@ -501,14 +739,17 @@ async fn run_child_inner(index: usize, task: &Task, family: &Family<'_>) -> Chil
         state_scope: None,
         prefill: None,
         child: Some(index),
+        delegate_depth: next_depth,
+        cancel_flag: Some(stop_flag.as_ref()),
+        steer_queue: Some(steer_queue.as_ref()),
         // Memory and clarify are off for children; the rest follows the parent.
         memory: None,
         compaction_guard: None,
         ..**parent
     };
     let auto = delegation.settings.subagent_auto_approve;
-    let mut query = child_task_message(task);
-    let mut history = TurnHistory::default();
+    let mut query = followup_query.unwrap_or_else(|| child_task_message(task));
+    let mut history = initial_history.unwrap_or_default();
     let mut api_calls = 0usize;
     let (mut input_tokens, mut output_tokens) = (0u64, 0u64);
     let mut trace: Vec<Value> = Vec::new();
@@ -564,6 +805,7 @@ async fn run_child_inner(index: usize, task: &Task, family: &Family<'_>) -> Chil
                 }
                 let usable = !summary.trim().is_empty() && summary.trim() != "(empty)";
                 return ChildRun {
+                    subagent_id,
                     status: if usable { "completed" } else { "failed" },
                     exit_reason: "completed",
                     error: (!usable).then(|| "Subagent did not produce a response.".to_owned()),
@@ -572,10 +814,33 @@ async fn run_child_inner(index: usize, task: &Task, family: &Family<'_>) -> Chil
                     input_tokens,
                     output_tokens,
                     trace,
+                    missed_steer: Vec::new(),
+                    history: Some(done.into_history()),
+                };
+            }
+            Ok(TurnOutcome::Interrupted(done)) => {
+                api_calls += done.assistant_messages();
+                let (i, o) = done.usage();
+                input_tokens += i;
+                output_tokens += o;
+                let summary = done.final_text();
+                return ChildRun {
+                    subagent_id,
+                    status: "interrupted",
+                    exit_reason: "interrupted",
+                    summary,
+                    error: Some("Subagent was stopped by parent request.".to_owned()),
+                    api_calls,
+                    input_tokens,
+                    output_tokens,
+                    trace,
+                    missed_steer: Vec::new(),
+                    history: Some(done.into_history()),
                 };
             }
             Ok(TurnOutcome::IterationLimit) => {
                 return ChildRun {
+                    subagent_id,
                     status: "completed",
                     exit_reason: "max_iterations",
                     summary: limit_text,
@@ -584,6 +849,8 @@ async fn run_child_inner(index: usize, task: &Task, family: &Family<'_>) -> Chil
                     input_tokens,
                     output_tokens,
                     trace,
+                    missed_steer: Vec::new(),
+                    history: None,
                 };
             }
             Err(error) => {
@@ -597,6 +864,7 @@ async fn run_child_inner(index: usize, task: &Task, family: &Family<'_>) -> Chil
                     }
                 };
                 return ChildRun {
+                    subagent_id,
                     status: "failed",
                     exit_reason: "error",
                     summary: String::new(),
@@ -605,10 +873,126 @@ async fn run_child_inner(index: usize, task: &Task, family: &Family<'_>) -> Chil
                     input_tokens,
                     output_tokens,
                     trace,
+                    missed_steer: Vec::new(),
+                    history: None,
                 };
             }
         }
     }
+}
+
+fn format_result_entry(
+    index: usize,
+    task: &Task,
+    run: &ChildRun,
+    elapsed: Duration,
+    model: &str,
+) -> Value {
+    let mut entry = Map::new();
+    entry.insert("task_index".into(), json!(index));
+    entry.insert("subagent_id".into(), json!(run.subagent_id));
+    entry.insert("status".into(), json!(run.status));
+    entry.insert("summary".into(), json!(run.summary));
+    entry.insert("api_calls".into(), json!(run.api_calls));
+    entry.insert("duration_seconds".into(), json!(round2(elapsed)));
+    entry.insert("model".into(), json!(model));
+    entry.insert("exit_reason".into(), json!(run.exit_reason));
+    entry.insert(
+        "truncated".into(),
+        json!(run.exit_reason == "max_iterations"),
+    );
+    entry.insert(
+        "tokens".into(),
+        json!({"input": run.input_tokens, "output": run.output_tokens}),
+    );
+    entry.insert("tool_trace".into(), Value::Array(run.trace.clone()));
+    if let Some(message) = &run.error {
+        entry.insert("error".into(), json!(message));
+    }
+    if !run.missed_steer.is_empty() {
+        entry.insert("missed_steer".into(), json!(run.missed_steer));
+    }
+    if let Some(schema) = &task.output_schema {
+        let errors = if run.status == "completed" {
+            validate(&run.summary, schema)
+        } else {
+            vec!["no answer".to_owned()]
+        };
+        entry.insert("schema_valid".into(), json!(errors.is_empty()));
+        if !errors.is_empty() {
+            entry.insert("schema_errors".into(), json!(errors));
+            entry.insert("schema_note".into(), json!("Final answer does not satisfy the declared output_schema (after 1 retry); `summary` is the child's raw, UNVALIDATED final text — extract what you need from it yourself (see schema_errors) rather than re-running the task."));
+        }
+    }
+    Value::Object(entry)
+}
+
+fn handle_control_action(
+    action: &str,
+    subagent_id: Option<&str>,
+    message: Option<&str>,
+    delegation: &Delegation,
+) -> Value {
+    let error = |text: String| json!({"error": text});
+    if action == "list" {
+        let entries = delegation.list_live();
+        let mut payload = Map::new();
+        payload.insert("action".into(), json!("list"));
+        payload.insert("count".into(), json!(entries.len()));
+        payload.insert("subagents".into(), Value::Array(entries.clone()));
+        if entries.is_empty() {
+            payload.insert(
+                "note".into(),
+                json!(
+                    "No live subagents right now. Children that already finished have delivered (or will deliver) their results as normal completion messages — there is nothing to steer or stop."
+                ),
+            );
+        }
+        return Value::Object(payload);
+    }
+
+    let sid = subagent_id.map(str::trim).unwrap_or("");
+    if sid.is_empty() {
+        return error(format!(
+            "action='{action}' requires subagent_id (from the spawn dispatch response or action='list')."
+        ));
+    }
+    if action == "steer" {
+        let text = message.map(str::trim).unwrap_or("");
+        if text.is_empty() {
+            return error(
+                "action='steer' requires a non-empty 'message' describing the course correction."
+                    .into(),
+            );
+        }
+        if delegation.steer_live(sid, text) {
+            return json!({
+                "action": "steer",
+                "subagent_id": sid,
+                "status": "queued",
+                "note": "Steering text queued. The subagent sees it appended to its next tool result — the current tool call is never cut. If the child finishes before a delivery boundary remains, the text is reported back as missed_steer in its completion entry."
+            });
+        }
+        return error(format!(
+            "No live subagent '{sid}' in this conversation's spawn tree. It may have already finished (its result arrives as a normal completion message). Use action='list' to see live children."
+        ));
+    }
+    if action == "stop" {
+        if delegation.stop_live(sid) {
+            return json!({
+                "action": "stop",
+                "subagent_id": sid,
+                "status": "interrupt_requested",
+                "note": "The subagent stops at its next iteration boundary (in-flight tool calls are asked to cancel). Its partial result still re-enters the conversation as a completion message — do not wait or poll."
+            });
+        }
+        return error(format!(
+            "No live subagent '{sid}' in this conversation's spawn tree. It may have already finished (its result arrives as a normal completion message). Use action='list' to see live children."
+        ));
+    }
+    error(format!(
+        "Unknown action '{action}'. Use spawn (default), list, steer, stop, or continue."
+    ))
 }
 
 pub(crate) fn call<'a>(
@@ -624,21 +1008,90 @@ pub(crate) fn call<'a>(
             Ok(Value::Object(map)) => Value::Object(map),
             _ => return error("delegate_task expects a JSON object."),
         };
-        match args.get("action").and_then(Value::as_str).map(|a| a.trim().to_lowercase()).as_deref() {
-            None | Some("") | Some("spawn") => {}
-            Some(action @ ("list" | "steer" | "stop" | "continue")) => {
-                return error(&format!(
-                    "delegate_task action '{action}' is not supported in this runtime: subagents run to completion inside the spawning call."
-                ))
-            }
-            Some(other) => {
-                return error(&format!(
-                    "Unknown action '{other}'. Use spawn (default), list, steer, stop, or continue."
-                ))
-            }
+        let action = args
+            .get("action")
+            .and_then(Value::as_str)
+            .map(|a| a.trim().to_lowercase())
+            .unwrap_or_default();
+        let subagent_id_arg = args.get("subagent_id").and_then(Value::as_str);
+        let message_arg = args.get("message").and_then(Value::as_str);
+
+        if matches!(action.as_str(), "list" | "steer" | "stop") {
+            return handle_control_action(&action, subagent_id_arg, message_arg, delegation);
         }
-        if cx.options.child.is_some() {
-            return error("Delegation depth limit reached (depth=1, max_spawn_depth=1). Raise delegation.max_spawn_depth in config.yaml if deeper nesting is required (no hard ceiling, but each level multiplies API cost).");
+        if action == "continue" {
+            let sid = subagent_id_arg.map(str::trim).unwrap_or("");
+            let msg = message_arg.map(str::trim).unwrap_or("");
+            if sid.is_empty() || msg.is_empty() {
+                return error(
+                    "action='continue' requires subagent_id (a finished child of yours) and a non-empty 'message' (its next instruction).",
+                );
+            }
+            if delegation.oneshot {
+                return error(
+                    "action='continue' is unavailable in one-shot sessions. Spawn a new task instead.",
+                );
+            }
+            let depth = cx.options.delegate_depth;
+            let max_spawn = delegation.settings.max_spawn_depth;
+            if depth >= max_spawn {
+                return error(&format!(
+                    "Delegation depth limit reached (depth={depth}, max_spawn_depth={max_spawn})."
+                ));
+            }
+            let (task, history) = match delegation.claim_finished(sid) {
+                Ok(pair) => pair,
+                Err(message) => return error(&message),
+            };
+            if let Err(message) = delegation.charge(1) {
+                delegation.release_finished(sid, history);
+                return error(&message);
+            }
+            let workspace = cx
+                .options
+                .root
+                .canonicalize()
+                .unwrap_or_else(|_| cx.options.root.to_path_buf())
+                .display()
+                .to_string();
+            let family = Family {
+                options: cx.options,
+                delegation,
+                route: delegation.route.as_ref().unwrap_or(cx.route),
+                fallbacks: if delegation.route.is_some() {
+                    &[]
+                } else {
+                    cx.fallbacks
+                },
+                workspace,
+                session: cx.options.state_key().to_owned(),
+            };
+            let started = Instant::now();
+            let run = run_child(
+                0,
+                sid.to_owned(),
+                &task,
+                Some(history),
+                Some(msg.to_owned()),
+                &family,
+            )
+            .await;
+            let elapsed = started.elapsed();
+            let entry = format_result_entry(0, &task, &run, elapsed, &family.route.model);
+            return json!({"results": [entry], "total_duration_seconds": round2(elapsed)});
+        }
+        if !action.is_empty() && action != "spawn" {
+            return error(&format!(
+                "Unknown action '{action}'. Use spawn (default), list, steer, stop, or continue."
+            ));
+        }
+
+        let depth = cx.options.delegate_depth;
+        let max_spawn = delegation.settings.max_spawn_depth;
+        if depth >= max_spawn {
+            return error(&format!(
+                "Delegation depth limit reached (depth={depth}, max_spawn_depth={max_spawn}). Raise delegation.max_spawn_depth in config.yaml if deeper nesting is required (no hard ceiling, but each level multiplies API cost)."
+            ));
         }
         let tasks = match normalize(&args, delegation.settings.max_concurrent_children) {
             Ok(tasks) => tasks,
@@ -674,12 +1127,14 @@ pub(crate) fn call<'a>(
             workspace,
             session: cx.options.state_key().to_owned(),
         };
+        let ids: Vec<String> = (0..tasks.len()).map(|_| delegation.allocate_id()).collect();
         let started = Instant::now();
         let runs = join_all(tasks.iter().enumerate().map(|(index, task)| {
             let family = &family;
+            let sid = ids[index].clone();
             async move {
                 let began = Instant::now();
-                let run = run_child(index, task, family).await;
+                let run = run_child(index, sid, task, None, None, family).await;
                 let session = format!("{}#child{index}", family.session);
                 crate::terminal::forget_session(&session);
                 crate::execute_code::end_session(&session).await;
@@ -690,39 +1145,13 @@ pub(crate) fn call<'a>(
         let mut results = Vec::new();
         for (index, (run, elapsed)) in runs.into_iter().enumerate() {
             let task = &tasks[index];
-            let mut entry = Map::new();
-            entry.insert("task_index".into(), json!(index));
-            entry.insert("status".into(), json!(run.status));
-            entry.insert("summary".into(), json!(run.summary));
-            entry.insert("api_calls".into(), json!(run.api_calls));
-            entry.insert("duration_seconds".into(), json!(round2(elapsed)));
-            entry.insert("model".into(), json!(family.route.model));
-            entry.insert("exit_reason".into(), json!(run.exit_reason));
-            entry.insert(
-                "truncated".into(),
-                json!(run.exit_reason == "max_iterations"),
-            );
-            entry.insert(
-                "tokens".into(),
-                json!({"input": run.input_tokens, "output": run.output_tokens}),
-            );
-            entry.insert("tool_trace".into(), Value::Array(run.trace));
-            if let Some(message) = &run.error {
-                entry.insert("error".into(), json!(message));
-            }
-            if let Some(schema) = &task.output_schema {
-                let errors = if run.status == "completed" {
-                    validate(&run.summary, schema)
-                } else {
-                    vec!["no answer".to_owned()]
-                };
-                entry.insert("schema_valid".into(), json!(errors.is_empty()));
-                if !errors.is_empty() {
-                    entry.insert("schema_errors".into(), json!(errors));
-                    entry.insert("schema_note".into(), json!("Final answer does not satisfy the declared output_schema (after 1 retry); `summary` is the child's raw, UNVALIDATED final text — extract what you need from it yourself (see schema_errors) rather than re-running the task."));
-                }
-            }
-            results.push(Value::Object(entry));
+            results.push(format_result_entry(
+                index,
+                task,
+                &run,
+                elapsed,
+                &family.route.model,
+            ));
         }
         json!({"results": results, "total_duration_seconds": round2(started.elapsed())})
     })

@@ -1,14 +1,61 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, Permissions};
 use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use rustix::fs::{mkdirat, openat, renameat, renameat_with, Mode, OFlags, RenameFlags};
+use rustix::fs::{linkat, mkdirat, openat, renameat, unlinkat, AtFlags, Mode, OFlags};
 use rustix::io::Errno;
 
 use super::{directory::open_directory, fingerprint, WRITE_LIMIT};
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// A temporary file created directly inside an open parent directory descriptor via `openat`
+/// (`O_CREAT | O_EXCL | O_NOFOLLOW`), working identically on Linux and macOS without `/proc/self/fd`.
+struct ScopedTempFile<'a> {
+    parent: &'a File,
+    name: OsString,
+    file: File,
+    unlinked: bool,
+}
+
+impl<'a> ScopedTempFile<'a> {
+    fn create(parent: &'a File) -> Result<Self, String> {
+        let pid = std::process::id();
+        for _ in 0..64 {
+            let seq = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let name = OsString::from(format!(".hermes-tmp-{pid}-{seq}"));
+            match openat(
+                parent,
+                &name,
+                OFlags::CREATE | OFlags::EXCL | OFlags::WRONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::from_raw_mode(0o600),
+            ) {
+                Ok(fd) => {
+                    return Ok(Self {
+                        parent,
+                        name,
+                        file: File::from(fd),
+                        unlinked: false,
+                    });
+                }
+                Err(Errno::EXIST) => continue,
+                Err(err) => return Err(error(err)),
+            }
+        }
+        Err("Failed to create a unique temporary file in the target directory".into())
+    }
+}
+
+impl Drop for ScopedTempFile<'_> {
+    fn drop(&mut self) {
+        if !self.unlinked {
+            let _ = unlinkat(self.parent, &self.name, AtFlags::empty());
+        }
+    }
+}
 
 pub(super) struct WritePlan {
     /// The syntax check of a whole-file write.
@@ -135,36 +182,39 @@ impl Target {
             return Err("The target changed while approval was pending".into());
         }
 
-        // The descriptor path pins tempfile creation to the inspected directory.
-        // renameat also uses that descriptor, so it never follows replacement symlinks.
-        let parent = format!("/proc/self/fd/{}", self.parent.as_raw_fd());
-        let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(error)?;
-        temporary.write_all(content.as_bytes()).map_err(error)?;
+        // Creating the temporary file through `openat(self.parent, ...)` pins it to the inspected
+        // directory descriptor on both Linux and macOS without relying on `/proc/self/fd`.
+        let mut temporary = ScopedTempFile::create(&self.parent)?;
+        temporary
+            .file
+            .write_all(content.as_bytes())
+            .map_err(error)?;
         if let Some(before) = before {
             temporary
-                .as_file()
+                .file
                 .set_permissions(Permissions::from_mode(before.mode & 0o777))
                 .map_err(error)?;
         }
-        temporary.as_file().sync_all().map_err(error)?;
-        let temporary_name = temporary
-            .path()
-            .file_name()
-            .ok_or("Missing temporary file name")?;
+        temporary.file.sync_all().map_err(error)?;
         if self.inspect()? != before {
             return Err("The target changed before writing".into());
         }
         if before.is_some() {
-            renameat(&self.parent, temporary_name, &self.parent, &self.filename).map_err(error)?;
+            renameat(&self.parent, &temporary.name, &self.parent, &self.filename).map_err(error)?;
+            temporary.unlinked = true;
         } else {
-            renameat_with(
+            // `linkat` fails with EEXIST if the destination (regular file or symlink) appeared
+            // concurrently, providing POSIX no-replace semantics across both Linux and macOS.
+            linkat(
                 &self.parent,
-                temporary_name,
+                &temporary.name,
                 &self.parent,
                 &self.filename,
-                RenameFlags::NOREPLACE,
+                AtFlags::empty(),
             )
             .map_err(error)?;
+            let _ = unlinkat(&self.parent, &temporary.name, AtFlags::empty());
+            temporary.unlinked = true;
         }
         self.parent.sync_all().map_err(error)?;
         if self.inspect()?.map(|stamp| stamp.content) != Some(fingerprint(content.as_bytes())) {

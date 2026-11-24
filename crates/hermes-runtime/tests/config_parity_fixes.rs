@@ -440,6 +440,9 @@ async fn ephemeral_prompt_applies_to_api_requests_and_failover_without_polluting
         system_prompt_override: None,
         ephemeral_system_prompt: Some("BE KAWAII DESU"),
         child: None,
+        delegate_depth: 0,
+        cancel_flag: None,
+        steer_queue: None,
         prefill: None,
         state_scope: None,
     };
@@ -636,6 +639,9 @@ async fn delegation_child_timeout_enforces_deadline_and_returns_timeout_result()
         system_prompt_override: None,
         ephemeral_system_prompt: None,
         child: None,
+        delegate_depth: 0,
+        cancel_flag: None,
+        steer_queue: None,
         prefill: None,
         state_scope: None,
     };

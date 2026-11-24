@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod directory;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod linux;
 mod search;
 
@@ -399,10 +399,12 @@ impl<'a> FileWorkspace<'a> {
         A: FnMut(ApprovalRequest) -> F,
         F: Future<Output = ApprovalDecision>,
     {
-        let Some(seconds) = timeout_secs.filter(|_| cfg!(target_os = "linux")) else {
+        let Some(seconds) =
+            timeout_secs.filter(|_| cfg!(any(target_os = "linux", target_os = "macos")))
+        else {
             return approval_error(ApprovalDecision::Unavailable);
         };
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let plan = if tool == PATCH {
                 match self.prepare_patch(arguments) {
@@ -472,14 +474,14 @@ impl<'a> FileWorkspace<'a> {
                 Err(error) => json!({"error": error}),
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let _ = (tool, arguments, seconds, approve);
             approval_error(ApprovalDecision::Unavailable)
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn prepare_write(&self, arguments: &str) -> Result<linux::WritePlan, String> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -520,7 +522,7 @@ impl<'a> FileWorkspace<'a> {
         })
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn write_target(&self, path: &str) -> Result<linux::Target, String> {
         let root = self
             .root
@@ -536,6 +538,8 @@ impl<'a> FileWorkspace<'a> {
             "/proc",
             "/sys",
             "/run",
+            "/System",
+            "/Library/LaunchDaemons",
         ]
         .iter()
         .any(|directory| target.starts_with(directory))
@@ -545,7 +549,7 @@ impl<'a> FileWorkspace<'a> {
         linux::Target::open(&root, &target)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     /// A patch: the plan for the write, or a finished answer (a miss, or an edit that is already
     /// in the file).
     fn prepare_patch(&mut self, arguments: &str) -> Result<Prepared, String> {
@@ -680,7 +684,7 @@ impl<'a> FileWorkspace<'a> {
 }
 
 /// What preparing a patch produced.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 enum Prepared {
     Plan(Box<linux::WritePlan>),
     Done(Value),
@@ -769,9 +773,9 @@ fn similar_files(path: &str, resolved: &Path) -> Value {
 }
 
 fn open_read(root: &Path, path: &Path) -> Result<std::fs::File, String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     return linux::Target::open(root, path)?.read_file();
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = root;
         std::fs::File::open(path).map_err(|error| error.to_string())
@@ -858,7 +862,7 @@ pub(crate) fn patch_schema() -> Value {
         serde_json::from_str::<Value>(include_str!("schemas/patch.json")).unwrap_or_default()})
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg(test)]
 mod tests {
     use super::Observation;

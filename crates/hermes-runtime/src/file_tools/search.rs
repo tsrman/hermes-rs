@@ -149,12 +149,13 @@ impl FileWorkspace<'_> {
     fn search_inner(&self, arguments: &str) -> Result<Value, String> {
         let args: Arguments =
             serde_json::from_str(arguments).map_err(|_| "Invalid search_files arguments")?;
-        let (root, start) = self.resolve(
-            args.path
-                .as_deref()
-                .filter(|path| !path.trim().is_empty())
-                .unwrap_or("."),
-        )?;
+        let raw_path = args
+            .path
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+            .unwrap_or(".");
+        let absolute_output = Path::new(raw_path).is_absolute();
+        let (root, start) = self.resolve(raw_path)?;
         let content = (args.target == Target::Content)
             .then(|| compile(&args.pattern))
             .transpose()?;
@@ -187,14 +188,19 @@ impl FileWorkspace<'_> {
             let relative = path
                 .strip_prefix(&root)
                 .map_err(|error| error.to_string())?;
-            let display = relative
+            let relative_display = relative
                 .iter()
                 .map(|part| part.to_string_lossy())
                 .collect::<Vec<_>>()
                 .join("/");
+            let display = if absolute_output {
+                path.to_string_lossy().into_owned()
+            } else {
+                relative_display.clone()
+            };
             if name_pattern
                 .as_ref()
-                .is_some_and(|glob| !glob.matches(&path, &display))
+                .is_some_and(|glob| !glob.matches(&path, &relative_display))
             {
                 continue;
             }

@@ -68,7 +68,7 @@ impl ToolEnv {
             no_code_approval: options.approval_timeout_secs.is_none(),
             delegation: options
                 .delegation
-                .filter(|_| options.child.is_none())
+                .filter(|d| options.delegate_depth < d.settings.max_spawn_depth)
                 .map(|delegation| delegation.settings.max_concurrent_children),
             has_profile: options.profile.is_some(),
             web: options.web.cloned(),

@@ -46,12 +46,12 @@ P0 относится к первому CLI-релизу, P3 — к заключ
 
 | Инструмент | Условие | Примечание |
 | --- | --- | --- |
-| `read_file`, `search_files` | всегда | Пути ограничены рабочей папкой, защищённые пути скрыты; `read_file` дополнительно допускает чтение файлов в `<профиль>/cache/{spillover,documents}` для вытесненных результатов и двоичных ресурсов MCP |
-| `write_file`, `patch` | Linux, есть кому одобрить | На macOS и Windows не предлагаются |
+| `read_file`, `search_files` | всегда | Пути ограничены рабочей папкой, защищённые пути скрыты; при явном абсолютном `path` внутри рабочей папки `search_files` возвращает абсолютные пути (как эталон); `read_file` дополнительно допускает чтение файлов в `<профиль>/cache/{spillover,documents}` для вытесненных результатов и двоичных ресурсов MCP |
+| `write_file`, `patch` | Linux и macOS, есть кому одобрить | Атомарная запись через `openat`/`renameat`/`linkat` без `/proc/self/fd`; на Windows не предлагаются |
 | `terminal` | Linux и macOS | Без человека предлагается, помеченная детектором команда отклоняется, если `single_query_mode`/`cron_mode` не `approve`. Файлы инициализации оболочки читаются (`terminal.shell_init_files`); экспортированные переменные и рабочий каталог сохраняются между командами сессии (`TERMINAL_LOCAL_PERSISTENT`, по умолчанию включено; снимки держатся только в памяти без записи на диск) |
 | `process_manage` | вместе с `terminal` | Фоновые процессы, только Unix |
 | `execute_code` | `terminal` и есть кому одобрить | Постоянное ядро Python, только Unix; каждый запуск одобряется отдельно |
-| `delegate_task` | всегда в основном ходе | Параллельные подагенты со своим маршрутом провайдера |
+| `delegate_task` | глубина `< delegation.max_spawn_depth` (по умолчанию 1) | Параллельные подагенты со своим маршрутом, уникальными `subagent_id`, одиночным `goal`, вложенностью `max_spawn_depth` и управлением `list`/`steer`/`stop`/`continue` (в не-oneshot сессиях) |
 | `memory`, `todo_list`, `session_search`, `clarify` | профиль и хранилище доступны; `clarify` нужен человек | |
 | `skills_list`, `skill_view`, `skill_manage` | навыки включены | `skill_manage` одобряется каждый раз |
 | `web_search`, `web_extract` | настроен бэкенд | Tavily, Perplexity, Exa, Parallel, Firecrawl (с ключом, своим сервером или без ключа), Keenable (с ключом или без ключа), xAI (поиск), DDGS (поиск по HTML без Python), `openai-native` (поиск через встроенный инструмент Responses), SearXNG (поиск), Brave (поиск). Бесплатный режим без ключей для Exa/Parallel/Firecrawl/Keenable с кольцевым failover (`web.keyless_fallback`, `web.provider_tier.<v>: free\|paid\|auto`) и политика сайтов `security.website_blocklist` (`check_website_access`, включая редиректы) сверены с эталоном. На пустом конфиге без ключей и без явного `web.keyless_fallback: true` инструменты остаются скрыты; управляемый шлюз Nous и OAuth Codex (вход) не поддержаны |
@@ -94,7 +94,7 @@ P0 относится к первому CLI-релизу, P3 — к заключ
 | Возможность | Linux | macOS | Windows |
 | --- | --- | --- | --- |
 | Чат, сессии, память, MCP, web, cron `tick` | Да | Да | Чат и сессии собираются; поддержка не проверена вручную |
-| Запись файлов (`write_file`, `patch`) | Да | Нет | Нет |
+| Запись файлов (`write_file`, `patch`) | Да | Да | Нет |
 | `terminal`, `process_manage`, `execute_code`, локальный владелец | Да | `terminal` и владелец да; `process_manage`, `execute_code` да | Нет |
 | Детектор опасных команд | Да | Да (включая `osascript`) | Не используется без терминала; пути Windows не разбираются |
 

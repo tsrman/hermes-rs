@@ -39,6 +39,7 @@ pub enum TurnError {
 
 pub enum TurnOutcome {
     Completed(CompletedTurn),
+    Interrupted(CompletedTurn),
     IterationLimit,
 }
 
@@ -523,6 +524,12 @@ pub struct TurnOptions<'a> {
     pub ephemeral_system_prompt: Option<&'a str>,
     /// The index of the subagent this turn is, when it is one.
     pub child: Option<usize>,
+    /// Nesting depth of delegation (`0` for the parent conversation, `1` for direct children, ...).
+    pub delegate_depth: u32,
+    /// Cooperative cancellation flag checked at iteration boundaries (used by `delegate_task` `stop`).
+    pub cancel_flag: Option<&'a std::sync::atomic::AtomicBool>,
+    /// Live steering messages appended to the next tool result (used by `delegate_task` `steer`).
+    pub steer_queue: Option<&'a Mutex<Vec<String>>>,
     /// Messages sent after the system prompt on every request (`prefill_messages_file`).
     pub prefill: Option<&'a [Value]>,
     /// Keeps the working directory, background processes and Python kernel of an interactive
@@ -537,7 +544,7 @@ impl TurnOptions<'_> {
     }
 
     pub(crate) fn can_write_files(&self) -> bool {
-        self.approval_timeout_secs.is_some() && cfg!(target_os = "linux")
+        self.approval_timeout_secs.is_some() && cfg!(any(target_os = "linux", target_os = "macos"))
     }
 
     pub(crate) fn can_run_terminal(&self) -> bool {
@@ -614,6 +621,23 @@ where
     let mut route = primary;
     let mut fallback_routes = fallbacks.iter();
     for _ in 0..options.max_turns {
+        if options
+            .cancel_flag
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
+        {
+            let appended = messages.split_off(first_new_message);
+            messages.remove(0);
+            return Ok(TurnOutcome::Interrupted(CompletedTurn {
+                model: route.model.clone(),
+                final_response: String::new(),
+                system_prompt,
+                replayed_history: original.unwrap_or(messages),
+                messages: appended,
+                compaction: history.compaction,
+                input_tokens: usage.0,
+                output_tokens: usage.1,
+            }));
+        }
         let result = loop {
             // Before the request goes out: once the steps of this turn have outgrown the threshold,
             // replace the early ones with a summary instead of waiting for the provider to refuse.
@@ -870,11 +894,21 @@ where
                     }),
                 );
             }
-            let content = if options.stall_guards {
+            let mut content = if options.stall_guards {
                 stall_tracker.apply(&name, &arguments, content, &call.id, !succeeded)
             } else {
                 content
             };
+            if let Some(queue) = options.steer_queue {
+                let pending: Vec<String> = {
+                    let mut guard = queue.lock().unwrap_or_else(|p| p.into_inner());
+                    std::mem::take(&mut *guard)
+                };
+                if !pending.is_empty() {
+                    content.push_str("\n\n[Supervisor guidance]: ");
+                    content.push_str(&pending.join("\n"));
+                }
+            }
             let tool_message = json!({"role": "tool", "tool_call_id": call.id, "content": content});
             sent.push(tool_message.clone());
             messages.push(tool_message);

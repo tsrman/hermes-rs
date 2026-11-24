@@ -33,6 +33,12 @@
 
 ## Журнал
 
+- 2026-11-24: Фаза 1 плана доделки `tools` до оригинала (`file_tools/linux.rs`, `file_tools.rs`, `file_tools/search.rs`, `turn.rs`, `tools.rs`, `delegation.rs`, `hermes-cli/src/chat.rs`):
+  - `write_file`, `patch` и `skill_manage` разблокированы на macOS: создание временного файла переведено с `/proc/self/fd` на `openat(O_CREAT|O_EXCL|O_NOFOLLOW)` (`ScopedTempFile` с `Drop`-очисткой) и `linkat`+`unlinkat` для атомарного no-replace на Linux и macOS; расширен список системных защищённых путей (`/System`, `/Library/LaunchDaemons`);
+  - `search_files` при явном абсолютном `path` внутри рабочей папки возвращает абсолютные пути в `matches`/`files`/`counts` (как в эталоне), сохраняя все проверки границ и защищённых путей;
+  - `delegate_task` получил поддержку одиночного `goal` на верхнем уровне, настраиваемой глубины `delegation.max_spawn_depth` (`DELEGATION_MAX_SPAWN_DEPTH`), уникальных `subagent_id` (`sa_...`), и действий управления `list`, `steer` (доставка `[Supervisor guidance]: ...` в следующий результат инструмента + отчёт `missed_steer`), `stop` (кооперативное прерывание `TurnOutcome::Interrupted` на границе итерации) и `continue` (продолжение завершённого подагента с сохранением истории и `subagent_id`, отказ в `--oneshot`).
+  - добавлен набор интеграционных тестов `crates/hermes-runtime/tests/tools_phase1_parity.rs` (6 тестов), проверено 10 мутаций (10 из 10 убито).
+- 2026-11-24: выпущен GitHub Release `v0.4.0` (`6fc97c5`, все 7 нативных сборок Linux/macOS/Windows + SHA-256).
 - 2026-11-24: выравнивание 4 расхождений конфигурации из аудита реального `work-config.yaml` (`prompt.rs`, `turn.rs`, `providers/openai.rs`, `providers/bedrock.rs`, `delegation.rs`, `config.rs`, `hermes-cli/src/chat.rs`):
   - `display.personality` (14 встроенных личностей из `hermes_cli/personality.py`, наложение корневого `personalities` и `agent.personalities` с поддержкой строк, списков и `{system_prompt, tone, style}`, игнорирование нейтральных `""`/`none`/`default`/`neutral`), fallback на `agent.system_prompt` и приоритетное переопределение `HERMES_EPHEMERAL_SYSTEM_PROMPT`; добавляется в `messages[0]` только при отправке запроса (включая failover), не попадая в сохраняемый в SQLite `sessions.system_prompt`;
   - не-потоковый режим OpenAI Chat Completions (`display.streaming: false` с fallback на `streaming.enabled: false`, `display.streaming` имеет приоритет): отправляет `"stream": false` без `stream_options` и разбирает стандартный JSON `choices[0].message.{content, tool_calls}`, `finish_reason`, `usage`;
