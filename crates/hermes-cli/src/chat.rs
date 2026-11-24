@@ -1358,6 +1358,14 @@ impl ChatRequest {
         self.compression.context_window()
     }
 
+    pub fn browser_cdp_url(&self) -> Option<&str> {
+        self.browser.cdp_url.as_deref()
+    }
+
+    pub fn set_browser_cdp_url(&mut self, url: Option<String>) {
+        self.browser.cdp_url = url;
+    }
+
     /// Context window for status-bar display `(tokens, is_fallback)`:
     /// explicit config/provider window → known model table → 128K fallback.
     pub fn display_context_length(&self) -> (u64, bool) {

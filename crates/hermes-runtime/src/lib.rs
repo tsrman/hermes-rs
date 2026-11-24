@@ -1,6 +1,7 @@
 pub mod approval_detect;
 pub mod approval_policy;
 mod browser_cdp;
+pub mod browser_connect;
 mod browser_dialog;
 mod browser_exec;
 mod browser_supervisor;

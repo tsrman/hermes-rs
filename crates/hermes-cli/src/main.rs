@@ -4,6 +4,8 @@ use clap::{Parser, Subcommand};
 use hermes_runtime::config::{profile_home, set_config_value};
 
 mod approval;
+mod auth;
+mod browser;
 mod chat;
 mod cron;
 #[cfg(unix)]
@@ -28,6 +30,16 @@ struct Cli {
 // The cron subcommand carries every job flag, so it is by far the largest variant.
 #[allow(clippy::large_enum_variant)]
 enum Command {
+    /// Authenticate with OAuth providers and inspect stored credentials.
+    Auth {
+        #[command(subcommand)]
+        command: Option<auth::Command>,
+    },
+    /// Connect to, inspect, or disconnect a live CDP browser session.
+    Browser {
+        #[command(subcommand)]
+        command: Option<browser::Command>,
+    },
     /// Inspect stored sessions in the selected profile.
     Sessions {
         #[command(subcommand)]
@@ -70,6 +82,7 @@ async fn main() -> ExitCode {
     // Background processes belong to this run; none is left behind.
     hermes_runtime::process::kill_all();
     hermes_runtime::execute_code::kill_all_kernels();
+    hermes_runtime::browser_connect::kill_spawned_browsers();
     match outcome {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
@@ -89,6 +102,10 @@ async fn run() -> Result<u8, String> {
     let home = home.as_deref();
     let command = command.unwrap_or(Command::Chat(chat));
     match command {
+        Command::Auth { command } => {
+            auth::run(home.ok_or("profile root is unavailable")?, command).await
+        }
+        Command::Browser { command } => browser::run(home, command).await,
         Command::Sessions { command } => {
             sessions::run(home.ok_or("profile root is unavailable")?, command)?;
             Ok(0)

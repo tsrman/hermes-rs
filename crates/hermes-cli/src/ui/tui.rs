@@ -1486,6 +1486,18 @@ async fn handle_slash_command(
                 }
             }
         }
+        "browser" => {
+            let (is_err, msg) = crate::browser::handle_slash_browser(home, state, argument).await;
+            TuiApp::push_notice(
+                state,
+                if is_err {
+                    NoticeKind::Error
+                } else {
+                    NoticeKind::Info
+                },
+                msg,
+            );
+        }
         "retry" => match state.unsaved.take() {
             Some(previous) => return Some(previous),
             None => TuiApp::push_notice(

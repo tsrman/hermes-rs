@@ -2,6 +2,7 @@ pub mod anthropic;
 pub mod bedrock;
 pub mod nvidia;
 pub mod oauth;
+pub mod oauth_login;
 pub mod openai;
 pub mod profiles;
 pub mod responses;

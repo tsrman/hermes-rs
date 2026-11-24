@@ -1519,7 +1519,6 @@ mod tests {
         assert!(strike_notices
             .iter()
             .any(|n| n.contains("Watch patterns disabled")));
-        kill_all();
     }
 
     #[test]

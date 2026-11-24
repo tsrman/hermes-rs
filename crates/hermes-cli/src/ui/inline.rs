@@ -92,6 +92,19 @@ impl Completer for SlashHelper {
                 .collect();
             return Ok((start, candidates));
         }
+        if let Some(arg) = before.strip_prefix("/browser ") {
+            let start = "/browser ".len();
+            let prefix = arg.to_ascii_lowercase();
+            let candidates = ["connect", "status", "disconnect"]
+                .into_iter()
+                .filter(|m| m.starts_with(&prefix))
+                .map(|m| Pair {
+                    display: m.to_owned(),
+                    replacement: m.to_owned(),
+                })
+                .collect();
+            return Ok((start, candidates));
+        }
         if before.contains(char::is_whitespace) {
             return Ok((pos, Vec::new()));
         }
@@ -116,6 +129,13 @@ impl Hinter for SlashHelper {
         if let Some(arg) = line.strip_prefix("/ui ") {
             let prefix = arg.to_ascii_lowercase();
             return ["inline", "tui", "plain"]
+                .into_iter()
+                .find(|m| m.starts_with(&prefix) && *m != prefix)
+                .map(|m| m[prefix.len()..].to_owned());
+        }
+        if let Some(arg) = line.strip_prefix("/browser ") {
+            let prefix = arg.to_ascii_lowercase();
+            return ["connect", "status", "disconnect"]
                 .into_iter()
                 .find(|m| m.starts_with(&prefix) && *m != prefix)
                 .map(|m| m[prefix.len()..].to_owned());
@@ -573,6 +593,15 @@ pub async fn run(
                 }
                 "resume" => {
                     resume_inline_target(home, state, argument, styled);
+                }
+                "browser" => {
+                    let (is_err, msg) =
+                        crate::browser::handle_slash_browser(home, state, argument).await;
+                    if is_err {
+                        eprintln!("{msg}");
+                    } else {
+                        println!("{msg}");
+                    }
                 }
                 "retry" => match state.unsaved.take() {
                     Some(previous) => rerun = Some(previous),

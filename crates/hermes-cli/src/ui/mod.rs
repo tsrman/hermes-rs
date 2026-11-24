@@ -136,6 +136,11 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "show or switch the console interface mode",
     },
     SlashCommand {
+        name: "/browser",
+        usage: "/browser [connect|status|disconnect]",
+        description: "connect, inspect, or disconnect a live CDP browser session",
+    },
+    SlashCommand {
         name: "/exit",
         usage: "/exit, /quit",
         description: "leave (Ctrl-D also works)",
@@ -158,6 +163,7 @@ Commands:
   /yolo                  toggle approving file changes and commands without asking
   /retry                 send the last turn again when it was interrupted or failed
   /ui [inline|tui|plain] show or switch the console interface mode
+  /browser [connect|status|disconnect] connect or manage a live CDP browser
   /exit, /quit           leave (Ctrl-D also works)
 A line ending in \\ continues on the next line. Ctrl-C stops a running turn.";
 
