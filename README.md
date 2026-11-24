@@ -1,0 +1,180 @@
+# hermes-rs
+
+A fast, standalone Rust implementation of [Hermes Agent](https://github.com/NousResearch/hermes-agent) — a single native CLI binary with no Python runtime dependency, designed for drop-in compatibility with existing `~/.hermes` profiles, `config.yaml`, `.env`, `auth.json`, skills, cron jobs, and SQLite `state.db` history.
+
+> Current release: **`v0.5.0`** (Linux x86_64/arm64 GNU & musl, macOS Apple Silicon & Intel, Windows x64)
+
+## Highlights
+
+- **Zero-dependency native binary**: Fast startup, low memory footprint, and static musl builds for Linux containers without Python.
+- **Interactive terminal UX**:
+  - **Inline mode** (default on TTY): streaming Markdown with syntax highlighting, live tool badges and spinners, `/` slash-command autocompletion, and native terminal scrollback.
+  - **Full-screen TUI mode** (`--ui tui` or `/ui tui`): header status bar (profile, model, context usage), scrollable Markdown feed, tool cards, command palette, multiline composer, and interactive approval/clarify modals.
+  - **Plain & JSON modes**: automatic plain fallback for pipes/`NO_COLOR`, plus versioned NDJSON streaming via `--events-json` for programmatic integrations.
+- **Drop-in profile & database compatibility**:
+  - Reads existing `~/.hermes` profiles (`config.yaml`, `.env`, `SOUL.md`, `memories/{MEMORY,USER}.md`, `skills/`, `auth.json`, `cron/jobs.json`, `state.db`).
+  - Safe copy-based migration for early SQLite schemas (`v1..v32 → v33`, covering Hermes v0.15+ and legacy FTS layouts `v0/v1/v2 → v3`) with byte-for-byte history verification.
+- **Broad provider & multimodal support**:
+  - OpenAI-compatible Chat Completions (streaming & non-streaming), OpenAI Responses API, Anthropic Messages (API key & OAuth), AWS Bedrock (Converse REST + SigV4/Bearer + Guardrails + Mantle Responses), Google Vertex AI (Service Account RS256 JWT & ADC), NVIDIA NIM, 32 named key-based providers, and OAuth refresh (`openai-codex`, `nous`, `xai-oauth`, `qwen-oauth`, `minimax-oauth`).
+  - Multimodal image input across OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and AWS Bedrock Converse.
+- **Built-in tools & MCP**:
+  - Workspace-scoped file tools (`read_file` with image detection, `search_files`, atomic `write_file` & `patch` on Linux/macOS), persistent local `terminal`, `process_manage`, optional Python `execute_code` kernel, `delegate_task` subagents (with nested depth, `list`/`steer`/`stop`/`continue`), `memory`, `todo_list`, `session_search`, `clarify`, `skills_list`/`skill_view`/`skill_manage`, `cronjob_manage`, `web_search`/`web_extract` (10 backends + keyless failover + website blocklist), `browser_cdp`, `vision_analyze`, `image_generate` (FAL.ai), `text_to_speech` (HTTP & local command), and `x_search` (xAI Responses).
+  - Full MCP client (`stdio`, Streamable HTTP, and legacy `sse`) with cancellation (`notifications/cancelled`), session recovery, resources, prompts, media caching, disk spillover, and OAuth bearer tokens.
+- **Security & approvals**:
+  - Dangerous-command detector, allow/deny policies, hardline safety floor, secret redaction before persistence, SSRF protection (`url_safety`), and configurable `security.website_blocklist`.
+
+## Installation
+
+### Prebuilt Binaries (GitHub Releases)
+
+Download the archive and `.sha256` checksum for your platform from [Releases](https://github.com/tsrman/hermes-rs/releases):
+
+| Platform | Target |
+| --- | --- |
+| Linux x86_64 | `x86_64-unknown-linux-gnu` (glibc), `x86_64-unknown-linux-musl` (Alpine / static) |
+| Linux arm64 | `aarch64-unknown-linux-gnu` (glibc), `aarch64-unknown-linux-musl` (Alpine / static) |
+| macOS Apple Silicon | `aarch64-apple-darwin` |
+| macOS Intel | `x86_64-apple-darwin` |
+| Windows x64 | `x86_64-pc-windows-msvc` |
+
+**Linux / macOS:**
+
+```bash
+tag=v0.5.0
+target=x86_64-unknown-linux-gnu
+archive="hermes-${tag#v}-$target.tar.gz"
+url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
+(
+  set -e
+  tmp="$(mktemp -d)"
+  cd "$tmp"
+  curl -fsSLO "$url/$archive"
+  curl -fsSLO "$url/$archive.sha256"
+  if command -v sha256sum >/dev/null; then
+    sha256sum --check "$archive.sha256"
+  else
+    shasum -a 256 -c "$archive.sha256"
+  fi
+  tar -xzf "$archive" hermes
+  mkdir -p "$HOME/.local/bin"
+  install -m 755 hermes "$HOME/.local/bin/hermes"
+) && hermes --help
+```
+
+**Windows (PowerShell):**
+
+```powershell
+$Tag = 'v0.5.0'
+$Archive = "hermes-$($Tag.Substring(1))-x86_64-pc-windows-msvc.zip"
+$Url = "https://github.com/tsrman/hermes-rs/releases/download/$Tag"
+Invoke-WebRequest "$Url/$Archive" -OutFile $Archive
+Invoke-WebRequest "$Url/$Archive.sha256" -OutFile "$Archive.sha256"
+$Expected = (Get-Content "$Archive.sha256").Split(' ')[0]
+if ((Get-FileHash $Archive -Algorithm SHA256).Hash -ne $Expected) { throw 'SHA-256 mismatch' }
+$InstallDir = Join-Path $env:LOCALAPPDATA "hermes-rs\$Tag"
+Expand-Archive -LiteralPath $Archive -DestinationPath $InstallDir
+& (Join-Path $InstallDir 'hermes.exe') --help
+```
+
+### Build from Source
+
+Requires Rust `1.95.0` (or compatible stable toolchain):
+
+```bash
+cargo build --release --locked -p hermes-cli
+./target/release/hermes --help
+```
+
+## Quick Start
+
+```bash
+# Start an interactive conversation (uses ~/.hermes by default)
+hermes chat
+
+# Start in full-screen TUI mode
+hermes chat --ui tui
+
+# Run a single non-interactive query and save the session
+hermes chat --oneshot -q "Summarize the files in this directory" --save-session
+
+# Resume the last CLI session or a specific session ID
+hermes chat --continue
+hermes chat --resume <session-id>
+
+# Use a separate profile directory
+hermes -p work chat
+
+# Stream machine-readable NDJSON events (version: 1)
+hermes chat --events-json -q "Read README.md"
+```
+
+### Migrating an Existing Python Hermes Profile
+
+Before switching an existing `~/.hermes` profile (including older `state.db` schemas from v0.15+), inspect and migrate a verified copy:
+
+```bash
+# Check profile inventory and schema version (Linux)
+hermes profile check
+
+# Migrate a copy of an older state.db (v1..v32 -> v33 with FTS5 v3)
+hermes sessions migrate --output /path/to/migrated-state.db
+```
+
+## CLI Commands
+
+| Command | Description |
+| --- | --- |
+| `hermes chat [OPTIONS]` | Interactive REPL/TUI or single-turn `-q` chat (`--ui`, `--model`, `--provider`, `--base-url`, `--save-session`, `--resume`, `--continue`, `--yolo`, `--oneshot`, `--events-json`, `--max-turns`). |
+| `hermes sessions <list\|show\|search\|migrate>` | Inspect, full-text search, or migrate SQLite `state.db` sessions (`v1..v32 → v33`). |
+| `hermes profile <check\|migrate>` | Inspect a profile directory and prepare a verified migration copy (Linux). |
+| `hermes cron <list\|add\|edit\|pause\|resume\|run\|cancel\|remove\|status\|runs\|incidents\|notepad\|doctor\|tick\|preview>` | Manage and execute local scheduled jobs in the shared `cron/jobs.json` / `executions.db` / `notepad.db` format. |
+| `hermes config set <key> <value>` | Update nested keys in the selected profile's `config.yaml`. |
+| `hermes owner` | Run the local Unix-socket session authority daemon for the selected profile (Unix). |
+
+Inside interactive `hermes chat`, available slash commands include `/help`, `/new`, `/sessions`, `/resume`, `/model`, `/compress` (`/compact`), `/yolo`, `/retry`, `/ui [inline|tui|plain]`, and `/exit`.
+
+## Workspace Architecture
+
+```text
+hermes-rs/
+├── crates/
+│   ├── hermes-core/     # Protocol primitives (UTF-8 chunk-safe SSE decoder)
+│   ├── hermes-runtime/  # Config, providers, OAuth, SQLite storage, compaction, tools, MCP, cron, turn loop
+│   └── hermes-cli/      # `hermes` executable, REPL/TUI, approvals, session owner, subcommands
+├── compat/              # Local fixture model server, Python end-to-end compat suite, release packaging
+├── docs/                # Extension interface docs and migration plans
+└── examples/            # Python SDK wrapper (`--events-json`) and MCP plugin example
+```
+
+## Development & Testing
+
+```bash
+# Check formatting
+cargo fmt --all -- --check
+
+# Lint all workspace targets
+cargo clippy --workspace --all-targets --locked -- -D warnings
+
+# Run Rust unit and integration tests (requires loopback networking)
+cargo test --workspace --locked
+
+# Build CLI and run Python compatibility suite (requires loopback networking)
+cargo build --locked -p hermes-cli
+python3 -m unittest discover -s compat -p 'test_*.py' -v
+```
+
+For quick local experiments without an external API key:
+
+```bash
+python3 compat/model_server.py --scenario tool
+# Use the printed address:
+HERMES_API_KEY=test target/debug/hermes chat --oneshot \
+  -q 'Read fixture.txt' --base-url http://127.0.0.1:<port>/v1 --model fixture
+```
+
+## Documentation
+
+- **Compatibility Matrix**: [compat/matrix.md](compat/matrix.md) — detailed feature parity status against upstream `NousResearch/hermes-agent`.
+- **Compatibility & Release Guide**: [compat/README.md](compat/README.md) — reference fixtures, installation, profile migration, and rollback procedures.
+- **Extensions & Python Integration**: [docs/extensions.md](docs/extensions.md) — Markdown skills, MCP servers, `execute_code`, and `--events-json` SDK usage.
+- **Repository Guidelines**: [AGENTS.md](AGENTS.md) — build, style, testing, and security conventions.
