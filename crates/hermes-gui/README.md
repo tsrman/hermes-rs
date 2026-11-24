@@ -14,10 +14,11 @@ This crate lives outside the root Cargo workspace (`exclude = ["crates/hermes-gu
 
 ## System Dependencies
 
-### Linux (Debian / Ubuntu)
+### Linux (Debian / Ubuntu — glibc)
 
 ```bash
 sudo apt-get install -y \
+  libasound2-dev \
   libfontconfig1-dev \
   libfreetype6-dev \
   libvulkan-dev \
@@ -29,6 +30,31 @@ sudo apt-get install -y \
   libxkbcommon-dev \
   libxkbcommon-x11-dev \
   pkg-config
+```
+
+### Linux (Alpine Linux — musl)
+
+Build dependencies (dynamic CRT linking `-C target-feature=-crt-static` is required because GPUI dynamically links Wayland/X11/Vulkan/Fontconfig shared libraries):
+
+```bash
+apk add --no-cache \
+  build-base pkgconf alsa-lib-dev fontconfig-dev freetype-dev \
+  wayland-dev libxkbcommon-dev libxcb-dev vulkan-loader-dev vulkan-headers
+```
+
+Runtime packages on a fresh Alpine desktop:
+
+```bash
+apk add --no-cache \
+  fontconfig freetype wayland-libs-client libxkbcommon libxkbcommon-x11 \
+  libxcb vulkan-loader mesa-vulkan-swrast
+```
+
+Build on Alpine musl:
+
+```bash
+RUSTFLAGS="-C target-feature=-crt-static" \
+  cargo build --manifest-path crates/hermes-gui/Cargo.toml --release --locked --target x86_64-unknown-linux-musl
 ```
 
 ### Windows

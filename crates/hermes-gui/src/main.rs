@@ -1,6 +1,8 @@
 //! `hsr-gui`: standalone GPUI desktop application for Hermes Agent backed by the shared
 //! cross-platform local session owner (`hsr owner`, protocol v2).
 
+mod editor;
+mod markdown;
 mod owner_client;
 mod state;
 
@@ -9,19 +11,22 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, FocusHandle, KeyDownEvent,
-    MouseButton, SharedString, Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, rgb, size, App, Application, Bounds, ClipboardItem, Context, FocusHandle,
+    KeyDownEvent, MouseButton, SharedString, Window, WindowBounds, WindowOptions,
 };
 use hermes_runtime::config::profile_home;
 use hermes_runtime::turn::{ApprovalAction, ApprovalDecision};
 
+use crate::editor::TextBuffer;
+use crate::markdown::{parse_blocks, MdBlock};
 use crate::owner_client::{BackendUpdate, OwnerClient};
-use crate::state::{FeedRow, GuiState, ToolCardState};
+use crate::state::{FeedRow, GuiState, PendingClarify, ToolCardState};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum InputTarget {
     Composer,
     Search,
+    Clarify,
 }
 
 struct HermesAppView {
@@ -42,8 +47,8 @@ impl HermesAppView {
         client.connect_and_sync(home.clone(), String::new());
         let focus_handle = cx.focus_handle();
 
-        // Poll backend events smoothly every 40ms so streaming deltas and approval modals appear
-        // immediately while keeping GPUI's event loop responsive.
+        // Poll backend events smoothly every 40ms so streaming deltas, approvals, and clarify
+        // modals appear immediately while keeping GPUI's event loop responsive.
         cx.spawn(async move |this, cx| loop {
             cx.background_executor()
                 .timer(Duration::from_millis(40))
@@ -97,6 +102,29 @@ impl HermesAppView {
                         );
                     }
                 }
+                BackendUpdate::Reconnecting { profile, message } => {
+                    if profile == self.state.active_profile {
+                        self.state.owner_connected = false;
+                        self.state.status_message = message;
+                    }
+                }
+                BackendUpdate::OwnerRestarted { profile } => {
+                    if profile == self.state.active_profile {
+                        self.state.streaming = false;
+                        self.state.active_turn_id = None;
+                        self.state.pending_approval = None;
+                        self.state.pending_clarify = None;
+                        self.state.status_message =
+                            "Local owner restarted; syncing saved history...".into();
+                        self.client.connect_and_sync(
+                            profile.clone(),
+                            self.state.search_input.as_str().to_owned(),
+                        );
+                        if let Some(sid) = self.state.selected_session_id.clone() {
+                            self.client.load_session(profile, sid);
+                        }
+                    }
+                }
                 BackendUpdate::SessionsLoaded(sessions) => {
                     self.state.sessions = sessions;
                 }
@@ -120,15 +148,21 @@ impl HermesAppView {
                     self.state.status_message = "Streaming...".into();
                 }
                 BackendUpdate::TurnEvent { turn_id, event } => {
+                    self.state.owner_connected = true;
                     let finished = matches!(
                         event.event,
                         hermes_runtime::local_owner::TurnStreamEvent::Done { .. }
                     );
                     self.state.apply_turn_event(&turn_id, event);
+                    if self.state.pending_clarify.is_some() {
+                        self.input_target = InputTarget::Clarify;
+                    } else if self.input_target == InputTarget::Clarify {
+                        self.input_target = InputTarget::Composer;
+                    }
                     if finished {
                         self.client.list_sessions(
                             self.state.active_profile.clone(),
-                            self.state.search_query.clone(),
+                            self.state.search_input.as_str().to_owned(),
                         );
                     }
                 }
@@ -145,12 +179,24 @@ impl HermesAppView {
         changed
     }
 
+    fn active_buffer_mut(&mut self) -> Option<&mut TextBuffer> {
+        match self.input_target {
+            InputTarget::Composer => Some(&mut self.state.composer_input),
+            InputTarget::Search => Some(&mut self.state.search_input),
+            InputTarget::Clarify => self
+                .state
+                .pending_clarify
+                .as_mut()
+                .and_then(PendingClarify::active_buffer_mut),
+        }
+    }
+
     fn send_composer(&mut self, cx: &mut Context<Self>) {
-        let text = self.state.composer.trim().to_owned();
+        let text = self.state.composer_input.as_str().trim().to_owned();
         if text.is_empty() || self.state.streaming {
             return;
         }
-        self.state.composer.clear();
+        self.state.composer_input.clear();
         self.state.feed.push(FeedRow::User(text.clone()));
         self.state.streaming = true;
         self.state.status_message = "Starting turn...".into();
@@ -163,22 +209,51 @@ impl HermesAppView {
         cx.notify();
     }
 
+    fn submit_clarify(&mut self, cx: &mut Context<Self>) {
+        let Some(clarify) = self.state.pending_clarify.clone() else {
+            return;
+        };
+        let decision = clarify.build_submitted_decision();
+        self.client.respond_approval(
+            self.state.active_profile.clone(),
+            clarify.turn_id,
+            clarify.approval_id,
+            decision,
+        );
+        self.input_target = InputTarget::Composer;
+        cx.notify();
+    }
+
+    fn cancel_clarify(&mut self, cx: &mut Context<Self>) {
+        let Some(clarify) = self.state.pending_clarify.clone() else {
+            return;
+        };
+        self.client.respond_approval(
+            self.state.active_profile.clone(),
+            clarify.turn_id,
+            clarify.approval_id,
+            PendingClarify::build_cancelled_decision(),
+        );
+        self.input_target = InputTarget::Composer;
+        cx.notify();
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let mods = &event.keystroke.modifiers;
+        let primary = mods.control || mods.platform;
 
-        if mods.control && key.eq_ignore_ascii_case("v") {
+        if primary && key.eq_ignore_ascii_case("v") {
             if let Some(item) = cx.read_from_clipboard() {
                 if let Some(text) = item.text() {
-                    match self.input_target {
-                        InputTarget::Composer => self.state.composer.push_str(&text),
-                        InputTarget::Search => {
-                            self.state.search_query.push_str(&text);
-                            self.client.list_sessions(
-                                self.state.active_profile.clone(),
-                                self.state.search_query.clone(),
-                            );
-                        }
+                    if let Some(buf) = self.active_buffer_mut() {
+                        buf.insert_str(&text);
+                    }
+                    if self.input_target == InputTarget::Search {
+                        self.client.list_sessions(
+                            self.state.active_profile.clone(),
+                            self.state.search_input.as_str().to_owned(),
+                        );
                     }
                     cx.notify();
                 }
@@ -186,26 +261,81 @@ impl HermesAppView {
             return;
         }
 
+        if primary && key.eq_ignore_ascii_case("u") {
+            if let Some(buf) = self.active_buffer_mut() {
+                buf.clear();
+            }
+            if self.input_target == InputTarget::Search {
+                self.client
+                    .list_sessions(self.state.active_profile.clone(), String::new());
+            }
+            cx.notify();
+            return;
+        }
+
+        if primary && key.eq_ignore_ascii_case("c") && self.state.streaming {
+            if let Some(tid) = self.state.active_turn_id.clone() {
+                self.client
+                    .cancel_turn(self.state.active_profile.clone(), tid);
+            }
+            return;
+        }
+
         match key {
+            "left" => {
+                if let Some(buf) = self.active_buffer_mut() {
+                    buf.move_left();
+                    cx.notify();
+                }
+            }
+            "right" => {
+                if let Some(buf) = self.active_buffer_mut() {
+                    buf.move_right();
+                    cx.notify();
+                }
+            }
+            "home" => {
+                if let Some(buf) = self.active_buffer_mut() {
+                    buf.move_home();
+                    cx.notify();
+                }
+            }
+            "end" => {
+                if let Some(buf) = self.active_buffer_mut() {
+                    buf.move_end();
+                    cx.notify();
+                }
+            }
             "backspace" => {
-                match self.input_target {
-                    InputTarget::Composer => {
-                        self.state.composer.pop();
-                    }
-                    InputTarget::Search => {
-                        self.state.search_query.pop();
-                        self.client.list_sessions(
-                            self.state.active_profile.clone(),
-                            self.state.search_query.clone(),
-                        );
+                if let Some(buf) = self.active_buffer_mut() {
+                    if buf.backspace() {
+                        if self.input_target == InputTarget::Search {
+                            self.client.list_sessions(
+                                self.state.active_profile.clone(),
+                                self.state.search_input.as_str().to_owned(),
+                            );
+                        }
+                        cx.notify();
                     }
                 }
-                cx.notify();
+            }
+            "delete" => {
+                if let Some(buf) = self.active_buffer_mut() {
+                    if buf.delete() {
+                        if self.input_target == InputTarget::Search {
+                            self.client.list_sessions(
+                                self.state.active_profile.clone(),
+                                self.state.search_input.as_str().to_owned(),
+                            );
+                        }
+                        cx.notify();
+                    }
+                }
             }
             "enter" => match self.input_target {
                 InputTarget::Composer => {
                     if mods.shift {
-                        self.state.composer.push('\n');
+                        self.state.composer_input.insert_char('\n');
                         cx.notify();
                     } else {
                         self.send_composer(cx);
@@ -214,12 +344,17 @@ impl HermesAppView {
                 InputTarget::Search => {
                     self.client.list_sessions(
                         self.state.active_profile.clone(),
-                        self.state.search_query.clone(),
+                        self.state.search_input.as_str().to_owned(),
                     );
+                }
+                InputTarget::Clarify => {
+                    self.submit_clarify(cx);
                 }
             },
             "escape" => {
-                if let Some(tid) = self.state.active_turn_id.clone() {
+                if self.state.pending_clarify.is_some() {
+                    self.cancel_clarify(cx);
+                } else if let Some(tid) = self.state.active_turn_id.clone() {
                     self.client
                         .cancel_turn(self.state.active_profile.clone(), tid);
                 }
@@ -227,15 +362,14 @@ impl HermesAppView {
             _ => {
                 if !mods.control && !mods.alt && !mods.platform {
                     if let Some(ch) = event.keystroke.key_char.as_deref() {
-                        match self.input_target {
-                            InputTarget::Composer => self.state.composer.push_str(ch),
-                            InputTarget::Search => {
-                                self.state.search_query.push_str(ch);
-                                self.client.list_sessions(
-                                    self.state.active_profile.clone(),
-                                    self.state.search_query.clone(),
-                                );
-                            }
+                        if let Some(buf) = self.active_buffer_mut() {
+                            buf.insert_str(ch);
+                        }
+                        if self.input_target == InputTarget::Search {
+                            self.client.list_sessions(
+                                self.state.active_profile.clone(),
+                                self.state.search_input.as_str().to_owned(),
+                            );
                         }
                         cx.notify();
                     }
@@ -243,6 +377,109 @@ impl HermesAppView {
             }
         }
     }
+}
+
+fn render_markdown_blocks(text: &str, cx: &mut Context<HermesAppView>) -> Vec<gpui::AnyElement> {
+    let text_main = rgb(0xe6edf6);
+    let text_dim = rgb(0x8e9bb0);
+    let accent = rgb(0x4ea1ff);
+    let border = rgb(0x2b3446);
+    let bg_code = rgb(0x10141c);
+
+    parse_blocks(text)
+        .into_iter()
+        .map(|block| match block {
+            MdBlock::Heading { level, text } => {
+                let el = div().text_color(accent).child(SharedString::from(text));
+                if level <= 2 {
+                    el.text_base().into_any_element()
+                } else {
+                    el.text_sm().into_any_element()
+                }
+            }
+            MdBlock::Paragraph { text } => div()
+                .text_sm()
+                .text_color(text_main)
+                .child(SharedString::from(text))
+                .into_any_element(),
+            MdBlock::Bullet { text } => div()
+                .flex()
+                .flex_row()
+                .gap_2()
+                .text_sm()
+                .text_color(text_main)
+                .child(div().text_color(accent).child("•"))
+                .child(div().flex_1().child(SharedString::from(text)))
+                .into_any_element(),
+            MdBlock::Quote { text } => div()
+                .pl_3()
+                .border_l_2()
+                .border_color(accent)
+                .text_sm()
+                .text_color(text_dim)
+                .child(SharedString::from(text))
+                .into_any_element(),
+            MdBlock::CodeBlock { lang, code } => {
+                let copy_text = code.clone();
+                let header_label = lang.unwrap_or_else(|| "code".into());
+                div()
+                    .my_1()
+                    .rounded_md()
+                    .bg(bg_code)
+                    .border_1()
+                    .border_color(border)
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .px_3()
+                            .py_1()
+                            .border_b_1()
+                            .border_color(border)
+                            .flex()
+                            .flex_row()
+                            .justify_between()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(text_dim)
+                                    .child(SharedString::from(header_label)),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .bg(rgb(0x1d2432))
+                                    .text_xs()
+                                    .text_color(accent)
+                                    .child("Copy")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |view, _, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                copy_text.clone(),
+                                            ));
+                                            view.state.status_message =
+                                                "Copied code block to clipboard".into();
+                                            cx.notify();
+                                        }),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .text_xs()
+                            .text_color(rgb(0xcbd5e1))
+                            .child(SharedString::from(code)),
+                    )
+                    .into_any_element()
+            }
+        })
+        .collect()
 }
 
 impl Render for HermesAppView {
@@ -259,139 +496,182 @@ impl Render for HermesAppView {
         let red = rgb(0xf85149);
         let amber = rgb(0xd29922);
 
-        let profiles_ui = self.state.profiles.iter().map(|prof| {
-            let path = PathBuf::from(&prof.path);
-            let active = path == self.state.active_profile;
-            let label = SharedString::from(prof.name.clone());
-            div()
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .cursor_pointer()
-                .bg(if active { accent } else { bg_card })
-                .text_color(if active { rgb(0x0b1017) } else { text_main })
-                .text_xs()
-                .child(label)
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, _, _, cx| {
-                        view.state.reset_for_profile(path.clone());
-                        view.client
-                            .connect_and_sync(path.clone(), view.state.search_query.clone());
-                        cx.notify();
-                    }),
-                )
-        });
-
-        let sessions_ui = self.state.sessions.iter().map(|sess| {
-            let sid = sess.id.clone();
-            let selected = self.state.selected_session_id.as_deref() == Some(sid.as_str());
-            let title = sess
-                .title
-                .clone()
-                .filter(|t| !t.trim().is_empty())
-                .unwrap_or_else(|| sid.clone());
-            let subtitle = format!("{} msgs", sess.message_count);
-            div()
-                .flex()
-                .flex_col()
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .cursor_pointer()
-                .bg(if selected { bg_user } else { bg_sidebar })
-                .border_1()
-                .border_color(if selected { accent } else { border })
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(text_main)
-                        .child(SharedString::from(title)),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(text_dim)
-                        .child(SharedString::from(subtitle)),
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, _, _, cx| {
-                        view.client
-                            .load_session(view.state.active_profile.clone(), sid.clone());
-                        cx.notify();
-                    }),
-                )
-        });
-
-        let feed_ui = self.state.feed.iter().map(|row| match row {
-            FeedRow::User(text) => div().w_full().flex().justify_end().child(
+        let profiles_ui: Vec<_> = self
+            .state
+            .profiles
+            .iter()
+            .map(|prof| {
+                let path = PathBuf::from(&prof.path);
+                let active = path == self.state.active_profile;
+                let label = SharedString::from(prof.name.clone());
                 div()
-                    .max_w(px(720.0))
-                    .px_3()
-                    .py_2()
-                    .rounded_lg()
-                    .bg(bg_user)
-                    .text_color(text_main)
-                    .text_sm()
-                    .child(SharedString::from(text.clone())),
-            ),
-            FeedRow::Assistant(text) => div().w_full().flex().justify_start().child(
-                div()
-                    .max_w(px(780.0))
-                    .px_3()
-                    .py_2()
-                    .rounded_lg()
-                    .bg(bg_card)
-                    .border_1()
-                    .border_color(border)
-                    .text_color(text_main)
-                    .text_sm()
-                    .child(SharedString::from(text.clone())),
-            ),
-            FeedRow::Tool {
-                name,
-                detail,
-                summary,
-                state,
-            } => {
-                let (icon, col) = match state {
-                    ToolCardState::Running => ("⚙", amber),
-                    ToolCardState::Succeeded => ("✓", green),
-                    ToolCardState::Failed => ("✗", red),
-                };
-                let mut line = format!("{icon} {name}");
-                if let Some(d) = detail {
-                    line.push_str(" — ");
-                    line.push_str(d);
-                }
-                if let Some(s) = summary {
-                    line.push_str(" · ");
-                    line.push_str(s);
-                }
-                div().w_full().flex().justify_start().child(
-                    div()
-                        .px_3()
-                        .py_1()
-                        .rounded_md()
-                        .bg(rgb(0x181e29))
-                        .border_1()
-                        .border_color(border)
-                        .text_xs()
-                        .text_color(col)
-                        .child(SharedString::from(line)),
-                )
-            }
-            FeedRow::Notice { is_error, text } => div().w_full().flex().justify_start().child(
-                div()
-                    .px_3()
+                    .px_2()
                     .py_1()
                     .rounded_md()
+                    .cursor_pointer()
+                    .bg(if active { accent } else { bg_card })
+                    .text_color(if active { rgb(0x0b1017) } else { text_main })
                     .text_xs()
-                    .text_color(if *is_error { red } else { text_dim })
-                    .child(SharedString::from(text.clone())),
-            ),
-        });
+                    .child(label)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _, _, cx| {
+                            view.state.reset_for_profile(path.clone());
+                            view.client.connect_and_sync(
+                                path.clone(),
+                                view.state.search_input.as_str().to_owned(),
+                            );
+                            cx.notify();
+                        }),
+                    )
+            })
+            .collect();
+
+        let sessions_ui: Vec<_> = self
+            .state
+            .sessions
+            .iter()
+            .map(|sess| {
+                let sid = sess.id.clone();
+                let selected = self.state.selected_session_id.as_deref() == Some(sid.as_str());
+                let title = sess
+                    .title
+                    .clone()
+                    .filter(|t| !t.trim().is_empty())
+                    .unwrap_or_else(|| sid.clone());
+                let subtitle = match sess.model.as_deref() {
+                    Some(model) => format!("{} msgs · {model}", sess.message_count),
+                    None => format!("{} msgs", sess.message_count),
+                };
+                div()
+                    .flex()
+                    .flex_col()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(if selected { bg_user } else { bg_sidebar })
+                    .border_1()
+                    .border_color(if selected { accent } else { border })
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(text_main)
+                            .child(SharedString::from(title)),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(text_dim)
+                            .child(SharedString::from(subtitle)),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _, _, cx| {
+                            view.client
+                                .load_session(view.state.active_profile.clone(), sid.clone());
+                            cx.notify();
+                        }),
+                    )
+            })
+            .collect();
+
+        let feed_rows = self.state.feed.clone();
+        let feed_ui: Vec<_> = feed_rows
+            .iter()
+            .map(|row| match row {
+                FeedRow::User(text) => div()
+                    .w_full()
+                    .flex()
+                    .justify_end()
+                    .child(
+                        div()
+                            .max_w(px(720.0))
+                            .px_3()
+                            .py_2()
+                            .rounded_lg()
+                            .bg(bg_user)
+                            .text_color(text_main)
+                            .text_sm()
+                            .child(SharedString::from(text.clone())),
+                    )
+                    .into_any_element(),
+                FeedRow::Assistant(text) => {
+                    let blocks = render_markdown_blocks(text, cx);
+                    div()
+                        .w_full()
+                        .flex()
+                        .justify_start()
+                        .child(
+                            div()
+                                .max_w(px(780.0))
+                                .px_3()
+                                .py_2()
+                                .rounded_lg()
+                                .bg(bg_card)
+                                .border_1()
+                                .border_color(border)
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .children(blocks),
+                        )
+                        .into_any_element()
+                }
+                FeedRow::Tool {
+                    name,
+                    detail,
+                    summary,
+                    state,
+                } => {
+                    let (icon, col) = match state {
+                        ToolCardState::Running => ("⚙", amber),
+                        ToolCardState::Succeeded => ("✓", green),
+                        ToolCardState::Failed => ("✗", red),
+                    };
+                    let mut line = format!("{icon} {name}");
+                    if let Some(d) = detail {
+                        line.push_str(" — ");
+                        line.push_str(d);
+                    }
+                    if let Some(s) = summary {
+                        line.push_str(" · ");
+                        line.push_str(s);
+                    }
+                    div()
+                        .w_full()
+                        .flex()
+                        .justify_start()
+                        .child(
+                            div()
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .bg(rgb(0x181e29))
+                                .border_1()
+                                .border_color(border)
+                                .text_xs()
+                                .text_color(col)
+                                .child(SharedString::from(line)),
+                        )
+                        .into_any_element()
+                }
+                FeedRow::Notice { is_error, text } => div()
+                    .w_full()
+                    .flex()
+                    .justify_start()
+                    .child(
+                        div()
+                            .px_3()
+                            .py_1()
+                            .rounded_md()
+                            .text_xs()
+                            .text_color(if *is_error { red } else { text_dim })
+                            .child(SharedString::from(text.clone())),
+                    )
+                    .into_any_element(),
+            })
+            .collect();
 
         let approval_panel = self.state.pending_approval.clone().map(|pending| {
             let tid_a = pending.turn_id.clone();
@@ -409,7 +689,7 @@ impl Render for HermesAppView {
                 "Approval required: {kind_label} ({})",
                 pending.request.target
             );
-            let preview: String = pending.request.content.chars().take(400).collect();
+            let preview: String = pending.request.content.chars().take(600).collect();
 
             div()
                 .mx_4()
@@ -430,6 +710,9 @@ impl Render for HermesAppView {
                 )
                 .child(
                     div()
+                        .p_2()
+                        .rounded_md()
+                        .bg(rgb(0x14161c))
                         .text_xs()
                         .text_color(text_main)
                         .child(SharedString::from(preview)),
@@ -488,16 +771,202 @@ impl Render for HermesAppView {
                 )
         });
 
-        let search_display = if self.state.search_query.is_empty() {
-            "Search sessions...".to_owned()
-        } else {
-            self.state.search_query.clone()
-        };
-        let composer_display = if self.state.composer.is_empty() {
-            "Message Hermes... (Enter to send, Shift+Enter newline, Esc to cancel)".to_owned()
-        } else {
-            self.state.composer.clone()
-        };
+        let clarify_panel = self.state.pending_clarify.clone().map(|clarify| {
+            let total = clarify.questions.len();
+            let active_idx = clarify.active_index.min(total.saturating_sub(1));
+            let active_q = clarify.questions[active_idx].clone();
+            let qid = active_q.qid.clone();
+            let multi = active_q.multi_select;
+            let chosen_set = clarify.selected.get(&qid).cloned().unwrap_or_default();
+            let custom_display = clarify
+                .custom_answers
+                .get(&qid)
+                .cloned()
+                .unwrap_or_default()
+                .display(
+                    self.input_target == InputTarget::Clarify,
+                    "Type a custom answer (Enter to submit)...",
+                );
+
+            let tabs_ui: Vec<_> = (0..total)
+                .map(|idx| {
+                    let is_active = idx == active_idx;
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .bg(if is_active { accent } else { bg_card })
+                        .text_color(if is_active { rgb(0x0b1017) } else { text_main })
+                        .text_xs()
+                        .child(SharedString::from(format!("Q{}", idx + 1)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |view, _, window, cx| {
+                                if let Some(c) = view.state.pending_clarify.as_mut() {
+                                    c.active_index = idx;
+                                }
+                                view.input_target = InputTarget::Clarify;
+                                window.focus(&view.focus_handle);
+                                cx.notify();
+                            }),
+                        )
+                })
+                .collect();
+
+            let choices_ui: Vec<_> = active_q
+                .choices
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|choice| {
+                    let selected = chosen_set.contains(&choice);
+                    let marker = if multi {
+                        if selected {
+                            "[✓] "
+                        } else {
+                            "[ ] "
+                        }
+                    } else if selected {
+                        "● "
+                    } else {
+                        "○ "
+                    };
+                    let qid_c = qid.clone();
+                    let choice_c = choice.clone();
+                    div()
+                        .px_3()
+                        .py_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .bg(if selected { bg_user } else { bg_card })
+                        .border_1()
+                        .border_color(if selected { accent } else { border })
+                        .text_xs()
+                        .text_color(text_main)
+                        .child(SharedString::from(format!("{marker}{choice}")))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |view, _, _, cx| {
+                                if let Some(c) = view.state.pending_clarify.as_mut() {
+                                    c.toggle_choice(&qid_c, &choice_c, multi);
+                                }
+                                cx.notify();
+                            }),
+                        )
+                })
+                .collect();
+
+            let header = if multi {
+                format!(
+                    "Question {}/{total} (select one or more): {}",
+                    active_idx + 1,
+                    active_q.question
+                )
+            } else {
+                format!("Question {}/{total}: {}", active_idx + 1, active_q.question)
+            };
+
+            div()
+                .mx_4()
+                .mb_2()
+                .p_3()
+                .rounded_lg()
+                .bg(rgb(0x162233))
+                .border_1()
+                .border_color(accent)
+                .flex()
+                .flex_col()
+                .gap_2()
+                .when(total > 1, |el| {
+                    el.child(div().flex().flex_row().gap_1().children(tabs_ui))
+                })
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(accent)
+                        .child(SharedString::from(header)),
+                )
+                .when(!choices_ui.is_empty(), |el| {
+                    el.child(div().flex().flex_col().gap_1().children(choices_ui))
+                })
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .cursor_text()
+                        .bg(bg_card)
+                        .border_1()
+                        .border_color(if self.input_target == InputTarget::Clarify {
+                            accent
+                        } else {
+                            border
+                        })
+                        .text_xs()
+                        .text_color(text_main)
+                        .child(SharedString::from(custom_display))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|view, _, window, cx| {
+                                view.input_target = InputTarget::Clarify;
+                                window.focus(&view.focus_handle);
+                                cx.notify();
+                            }),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .child(
+                            div()
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .bg(green)
+                                .text_color(rgb(0x0b1017))
+                                .text_xs()
+                                .child("Submit")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _, _, cx| {
+                                        view.submit_clarify(cx);
+                                    }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .bg(bg_card)
+                                .border_1()
+                                .border_color(border)
+                                .text_color(text_dim)
+                                .text_xs()
+                                .child("Cancel")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _, _, cx| {
+                                        view.cancel_clarify(cx);
+                                    }),
+                                ),
+                        ),
+                )
+        });
+
+        let search_display = self.state.search_input.display(
+            self.input_target == InputTarget::Search,
+            "Search sessions...",
+        );
+        let composer_display = self.state.composer_input.display(
+            self.input_target == InputTarget::Composer,
+            "Message Hermes... (Enter send, Shift+Enter newline, Ctrl+V paste, Esc cancel)",
+        );
         let header_session = self
             .state
             .selected_session_title
@@ -517,7 +986,7 @@ impl Render for HermesAppView {
             // Sidebar
             .child(
                 div()
-                    .w(px(270.0))
+                    .w(px(280.0))
                     .h_full()
                     .bg(bg_sidebar)
                     .border_r_1()
@@ -544,8 +1013,10 @@ impl Render for HermesAppView {
                                     .child("+ New")
                                     .on_mouse_down(
                                         MouseButton::Left,
-                                        cx.listener(|view, _, _, cx| {
+                                        cx.listener(|view, _, window, cx| {
                                             view.state.start_new_chat();
+                                            view.input_target = InputTarget::Composer;
+                                            window.focus(&view.focus_handle);
                                             cx.notify();
                                         }),
                                     ),
@@ -580,7 +1051,7 @@ impl Render for HermesAppView {
                                 border
                             })
                             .text_xs()
-                            .text_color(if self.state.search_query.is_empty() {
+                            .text_color(if self.state.search_input.is_empty() {
                                 text_dim
                             } else {
                                 text_main
@@ -597,8 +1068,9 @@ impl Render for HermesAppView {
                     )
                     .child(
                         div()
+                            .id("sessions-list")
                             .flex_1()
-                            .overflow_hidden()
+                            .overflow_y_scroll()
                             .flex()
                             .flex_col()
                             .gap_1()
@@ -654,7 +1126,7 @@ impl Render for HermesAppView {
                                             .child(if self.state.owner_connected {
                                                 "● Owner connected"
                                             } else {
-                                                "○ Connecting"
+                                                "○ Reconnecting"
                                             }),
                                     )
                                     .child(
@@ -693,7 +1165,7 @@ impl Render for HermesAppView {
                                                 cx.listener(|view, _, _, cx| {
                                                     view.client.connect_and_sync(
                                                         view.state.active_profile.clone(),
-                                                        view.state.search_query.clone(),
+                                                        view.state.search_input.as_str().to_owned(),
                                                     );
                                                     cx.notify();
                                                 }),
@@ -701,19 +1173,21 @@ impl Render for HermesAppView {
                                     ),
                             ),
                     )
-                    // Feed
+                    // Scrollable feed
                     .child(
                         div()
+                            .id("chat-feed")
                             .flex_1()
-                            .overflow_hidden()
+                            .overflow_y_scroll()
                             .p_4()
                             .flex()
                             .flex_col()
                             .gap_2()
                             .children(feed_ui),
                     )
-                    // Pending approval modal card
+                    // Pending approval or clarify modal card
                     .children(approval_panel)
+                    .children(clarify_panel)
                     // Composer bar
                     .child(
                         div()
@@ -741,7 +1215,7 @@ impl Render for HermesAppView {
                                         border
                                     })
                                     .text_sm()
-                                    .text_color(if self.state.composer.is_empty() {
+                                    .text_color(if self.state.composer_input.is_empty() {
                                         text_dim
                                     } else {
                                         text_main
@@ -802,7 +1276,7 @@ impl Render for HermesAppView {
 
 fn main() {
     Application::new().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1180.0), px(760.0)), cx);
+        let bounds = Bounds::centered(None, size(px(1160.0), px(780.0)), cx);
         let _ = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -810,11 +1284,10 @@ fn main() {
             },
             |window, cx| {
                 let view = cx.new(HermesAppView::new);
-                let focus = view.read(cx).focus_handle.clone();
-                window.focus(&focus);
+                let handle = view.read(cx).focus_handle.clone();
+                window.focus(&handle);
                 view
             },
         );
-        cx.activate(true);
     });
 }

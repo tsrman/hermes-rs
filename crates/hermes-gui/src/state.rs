@@ -1,12 +1,17 @@
 //! Pure UI state model for `hermes-gui` (unit-testable without a display server).
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use hermes_runtime::local_owner::{
     ActiveTurnSummary, ProfileEntry, SequencedTurnEvent, SessionSummary, TranscriptItem,
     TurnStreamEvent,
 };
-use hermes_runtime::turn::ApprovalRequest;
+use hermes_runtime::turn::{ApprovalAction, ApprovalDecision, ApprovalRequest};
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+use crate::editor::TextBuffer;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolCardState {
@@ -31,6 +36,117 @@ pub enum FeedRow {
     },
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct ClarifyQuestionItem {
+    pub qid: String,
+    pub question: String,
+    pub choices: Option<Vec<String>>,
+    #[serde(default)]
+    pub multi_select: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingClarify {
+    pub turn_id: String,
+    pub approval_id: u64,
+    pub questions: Vec<ClarifyQuestionItem>,
+    pub active_index: usize,
+    /// Selected choice labels per `qid` (single or multi-select).
+    pub selected: BTreeMap<String, BTreeSet<String>>,
+    /// Freeform / custom text per `qid`.
+    pub custom_answers: BTreeMap<String, TextBuffer>,
+}
+
+impl PendingClarify {
+    pub fn from_request(turn_id: String, approval_id: u64, raw_json: &str) -> Option<Self> {
+        let questions: Vec<ClarifyQuestionItem> = serde_json::from_str(raw_json).ok()?;
+        if questions.is_empty() {
+            return None;
+        }
+        let mut custom_answers = BTreeMap::new();
+        for q in &questions {
+            custom_answers.insert(q.qid.clone(), TextBuffer::new());
+        }
+        Some(Self {
+            turn_id,
+            approval_id,
+            questions,
+            active_index: 0,
+            selected: BTreeMap::new(),
+            custom_answers,
+        })
+    }
+
+    pub fn active_buffer_mut(&mut self) -> Option<&mut TextBuffer> {
+        let qid = self.questions.get(self.active_index)?.qid.clone();
+        Some(self.custom_answers.entry(qid).or_default())
+    }
+
+    pub fn toggle_choice(&mut self, qid: &str, choice: &str, multi_select: bool) {
+        let entry = self.selected.entry(qid.to_owned()).or_default();
+        if multi_select {
+            if !entry.remove(choice) {
+                entry.insert(choice.to_owned());
+            }
+        } else {
+            entry.clear();
+            entry.insert(choice.to_owned());
+        }
+    }
+
+    pub fn build_submitted_decision(&self) -> ApprovalDecision {
+        let mut answers = serde_json::Map::new();
+        for q in &self.questions {
+            let custom = self
+                .custom_answers
+                .get(&q.qid)
+                .map(|b| b.as_str().trim())
+                .unwrap_or("");
+            let chosen = self.selected.get(&q.qid);
+            let value = if q.multi_select {
+                let mut list: Vec<Value> = chosen
+                    .into_iter()
+                    .flatten()
+                    .map(|c| Value::String(c.clone()))
+                    .collect();
+                if !custom.is_empty() {
+                    list.push(Value::String(custom.to_owned()));
+                }
+                if list.is_empty() {
+                    Value::Null
+                } else {
+                    Value::Array(list)
+                }
+            } else if !custom.is_empty() {
+                Value::String(custom.to_owned())
+            } else if let Some(first) = chosen.and_then(|set| set.iter().next()) {
+                Value::String(first.clone())
+            } else {
+                Value::Null
+            };
+            answers.insert(q.qid.clone(), value);
+        }
+        ApprovalDecision::Answered(
+            json!({
+                "answers": answers,
+                "outcome": "submitted",
+            })
+            .to_string(),
+        )
+    }
+
+    pub fn build_cancelled_decision() -> ApprovalDecision {
+        ApprovalDecision::Answered(
+            json!({
+                "answers": {},
+                "outcome": "cancelled",
+                "notice": "User cancelled the clarification prompt.",
+            })
+            .to_string(),
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PendingApproval {
     pub turn_id: String,
@@ -43,7 +159,7 @@ pub struct GuiState {
     pub active_profile: PathBuf,
     pub profiles: Vec<ProfileEntry>,
     pub sessions: Vec<SessionSummary>,
-    pub search_query: String,
+    pub search_input: TextBuffer,
     pub selected_session_id: Option<String>,
     pub selected_session_title: Option<String>,
     pub feed: Vec<FeedRow>,
@@ -51,7 +167,8 @@ pub struct GuiState {
     pub last_seq: u64,
     pub streaming: bool,
     pub pending_approval: Option<PendingApproval>,
-    pub composer: String,
+    pub pending_clarify: Option<PendingClarify>,
+    pub composer_input: TextBuffer,
     pub yolo: bool,
     pub owner_connected: bool,
     pub status_message: String,
@@ -63,7 +180,7 @@ impl GuiState {
             active_profile,
             profiles: Vec::new(),
             sessions: Vec::new(),
-            search_query: String::new(),
+            search_input: TextBuffer::new(),
             selected_session_id: None,
             selected_session_title: None,
             feed: Vec::new(),
@@ -71,7 +188,8 @@ impl GuiState {
             last_seq: 0,
             streaming: false,
             pending_approval: None,
-            composer: String::new(),
+            pending_clarify: None,
+            composer_input: TextBuffer::new(),
             yolo: false,
             owner_connected: false,
             status_message: "Connecting to local session owner...".into(),
@@ -88,6 +206,7 @@ impl GuiState {
         self.last_seq = 0;
         self.streaming = false;
         self.pending_approval = None;
+        self.pending_clarify = None;
         self.owner_connected = false;
         self.status_message = "Switching profile...".into();
     }
@@ -100,6 +219,7 @@ impl GuiState {
         self.last_seq = 0;
         self.streaming = false;
         self.pending_approval = None;
+        self.pending_clarify = None;
         self.status_message = "New conversation".into();
     }
 
@@ -128,6 +248,7 @@ impl GuiState {
             }
         }
         self.pending_approval = None;
+        self.pending_clarify = None;
         if let Some(tid) = active_turn_id {
             self.active_turn_id = Some(tid);
             self.last_seq = 0;
@@ -224,6 +345,19 @@ impl GuiState {
                 approval_id,
                 request,
             } => {
+                if request.action == ApprovalAction::Clarify {
+                    if let Some(clarify) = PendingClarify::from_request(
+                        turn_id.to_owned(),
+                        approval_id,
+                        &request.content,
+                    ) {
+                        self.pending_clarify = Some(clarify);
+                        self.pending_approval = None;
+                        self.status_message = "Hermes has a question for you...".into();
+                        return;
+                    }
+                }
+                self.pending_clarify = None;
                 self.pending_approval = Some(PendingApproval {
                     turn_id: turn_id.to_owned(),
                     approval_id,
@@ -240,6 +374,14 @@ impl GuiState {
                     self.pending_approval = None;
                     self.status_message = "Approval sent; continuing...".into();
                 }
+                if self
+                    .pending_clarify
+                    .as_ref()
+                    .is_some_and(|p| p.approval_id == approval_id)
+                {
+                    self.pending_clarify = None;
+                    self.status_message = "Answer sent; continuing...".into();
+                }
             }
             TurnStreamEvent::Error { message } => {
                 self.feed.push(FeedRow::Notice {
@@ -254,6 +396,7 @@ impl GuiState {
             } => {
                 self.streaming = false;
                 self.pending_approval = None;
+                self.pending_clarify = None;
                 self.active_turn_id = None;
                 self.status_message = if cancelled {
                     "Turn cancelled.".into()
@@ -281,7 +424,6 @@ fn truncate_preview(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hermes_runtime::turn::ApprovalAction;
 
     #[test]
     fn reconnect_deduplicates_sequence_and_restores_pending_approval() {
@@ -337,6 +479,62 @@ mod tests {
     }
 
     #[test]
+    fn clarify_approval_parses_questions_and_builds_submitted_json() {
+        let mut st = GuiState::new(PathBuf::from("/tmp/p1"));
+        let payload = json!([
+            {
+                "qid": "q0",
+                "question": "Pick targets",
+                "choices": ["Linux (Recommended)", "Windows"],
+                "multi_select": true
+            },
+            {
+                "qid": "q1",
+                "question": "Release tag?",
+                "choices": null,
+                "multi_select": false
+            }
+        ])
+        .to_string();
+
+        st.apply_turn_event(
+            "turn-9",
+            SequencedTurnEvent {
+                seq: 1,
+                event: TurnStreamEvent::ApprovalRequired {
+                    approval_id: 3,
+                    request: ApprovalRequest {
+                        target: "clarify".into(),
+                        content: payload,
+                        action: ApprovalAction::Clarify,
+                        timeout_secs: 90,
+                    },
+                },
+            },
+        );
+        assert!(st.pending_approval.is_none());
+        let clarify = st.pending_clarify.as_mut().expect("clarify parsed");
+        clarify.toggle_choice("q0", "Linux (Recommended)", true);
+        clarify.toggle_choice("q0", "Windows", true);
+        clarify.active_index = 1;
+        clarify
+            .active_buffer_mut()
+            .unwrap()
+            .insert_str("gui-v0.1.0");
+
+        let ApprovalDecision::Answered(raw) = clarify.build_submitted_decision() else {
+            panic!("expected Answered decision");
+        };
+        let parsed: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["outcome"], "submitted");
+        assert_eq!(
+            parsed["answers"]["q0"],
+            json!(["Linux (Recommended)", "Windows"])
+        );
+        assert_eq!(parsed["answers"]["q1"], json!("gui-v0.1.0"));
+    }
+
+    #[test]
     fn tool_lifecycle_and_profile_reset_maintain_isolation() {
         let mut st = GuiState::new(PathBuf::from("/tmp/profile-a"));
         st.active_turn_id = Some("turn-2".into());
@@ -382,6 +580,7 @@ mod tests {
         assert_eq!(st.last_seq, 0);
         assert!(!st.streaming);
         assert!(st.pending_approval.is_none());
+        assert!(st.pending_clarify.is_none());
     }
 
     #[test]

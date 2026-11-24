@@ -1417,6 +1417,10 @@ pub fn prepare_gui_turn(
         ui: Some(UiModeArg::Plain),
     };
     let mut request = prepare(Some(home), args)?;
+    // GUI turns are interactive sessions driven over the local owner v2 protocol even though the
+    // background `hsr owner` process itself has no controlling TTY on stdin.
+    request.single_query = false;
+    request.approval_timeout_secs = request.terminal_approval_timeout_secs.or(Some(60));
     if let Some(dir) = cwd.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()) {
         request.set_root(OsString::from(dir));
     }

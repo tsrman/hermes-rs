@@ -27,7 +27,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config libasound2-dev libfontconfig1-dev libwayland-dev \
+            pkg-config libasound2-dev libfontconfig1-dev libfreetype6-dev libwayland-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libxcb-render0-dev \
             libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev
       - name: Set up Rust
@@ -61,7 +61,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config libasound2-dev libfontconfig1-dev libwayland-dev \
+            pkg-config libasound2-dev libfontconfig1-dev libfreetype6-dev libwayland-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libxcb-render0-dev \
             libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev
       - name: Set up Rust
@@ -70,19 +70,20 @@ jobs:
         run: |
           rustup toolchain install "$RUST_VERSION" --profile minimal --target "$TARGET"
           rustup default "$RUST_VERSION"
-      - name: Build and package (Linux)
+      - name: Build and package (Linux GNU)
         if: runner.os == 'Linux'
         env:
           TARGET: ${{ matrix.target }}
         run: |
           cargo build --manifest-path crates/hermes-gui/Cargo.toml --release --locked --target "$TARGET"
+          ldd "crates/hermes-gui/target/$TARGET/release/hsr-gui"
           mkdir -p "$RUNNER_TEMP/dist"
           version="${GITHUB_REF_NAME#gui-v}"
           if [[ -z "$version" || "$version" == "$GITHUB_REF_NAME" ]]; then version="0.1.0"; fi
           archive="hsr-gui-$version-$TARGET.tar.gz"
           tar -czf "$RUNNER_TEMP/dist/$archive" -C "crates/hermes-gui/target/$TARGET/release" hsr-gui
           (cd "$RUNNER_TEMP/dist" && sha256sum "$archive" > "$archive.sha256")
-      - name: Build and package (Windows)
+      - name: Build and package (Windows MSVC)
         if: runner.os == 'Windows'
         shell: pwsh
         env:
@@ -103,8 +104,54 @@ jobs:
           compression-level: 0
           overwrite: true
 
+  build-musl:
+    needs: [checks]
+    runs-on: ubuntu-24.04
+    container:
+      image: alpine:3.21
+    steps:
+      - name: Install Alpine build tools and GPUI musl dependencies
+        shell: sh
+        run: |
+          apk add --no-cache \
+            bash curl git build-base pkgconf \
+            alsa-lib-dev fontconfig-dev freetype-dev \
+            wayland-dev libxkbcommon-dev libxcb-dev \
+            vulkan-loader-dev vulkan-headers \
+            sqlite-dev openssl-dev ca-certificates
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Rust (musl)
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$RUST_VERSION"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Test, build, and package (Linux musl)
+        shell: bash
+        env:
+          TARGET: x86_64-unknown-linux-musl
+          RUSTFLAGS: '-C target-feature=-crt-static'
+        run: |
+          cargo test --manifest-path crates/hermes-gui/Cargo.toml --locked --target "$TARGET"
+          cargo build --manifest-path crates/hermes-gui/Cargo.toml --release --locked --target "$TARGET"
+          ldd "crates/hermes-gui/target/$TARGET/release/hsr-gui"
+          mkdir -p "$RUNNER_TEMP/dist"
+          version="${GITHUB_REF_NAME#gui-v}"
+          if [[ -z "$version" || "$version" == "$GITHUB_REF_NAME" ]]; then version="0.1.0"; fi
+          archive="hsr-gui-$version-$TARGET.tar.gz"
+          tar -czf "$RUNNER_TEMP/dist/$archive" -C "crates/hermes-gui/target/$TARGET/release" hsr-gui
+          (cd "$RUNNER_TEMP/dist" && sha256sum "$archive" > "$archive.sha256")
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gui-x86_64-unknown-linux-musl
+          path: ${{ runner.temp }}/dist/
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
   publish:
-    needs: [build]
+    needs: [build, build-musl]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     permissions:
@@ -120,5 +167,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd "$RUNNER_TEMP/dist"
+          cat hsr-gui-*.sha256 | sort -k2 > SHA256SUMS
           tag="$GITHUB_REF_NAME"
-          gh release create "$tag" hsr-gui-* --verify-tag --title "Hermes GUI $tag" --generate-notes
+          gh release create "$tag" hsr-gui-* SHA256SUMS \
+            --verify-tag \
+            --title "Hermes GUI $tag" \
+            --generate-notes

@@ -1,8 +1,8 @@
 //! Asynchronous bridge between the GPUI frontend and the profile's `hsr owner` daemon.
 //!
 //! Automatically spawns `hsr owner` for the chosen profile if none is running yet, exposes
-//! non-blocking RPC helpers, and streams `SubscribeTurn` events over an unbounded channel so the
-//! GPUI view refreshes smoothly without blocking the UI thread.
+//! non-blocking RPC helpers, and streams `SubscribeTurn` events with automatic reconnect and
+//! `after_seq` replay recovery if the local socket drops.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -24,6 +24,13 @@ pub enum BackendUpdate {
         profiles: Vec<ProfileEntry>,
         sessions: Vec<SessionSummary>,
         active_turns: Vec<ActiveTurnSummary>,
+    },
+    Reconnecting {
+        profile: PathBuf,
+        message: String,
+    },
+    OwnerRestarted {
+        profile: PathBuf,
     },
     SessionsLoaded(Vec<SessionSummary>),
     TranscriptLoaded {
@@ -222,53 +229,106 @@ impl OwnerClient {
 async fn stream_turn_events(
     profile: PathBuf,
     turn_id: String,
-    after_seq: u64,
+    initial_after_seq: u64,
     tx: Sender<BackendUpdate>,
 ) {
-    let mut stream = match local_owner::connect(&profile).await {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            let _ = tx.send(BackendUpdate::Error(
-                "Local session owner disconnected.".into(),
-            ));
-            return;
-        }
-        Err(err) => {
-            let _ = tx.send(BackendUpdate::Error(err));
-            return;
-        }
-    };
-    let env = V2Envelope {
-        version: PROTOCOL_V2,
-        command: GuiCommand::SubscribeTurn {
-            turn_id: turn_id.clone(),
-            after_seq,
-        },
-    };
-    if let Err(err) = write_frame(&mut stream, &env).await {
-        let _ = tx.send(BackendUpdate::Error(format!(
-            "Failed subscribing to turn: {err}"
-        )));
-        return;
-    }
+    let mut last_seq = initial_after_seq;
+    let backoff_ms = [200u64, 500, 1000, 1500];
+    let mut attempt = 0usize;
+
     loop {
-        match read_frame::<GuiReply>(&mut stream).await {
-            Ok(GuiReply::TurnEvent(ev)) => {
-                let done = matches!(ev.event, TurnStreamEvent::Done { .. });
-                let _ = tx.send(BackendUpdate::TurnEvent {
-                    turn_id: turn_id.clone(),
-                    event: ev,
+        let mut stream = match local_owner::connect(&profile).await {
+            Ok(Some(s)) => s,
+            Ok(None) | Err(_) => {
+                if attempt >= backoff_ms.len() {
+                    let _ = tx.send(BackendUpdate::Error(
+                        "Lost connection to local session owner.".into(),
+                    ));
+                    return;
+                }
+                let _ = tx.send(BackendUpdate::Reconnecting {
+                    profile: profile.clone(),
+                    message: format!(
+                        "Owner disconnected; reconnecting ({}/{})...",
+                        attempt + 1,
+                        backoff_ms.len()
+                    ),
                 });
-                if done {
+                tokio::time::sleep(Duration::from_millis(backoff_ms[attempt])).await;
+                attempt += 1;
+                let _ = ensure_owner_running(&profile).await;
+                continue;
+            }
+        };
+
+        let env = V2Envelope {
+            version: PROTOCOL_V2,
+            command: GuiCommand::SubscribeTurn {
+                turn_id: turn_id.clone(),
+                after_seq: last_seq,
+            },
+        };
+        if write_frame(&mut stream, &env).await.is_err() {
+            if attempt >= backoff_ms.len() {
+                let _ = tx.send(BackendUpdate::Error(
+                    "Failed subscribing to local owner turn stream.".into(),
+                ));
+                return;
+            }
+            attempt += 1;
+            tokio::time::sleep(Duration::from_millis(backoff_ms[attempt - 1])).await;
+            continue;
+        }
+
+        let mut received_any = false;
+        loop {
+            match read_frame::<GuiReply>(&mut stream).await {
+                Ok(GuiReply::TurnEvent(ev)) => {
+                    received_any = true;
+                    attempt = 0;
+                    if ev.seq > last_seq {
+                        last_seq = ev.seq;
+                    }
+                    let done = matches!(ev.event, TurnStreamEvent::Done { .. });
+                    let _ = tx.send(BackendUpdate::TurnEvent {
+                        turn_id: turn_id.clone(),
+                        event: ev,
+                    });
+                    if done {
+                        return;
+                    }
+                }
+                Ok(GuiReply::Error { message }) => {
+                    if message.contains("Unknown turn_id") {
+                        // Owner restarted cleanly; tell the UI to re-sync sessions & transcript.
+                        let _ = tx.send(BackendUpdate::OwnerRestarted {
+                            profile: profile.clone(),
+                        });
+                    } else {
+                        let _ = tx.send(BackendUpdate::Error(message));
+                    }
+                    return;
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    // Socket dropped mid-stream; retry outer loop with `after_seq = last_seq`.
+                    if !received_any && attempt >= backoff_ms.len() {
+                        let _ = tx.send(BackendUpdate::Error(
+                            "Local owner stream closed unexpectedly.".into(),
+                        ));
+                        return;
+                    }
+                    let delay = backoff_ms[attempt.min(backoff_ms.len() - 1)];
+                    attempt = (attempt + 1).min(backoff_ms.len());
+                    let _ = tx.send(BackendUpdate::Reconnecting {
+                        profile: profile.clone(),
+                        message: "Reconnecting to local owner stream...".into(),
+                    });
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    let _ = ensure_owner_running(&profile).await;
                     break;
                 }
             }
-            Ok(GuiReply::Error { message }) => {
-                let _ = tx.send(BackendUpdate::Error(message));
-                break;
-            }
-            Ok(_) => {}
-            Err(_) => break,
         }
     }
 }
