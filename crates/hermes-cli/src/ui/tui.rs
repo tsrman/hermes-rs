@@ -1727,7 +1727,7 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
         match entry {
             FeedEntry::User(text) => {
                 lines.push(Line::from(vec![
-                    Span::styled("▎ ", Style::default().fg(Color::Cyan)),
+                    Span::styled("│ ", Style::default().fg(Color::Cyan)),
                     Span::styled(
                         "You",
                         Style::default()
@@ -1737,7 +1737,7 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
                 ]));
                 for l in text.lines() {
                     lines.push(Line::from(vec![
-                        Span::styled("▎ ", Style::default().fg(Color::Cyan)),
+                        Span::styled("│ ", Style::default().fg(Color::Cyan)),
                         Span::raw(l.to_owned()),
                     ]));
                 }

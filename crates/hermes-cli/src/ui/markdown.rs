@@ -271,7 +271,7 @@ fn render_ansi_markdown_line(line: &str) -> String {
     // Blockquote
     if let Some(rest) = trimmed.strip_prefix("> ") {
         return format!(
-            "{indent}{FG_GRAY}▎ {ITALIC}{}{RESET}",
+            "{indent}{FG_GRAY}│ {ITALIC}{}{RESET}",
             render_inline_ansi(rest)
         );
     }
@@ -464,7 +464,7 @@ fn render_ratatui_markdown_line(line: &str) -> Line<'static> {
     if let Some(rest) = trimmed.strip_prefix("> ") {
         let mut spans = vec![
             Span::raw(indent),
-            Span::styled("▎ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
         ];
         for seg in parse_inline_segments(rest) {
             spans.push(inline_segment_to_span(seg, Modifier::ITALIC));
