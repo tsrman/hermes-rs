@@ -8,7 +8,6 @@ mod auth;
 mod browser;
 mod chat;
 mod cron;
-#[cfg(unix)]
 mod owner;
 #[cfg(target_os = "linux")]
 mod profile;
@@ -62,7 +61,6 @@ enum Command {
     },
     Chat(chat::ChatArgs),
     /// Run the local session owner for the selected profile.
-    #[cfg(unix)]
     Owner,
 }
 
@@ -146,7 +144,6 @@ async fn run() -> Result<u8, String> {
             if request.is_interactive() {
                 return repl::run(home, request).await;
             }
-            #[cfg(unix)]
             if let Some(home) = home {
                 match owner::connect(home).await {
                     Ok(Some(connection)) => match owner::forward(connection, request).await {
@@ -183,7 +180,6 @@ async fn run() -> Result<u8, String> {
             }
             outcome
         }
-        #[cfg(unix)]
         Command::Owner => {
             owner::serve(home.ok_or("profile root is unavailable")?).await?;
             Ok(0)

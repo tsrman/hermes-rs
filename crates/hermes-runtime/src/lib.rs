@@ -25,6 +25,7 @@ mod file_tools;
 mod fuzzy;
 pub mod image_gen;
 pub mod journal;
+pub mod local_owner;
 pub mod mcp;
 pub mod mcp_media;
 pub mod memory_tool;

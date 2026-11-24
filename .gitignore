@@ -1,4 +1,5 @@
 /target/
+/crates/hermes-gui/target/
 __pycache__/
 *.pyc
 .env

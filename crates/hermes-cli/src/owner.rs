@@ -1,31 +1,35 @@
-use std::fs::{self, File};
+//! Local session owner server and CLI client built on `hermes_runtime::local_owner`.
+//!
+//! Serves both:
+//! - Protocol v1 (`hsr chat -q`): exact framed Event stream compatible with `compat/test_owner.py`.
+//! - Protocol v2 (`hermes-gui`): multi-client reconnectable session RPCs (`ListProfiles`,
+//!   `ListSessions`, `LoadSession`, `ActiveTurns`, `StartTurn`, `SubscribeTurn`, `CancelTurn`,
+//!   `RespondApproval`).
+
 use std::io;
-use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
+use hermes_runtime::local_owner::{
+    self, discover_profiles, list_profile_sessions, load_profile_transcript, read_frame,
+    read_frame_bytes, write_frame, GuiCommand, GuiReply, OwnerListener, OwnerStream, TurnHandle,
+    TurnHub, TurnStreamEvent, V2Envelope, CONTROL_APPROVAL_RESPONSE, CONTROL_CANCEL, IO_TIMEOUT,
+    PROTOCOL_V1, PROTOCOL_V2,
+};
 use hermes_runtime::turn::ApprovalDecision;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::{UnixListener, UnixStream};
-use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::{mpsc, oneshot, Notify};
 use tokio::task::JoinSet;
 use tokio::time::{timeout, timeout_at, Instant};
 
 use crate::approval;
 use crate::chat::{self, ChatRequest, Event};
+use crate::ui::{parse_stderr_event, ParsedStderr};
 
-const DIRECTORY: &str = "rust-owner";
-const SOCKET: &str = "owner.sock";
-const VERSION: u32 = 1;
-const CANCEL: u8 = 1;
-const APPROVAL_RESPONSE: u8 = 2;
-const MAX_FRAME: usize = 4 * 1024 * 1024;
 const MAX_OUTPUT_BUFFER: usize = 8 * 1024 * 1024;
-const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Deserialize, Serialize)]
 struct Start {
@@ -41,147 +45,69 @@ struct ApprovalResponse {
 
 type PendingApproval = Mutex<Option<(u64, oneshot::Sender<ApprovalDecision>)>>;
 
-struct OwnerSocket {
-    path: PathBuf,
-    _lock: File,
-}
-
-impl Drop for OwnerSocket {
-    fn drop(&mut self) {
-        // The file lock remains held while removing the socket.
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
-fn uid() -> u32 {
-    // SAFETY: geteuid takes no arguments and does not read or modify Rust memory.
-    unsafe { libc::geteuid() }
-}
-
-fn owner_directory(path: &Path) -> io::Result<bool> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if !metadata.is_dir() || metadata.uid() != uid() || metadata.mode() & 0o077 != 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "local owner directory must be private and owned by the current user",
-                ));
-            }
-            Ok(true)
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
-    }
-}
-
-fn socket_exists(path: &Path) -> io::Result<bool> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_socket() && metadata.uid() == uid() => Ok(true),
-        Ok(_) => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid local owner socket",
-        )),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
-    }
-}
-
-fn check_peer(stream: &UnixStream) -> io::Result<()> {
-    if stream.peer_cred()?.uid() == uid() {
-        Ok(())
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "local owner peer has a different user ID",
-        ))
-    }
-}
-
-pub async fn connect(home: &Path) -> Result<Option<UnixStream>, String> {
-    let directory = home.join(DIRECTORY);
-    let path = directory.join(SOCKET);
-    if !owner_directory(&directory).map_err(|error| error.to_string())?
-        || !socket_exists(&path).map_err(|error| error.to_string())?
-    {
-        return Ok(None);
-    }
-    let stream = UnixStream::connect(&path)
-        .await
-        .map_err(|error| format!("cannot connect to local owner: {error}"))?;
-    check_peer(&stream).map_err(|error| error.to_string())?;
-    Ok(Some(stream))
+pub async fn connect(home: &Path) -> Result<Option<OwnerStream>, String> {
+    local_owner::connect(home).await
 }
 
 pub async fn serve(home: &Path) -> Result<(), String> {
-    fs::create_dir_all(home).map_err(|error| error.to_string())?;
-    let directory = home.join(DIRECTORY);
-    match fs::DirBuilder::new().mode(0o700).create(&directory) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error.to_string()),
-    }
-    if !owner_directory(&directory).map_err(|error| error.to_string())? {
-        return Err("local owner directory is unavailable".into());
-    }
-    let lock = File::options()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(directory.join("owner.lock"))
+    let listener = OwnerListener::bind(home).await?;
+    eprintln!(
+        "Local session owner listening on {}",
+        listener.display_address()
+    );
+
+    #[cfg(unix)]
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|error| error.to_string())?;
-    if !lock
-        .metadata()
-        .map_err(|error| error.to_string())?
-        .is_file()
-    {
-        return Err("invalid local owner lock file".into());
-    }
-    lock.try_lock().map_err(|error| match error {
-        fs::TryLockError::WouldBlock => "local owner is already running for this profile".into(),
-        fs::TryLockError::Error(error) => error.to_string(),
-    })?;
-    let path = directory.join(SOCKET);
-    let mut terminate = signal(SignalKind::terminate()).map_err(|error| error.to_string())?;
     let interrupt = tokio::signal::ctrl_c();
     tokio::pin!(interrupt);
-    if socket_exists(&path).map_err(|error| error.to_string())? {
-        fs::remove_file(&path).map_err(|error| error.to_string())?;
-    }
-    let listener = UnixListener::bind(&path).map_err(|error| error.to_string())?;
-    let socket = OwnerSocket { path, _lock: lock };
-    fs::set_permissions(&socket.path, fs::Permissions::from_mode(0o600))
-        .map_err(|error| error.to_string())?;
-    eprintln!("Local session owner listening on {}", socket.path.display());
-    let mut turns = JoinSet::new();
+
+    let mut connections = JoinSet::new();
     let home = Arc::<Path>::from(home);
+    let hub = TurnHub::new();
+
+    #[cfg(unix)]
     let result = loop {
         tokio::select! {
             result = &mut interrupt => break result.map_err(|error| error.to_string()),
             _ = terminate.recv() => break Ok(()),
-            Some(_) = turns.join_next(), if !turns.is_empty() => {},
+            Some(_) = connections.join_next(), if !connections.is_empty() => {},
             accepted = listener.accept() => match accepted {
-                Ok((stream, _)) if check_peer(&stream).is_ok() => {
+                Ok(stream) => {
                     let home = home.clone();
-                    turns.spawn(async move { let _ = handle(stream, &home).await; });
+                    let hub = hub.clone();
+                    connections.spawn(async move { let _ = handle_connection(stream, home, hub).await; });
                 }
-                Ok(_) => {}
                 Err(error) => break Err(error.to_string()),
             }
         }
     };
+
+    #[cfg(not(unix))]
+    let result = loop {
+        tokio::select! {
+            result = &mut interrupt => break result.map_err(|error| error.to_string()),
+            Some(_) = connections.join_next(), if !connections.is_empty() => {},
+            accepted = listener.accept() => match accepted {
+                Ok(stream) => {
+                    let home = home.clone();
+                    let hub = hub.clone();
+                    connections.spawn(async move { let _ = handle_connection(stream, home, hub).await; });
+                }
+                Err(error) => break Err(error.to_string()),
+            }
+        }
+    };
+
     drop(listener);
-    turns.shutdown().await;
-    drop(socket);
+    connections.shutdown().await;
     result
 }
 
-pub async fn forward(mut stream: UnixStream, request: ChatRequest) -> Result<u8, String> {
+pub async fn forward(mut stream: OwnerStream, request: ChatRequest) -> Result<u8, String> {
     let events_json = request.events_json();
     let start = Start {
-        version: VERSION,
+        version: PROTOCOL_V1,
         request,
     };
     let interrupt = tokio::signal::ctrl_c();
@@ -202,7 +128,7 @@ pub async fn forward(mut stream: UnixStream, request: ChatRequest) -> Result<u8,
         }
     };
     result.map_err(|error| format!("cannot send request to local owner: {error}"))?;
-    let (mut reader, mut writer) = stream.into_split();
+    let (mut reader, mut writer) = tokio::io::split(stream);
     let mut cancelled = None;
     loop {
         let event = {
@@ -217,7 +143,6 @@ pub async fn forward(mut stream: UnixStream, request: ChatRequest) -> Result<u8,
                         signal.map_err(|error| format!("signal handler failed: {error}"))?;
                         let deadline = cancel(&mut writer).await?;
                         cancelled = Some(deadline);
-                        // Keep the same frame future so bytes already read are not lost.
                         read_until_cancelled(deadline, frame).await
                     }
                     frame = &mut frame => frame.map_err(owner_disconnected),
@@ -237,7 +162,7 @@ pub async fn forward(mut stream: UnixStream, request: ChatRequest) -> Result<u8,
                     decision = approval::prompt(request) => decision,
                 };
                 timeout(IO_TIMEOUT, async {
-                    writer.write_u8(APPROVAL_RESPONSE).await?;
+                    writer.write_u8(CONTROL_APPROVAL_RESPONSE).await?;
                     write_frame(&mut writer, &ApprovalResponse { id, decision }).await
                 })
                 .await
@@ -254,7 +179,7 @@ fn owner_disconnected(error: io::Error) -> String {
 }
 
 async fn cancel(writer: &mut (impl AsyncWrite + Unpin)) -> Result<Instant, String> {
-    timeout(IO_TIMEOUT, writer.write_u8(CANCEL))
+    timeout(IO_TIMEOUT, writer.write_u8(CONTROL_CANCEL))
         .await
         .map_err(|_| "local owner did not accept cancellation")?
         .map_err(|error| error.to_string())?;
@@ -277,8 +202,8 @@ async fn read_controls(
 ) -> io::Result<()> {
     loop {
         match reader.read_u8().await? {
-            CANCEL => return Ok(()),
-            APPROVAL_RESPONSE => {
+            CONTROL_CANCEL => return Ok(()),
+            CONTROL_APPROVAL_RESPONSE => {
                 let response: ApprovalResponse = timeout(IO_TIMEOUT, read_frame(reader)).await??;
                 let mut waiting = pending.lock().unwrap();
                 if waiting.as_ref().is_some_and(|(id, _)| *id == response.id) {
@@ -296,18 +221,42 @@ async fn read_controls(
     }
 }
 
-async fn handle(mut stream: UnixStream, home: &Path) -> io::Result<()> {
-    let Start { version, request } = timeout(IO_TIMEOUT, read_frame(&mut stream)).await??;
-    if version != VERSION {
-        write_frame(
-            &mut stream,
-            &Event::Stderr("incompatible local owner protocol".into()),
-        )
-        .await?;
-        return write_frame(&mut stream, &Event::Exit(1)).await;
+async fn handle_connection(
+    mut stream: OwnerStream,
+    home: Arc<Path>,
+    hub: TurnHub,
+) -> io::Result<()> {
+    let first_bytes = timeout(IO_TIMEOUT, read_frame_bytes(&mut stream)).await??;
+    let probe: Value = serde_json::from_slice(&first_bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid local owner frame"))?;
+    let version = probe.get("version").and_then(Value::as_u64).unwrap_or(0) as u32;
+    match version {
+        PROTOCOL_V1 => {
+            let start: Start = serde_json::from_slice(&first_bytes).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid v1 local owner frame")
+            })?;
+            handle_v1(stream, &home, start.request).await
+        }
+        PROTOCOL_V2 => {
+            let env: V2Envelope = serde_json::from_slice(&first_bytes).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid v2 local owner frame")
+            })?;
+            handle_v2(stream, home, hub, env.command).await
+        }
+        _ => {
+            write_frame(
+                &mut stream,
+                &Event::Stderr("incompatible local owner protocol".into()),
+            )
+            .await?;
+            write_frame(&mut stream, &Event::Exit(1)).await
+        }
     }
+}
+
+async fn handle_v1(mut stream: OwnerStream, home: &Path, request: ChatRequest) -> io::Result<()> {
     let events_json = request.events_json();
-    let (mut reader, mut writer) = stream.into_split();
+    let (mut reader, mut writer) = tokio::io::split(&mut stream);
     let (events, mut buffered) = mpsc::unbounded_channel();
     let queued = AtomicUsize::new(0);
     let stalled = Notify::new();
@@ -315,7 +264,6 @@ async fn handle(mut stream: UnixStream, home: &Path) -> io::Result<()> {
         let pending = PendingApproval::default();
         let next_id = AtomicU64::new(1);
         let queue = |event| {
-            // Bound memory by bytes so a burst of small SSE deltas can still be forwarded.
             let bytes = match &event {
                 Event::Stdout(text) | Event::Stderr(text) => text.capacity() + 64,
                 Event::Approval { request, .. } => {
@@ -400,31 +348,200 @@ async fn handle(mut stream: UnixStream, home: &Path) -> io::Result<()> {
     Ok(())
 }
 
-async fn read_frame<T: DeserializeOwned>(reader: &mut (impl AsyncRead + Unpin)) -> io::Result<T> {
-    let length = reader.read_u32().await? as usize;
-    if length == 0 || length > MAX_FRAME {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid local owner frame length",
-        ));
+async fn handle_v2(
+    mut stream: OwnerStream,
+    home: Arc<Path>,
+    hub: TurnHub,
+    command: GuiCommand,
+) -> io::Result<()> {
+    match command {
+        GuiCommand::Ping => {
+            write_frame(
+                &mut stream,
+                &GuiReply::Pong {
+                    profile_home: home.display().to_string(),
+                },
+            )
+            .await
+        }
+        GuiCommand::ListProfiles => {
+            let profiles = discover_profiles(&home);
+            write_frame(&mut stream, &GuiReply::Profiles { profiles }).await
+        }
+        GuiCommand::ListSessions { limit, query } => {
+            let reply = match list_profile_sessions(&home, limit, query.as_deref()) {
+                Ok(sessions) => GuiReply::Sessions { sessions },
+                Err(message) => GuiReply::Error { message },
+            };
+            write_frame(&mut stream, &reply).await
+        }
+        GuiCommand::LoadSession { session_id } => {
+            let reply = match load_profile_transcript(&home, &session_id) {
+                Ok((session, messages)) => {
+                    let active_turn_id = hub.active_turn_for_session(&session.id);
+                    GuiReply::Transcript {
+                        session,
+                        messages,
+                        active_turn_id,
+                    }
+                }
+                Err(message) => GuiReply::Error { message },
+            };
+            write_frame(&mut stream, &reply).await
+        }
+        GuiCommand::ActiveTurns => {
+            let turns = hub.active_turns();
+            write_frame(&mut stream, &GuiReply::ActiveTurns { turns }).await
+        }
+        GuiCommand::StartTurn {
+            session_id,
+            query,
+            model,
+            cwd,
+            yolo,
+        } => {
+            let request = match chat::prepare_gui_turn(
+                &home,
+                session_id.clone(),
+                query.clone(),
+                model,
+                cwd,
+                yolo,
+            ) {
+                Ok(req) => req,
+                Err(message) => {
+                    return write_frame(&mut stream, &GuiReply::Error { message }).await;
+                }
+            };
+            approval::install(request.approvals().clone());
+            let handle = hub.create_turn(session_id, query);
+            let turn_id = handle.turn_id();
+            let home_bg = Arc::clone(&home);
+            tokio::spawn(async move {
+                run_managed_turn(home_bg, request, handle).await;
+            });
+            write_frame(&mut stream, &GuiReply::TurnStarted { turn_id }).await
+        }
+        GuiCommand::SubscribeTurn { turn_id, after_seq } => {
+            let (missed, mut rx, finished) = match hub.subscribe(&turn_id, after_seq) {
+                Ok(sub) => sub,
+                Err(message) => {
+                    return write_frame(&mut stream, &GuiReply::Error { message }).await;
+                }
+            };
+            let mut last_seq = after_seq;
+            for ev in missed {
+                let is_done = matches!(ev.event, TurnStreamEvent::Done { .. });
+                last_seq = ev.seq;
+                write_frame(&mut stream, &GuiReply::TurnEvent(ev)).await?;
+                if is_done {
+                    return Ok(());
+                }
+            }
+            if finished {
+                return Ok(());
+            }
+            loop {
+                match rx.recv().await {
+                    Ok(ev) => {
+                        if ev.seq <= last_seq {
+                            continue;
+                        }
+                        last_seq = ev.seq;
+                        let is_done = matches!(ev.event, TurnStreamEvent::Done { .. });
+                        write_frame(&mut stream, &GuiReply::TurnEvent(ev)).await?;
+                        if is_done {
+                            return Ok(());
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return Ok(()),
+                }
+            }
+        }
+        GuiCommand::CancelTurn { turn_id } => {
+            let reply = match hub.cancel(&turn_id) {
+                Ok(()) => GuiReply::Ack,
+                Err(message) => GuiReply::Error { message },
+            };
+            write_frame(&mut stream, &reply).await
+        }
+        GuiCommand::RespondApproval {
+            turn_id,
+            approval_id,
+            decision,
+        } => {
+            let reply = match hub.respond_approval(&turn_id, approval_id, decision) {
+                Ok(()) => GuiReply::Ack,
+                Err(message) => GuiReply::Error { message },
+            };
+            write_frame(&mut stream, &reply).await
+        }
     }
-    let mut bytes = vec![0; length];
-    reader.read_exact(&mut bytes).await?;
-    serde_json::from_slice(&bytes)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid local owner frame"))
 }
 
-async fn write_frame(
-    writer: &mut (impl AsyncWrite + Unpin),
-    value: &impl Serialize,
-) -> io::Result<()> {
-    let bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
-    if bytes.len() > MAX_FRAME {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "local owner frame is too large",
-        ));
+async fn run_managed_turn(home: Arc<Path>, request: ChatRequest, handle: TurnHandle) {
+    let (emitter, cancel_rx) = handle.split();
+    let emit_event = |event: Event| {
+        match event {
+            Event::Stdout(text) => emitter.emit(TurnStreamEvent::TextDelta { text }),
+            Event::Stderr(text) => match parse_stderr_event(&text) {
+                ParsedStderr::Session(session_id) => {
+                    emitter.emit(TurnStreamEvent::SessionAssigned { session_id })
+                }
+                ParsedStderr::ToolStarted { name, detail } => {
+                    emitter.emit(TurnStreamEvent::ToolStarted { name, detail })
+                }
+                ParsedStderr::ToolFinished {
+                    name,
+                    succeeded,
+                    summary,
+                } => emitter.emit(TurnStreamEvent::ToolFinished {
+                    name,
+                    succeeded,
+                    summary,
+                }),
+                _ => emitter.emit(TurnStreamEvent::Status { text }),
+            },
+            Event::Approval { .. } | Event::Exit(_) => {}
+        }
+        true
+    };
+    let approve = |req| {
+        let rx = emitter.request_approval(req);
+        async move { rx.await.unwrap_or(ApprovalDecision::Unavailable) }
+    };
+
+    let mut cancelled = false;
+    let outcome = tokio::select! {
+        biased;
+        _ = cancel_rx => {
+            cancelled = true;
+            Ok(130)
+        }
+        res = chat::execute(Some(&home), request, &emit_event, approve) => res,
+    };
+
+    if cancelled {
+        hermes_runtime::mcp::flush_cancellations().await;
+        emitter.emit(TurnStreamEvent::Done {
+            exit_code: 130,
+            cancelled: true,
+        });
+        return;
     }
-    writer.write_u32(bytes.len() as u32).await?;
-    writer.write_all(&bytes).await
+
+    match outcome {
+        Ok(exit_code) => emitter.emit(TurnStreamEvent::Done {
+            exit_code,
+            cancelled: false,
+        }),
+        Err(message) => {
+            emitter.emit(TurnStreamEvent::Error { message });
+            emitter.emit(TurnStreamEvent::Done {
+                exit_code: 1,
+                cancelled: false,
+            });
+        }
+    }
 }

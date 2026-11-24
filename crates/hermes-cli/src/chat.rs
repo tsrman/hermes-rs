@@ -1366,6 +1366,10 @@ impl ChatRequest {
         self.browser.cdp_url = url;
     }
 
+    pub fn set_root(&mut self, root: OsString) {
+        self.root = root;
+    }
+
     /// Context window for status-bar display `(tokens, is_fallback)`:
     /// explicit config/provider window → known model table → 128K fallback.
     pub fn display_context_length(&self) -> (u64, bool) {
@@ -1375,10 +1379,48 @@ impl ChatRequest {
         )
     }
 
-    #[cfg(unix)]
     pub fn events_json(&self) -> bool {
         self.events_json
     }
+}
+
+/// Prepare a single turn request originating from a GUI v2 local-owner command.
+pub fn prepare_gui_turn(
+    home: &Path,
+    session_id: Option<String>,
+    query: String,
+    model: Option<String>,
+    cwd: Option<String>,
+    yolo: bool,
+) -> Result<ChatRequest, String> {
+    let args = ChatArgs {
+        query: Some(query),
+        oneshot: false,
+        save_session: session_id.is_none(),
+        resume: session_id,
+        continue_last: false,
+        max_turns: None,
+        base_url: std::env::var("HERMES_BASE_URL")
+            .ok()
+            .filter(|s| !s.trim().is_empty()),
+        model: model.or_else(|| {
+            std::env::var("HERMES_MODEL")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        }),
+        api_key: std::env::var("HERMES_API_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty()),
+        yolo,
+        debug_log: None,
+        events_json: false,
+        ui: Some(UiModeArg::Plain),
+    };
+    let mut request = prepare(Some(home), args)?;
+    if let Some(dir) = cwd.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()) {
+        request.set_root(OsString::from(dir));
+    }
+    Ok(request)
 }
 
 /// Outcome of an explicit `/compress [focus]` command in the REPL.

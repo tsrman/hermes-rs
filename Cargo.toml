@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/hermes-core", "crates/hermes-runtime", "crates/hermes-cli"]
+exclude = ["crates/hermes-gui"]
 resolver = "2"
 
 # The approval detector compiles ~160 patterns on first use and scans every command with them.

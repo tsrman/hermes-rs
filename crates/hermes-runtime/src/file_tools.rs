@@ -24,7 +24,7 @@ const WRITE_LIMIT: usize = 1_048_576;
 pub(crate) const WRITE_FILE: &str = "write_file";
 pub(crate) const PATCH: &str = "patch";
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ApprovalRequest {
     pub target: String,
     pub content: String,
@@ -32,7 +32,7 @@ pub struct ApprovalRequest {
     pub timeout_secs: u32,
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ApprovalAction {
     CreateFile,
     ReplaceFile,
@@ -45,7 +45,7 @@ pub enum ApprovalAction {
     Clarify,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ApprovalDecision {
     Approved,
     Denied,
