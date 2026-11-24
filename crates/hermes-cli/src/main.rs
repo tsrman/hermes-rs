@@ -36,6 +36,11 @@ enum Command {
     Model(setup::ModelArgs),
     /// Diagnose profile directories, config.yaml, credentials, database, and local owner.
     Doctor(setup::DoctorArgs),
+    /// Download, sync, list, or opt-out of bundled Markdown skills in the selected profile.
+    Skills {
+        #[command(subcommand)]
+        command: Option<setup::SkillsCommand>,
+    },
     /// Authenticate with OAuth providers and inspect stored credentials.
     Auth {
         #[command(subcommand)]
@@ -115,6 +120,9 @@ async fn run() -> Result<u8, String> {
         }
         Command::Doctor(args) => {
             setup::run_doctor(home.ok_or("profile root is unavailable")?, args).await
+        }
+        Command::Skills { command } => {
+            setup::run_skills(home.ok_or("profile root is unavailable")?, command).await
         }
         Command::Auth { command } => {
             auth::run(home.ok_or("profile root is unavailable")?, command).await

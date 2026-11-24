@@ -451,7 +451,7 @@ struct ZipEntry {
     local_header_offset: usize,
 }
 
-struct ZipArchive<'a> {
+pub(crate) struct ZipArchive<'a> {
     data: &'a [u8],
     entries: HashMap<String, ZipEntry>,
     order: Vec<String>,
@@ -472,7 +472,7 @@ fn u32_le(slice: &[u8], at: usize) -> Result<u32, String> {
 }
 
 impl<'a> ZipArchive<'a> {
-    fn from_bytes(data: &'a [u8], kind: &str) -> Result<Self, String> {
+    pub(crate) fn from_bytes(data: &'a [u8], kind: &str) -> Result<Self, String> {
         if data.len() < 22 {
             return Err(format!("Not a valid {kind}: truncated ZIP archive"));
         }
@@ -544,11 +544,11 @@ impl<'a> ZipArchive<'a> {
         self.entries.contains_key(name)
     }
 
-    fn entry_names(&self) -> &[String] {
+    pub(crate) fn entry_names(&self) -> &[String] {
         &self.order
     }
 
-    fn read_entry(&self, name: &str) -> Result<Vec<u8>, String> {
+    pub(crate) fn read_entry(&self, name: &str) -> Result<Vec<u8>, String> {
         let entry = self
             .entries
             .get(name)

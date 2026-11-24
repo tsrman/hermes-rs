@@ -4,9 +4,9 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use clap::Args;
+use clap::{Args, Subcommand};
 use hermes_runtime::config::{
     ensure_profile_scaffold, load_chat_settings, set_config_value, set_env_value, ChatSettings,
     PROFILE_DIRECTORIES,
@@ -16,6 +16,7 @@ use hermes_runtime::providers::oauth_login::{
     self, canonical_login_provider, LoginOptions, LoginPrompt,
 };
 use hermes_runtime::providers::profiles;
+use hermes_runtime::skills_sync::{self, SkillsSyncOptions};
 use hermes_runtime::storage::SessionWriter;
 use serde::Serialize;
 
@@ -60,6 +61,48 @@ pub struct SetupArgs {
     /// Print OAuth login URL instead of automatically launching a browser.
     #[arg(long)]
     pub no_browser: bool,
+    /// Skills seeding mode (`download`, `copy`, or `skip`).
+    #[arg(long)]
+    pub skills: Option<String>,
+    /// Custom ZIP archive URL for bundled skills (defaults to official NousResearch/hermes-agent).
+    #[arg(long)]
+    pub skills_url: Option<String>,
+    /// Local directory containing skills to copy into `<profile>/skills/`.
+    #[arg(long)]
+    pub skills_dir: Option<PathBuf>,
+}
+
+#[derive(Subcommand)]
+pub enum SkillsCommand {
+    /// Download or copy bundled skills into `<profile>/skills/` without overwriting local edits.
+    Sync {
+        /// Custom ZIP archive URL (defaults to official NousResearch/hermes-agent main archive).
+        #[arg(long)]
+        url: Option<String>,
+        /// Copy skills from a local directory instead of downloading.
+        #[arg(long)]
+        from_dir: Option<PathBuf>,
+        /// Reinstall deleted bundled skills and overwrite existing bundled skills.
+        #[arg(long)]
+        force: bool,
+    },
+    /// List installed skills in `<profile>/skills/`.
+    List {
+        /// Output machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Opt out of automatic bundled skills seeding (creates `.no-bundled-skills`).
+    OptOut,
+    /// Re-enable bundled skills seeding (removes `.no-bundled-skills`, optionally syncing immediately).
+    OptIn {
+        /// Immediately download/sync bundled skills after opting in.
+        #[arg(long)]
+        sync: bool,
+        /// Custom ZIP archive URL when used with `--sync`.
+        #[arg(long)]
+        url: Option<String>,
+    },
 }
 
 #[derive(Args)]
@@ -431,7 +474,126 @@ pub async fn run_setup(home: &Path, args: SetupArgs) -> Result<u8, String> {
         }
     }
 
-    // 8. Persist config.yaml atomically
+    // 8. Skills seeding (download official bundled skills or copy from sibling profile)
+    let mut skills_summary: Option<String> = None;
+    let existing_skills = skills_sync::list_installed_skills(home);
+    let sibling_skills = skills_sync::detect_sibling_skills_dir(home);
+
+    let skills_action = if let Some(explicit) = args.skills.as_deref() {
+        explicit.trim().to_ascii_lowercase()
+    } else if args.skills_dir.is_some() {
+        "copy".into()
+    } else if args.skills_url.is_some() && !interactive {
+        "download".into()
+    } else if interactive {
+        if skills_sync::is_opted_out(home) {
+            "skip".into()
+        } else if let Some((ref sibling_dir, sibling_count)) = sibling_skills {
+            println!(
+                "\nSkills directory: {} ({} installed)",
+                home.join("skills").display(),
+                existing_skills.len()
+            );
+            println!(
+                "  1. Download official bundled skills from GitHub (NousResearch/hermes-agent)"
+            );
+            println!(
+                "  2. Copy {sibling_count} skills from {}",
+                sibling_dir.display()
+            );
+            println!("  3. Skip for now");
+            let def = if existing_skills.is_empty() { "1" } else { "3" };
+            let pick = prompt_line(&mut reader, "Skills setup [1-3]", def)?;
+            match pick.trim() {
+                "1" | "download" => "download".into(),
+                "2" | "copy" => "copy".into(),
+                _ => "skip".into(),
+            }
+        } else {
+            let prompt = if existing_skills.is_empty() {
+                "Download official bundled skills into skills/ from GitHub?"
+            } else {
+                "Sync missing official bundled skills into skills/ from GitHub?"
+            };
+            if prompt_yes_no(&mut reader, prompt, existing_skills.is_empty())? {
+                "download".into()
+            } else {
+                "skip".into()
+            }
+        }
+    } else {
+        "skip".into()
+    };
+
+    match skills_action.as_str() {
+        "download" => {
+            println!(
+                "Downloading bundled skills into {}...",
+                home.join("skills").display()
+            );
+            match skills_sync::sync_skills(
+                home,
+                SkillsSyncOptions {
+                    url: args.skills_url.clone(),
+                    from_dir: None,
+                    force: false,
+                },
+            )
+            .await
+            {
+                Ok(rep) => {
+                    skills_summary = Some(format!(
+                        "{} installed, {} existing kept ({})",
+                        rep.installed.len(),
+                        rep.skipped_existing.len(),
+                        rep.source
+                    ));
+                }
+                Err(err) => {
+                    eprintln!("Warning: could not download bundled skills ({err}).");
+                    eprintln!("         You can retry later with `hsr skills sync`.");
+                }
+            }
+        }
+        "copy" => {
+            let src = args
+                .skills_dir
+                .clone()
+                .or_else(|| sibling_skills.map(|(dir, _)| dir));
+            if let Some(src_dir) = src {
+                match skills_sync::sync_skills(
+                    home,
+                    SkillsSyncOptions {
+                        url: None,
+                        from_dir: Some(src_dir),
+                        force: false,
+                    },
+                )
+                .await
+                {
+                    Ok(rep) => {
+                        skills_summary = Some(format!(
+                            "{} copied, {} existing kept (from {})",
+                            rep.installed.len(),
+                            rep.skipped_existing.len(),
+                            rep.source
+                        ));
+                    }
+                    Err(err) => {
+                        eprintln!("Warning: could not copy skills ({err}).");
+                    }
+                }
+            }
+        }
+        "skip" | "none" | "" => {}
+        other => {
+            return Err(format!(
+                "invalid --skills mode '{other}' (expected download, copy, or skip)"
+            ));
+        }
+    }
+
+    // 9. Persist config.yaml atomically
     set_config_value(home, "model.provider", &provider)?;
     set_config_value(home, "model.default", &model)?;
     if let Some(ref url) = base_url {
@@ -479,10 +641,103 @@ pub async fn run_setup(home: &Path, args: SetupArgs) -> Result<u8, String> {
     if let Some(var) = web_env_saved {
         println!("  Web env:  saved {var} in .env (0600)");
     }
+    if let Some(ref summary) = skills_summary {
+        println!("  Skills:   {summary}");
+    }
     println!("\nNext steps:");
-    println!("  hsr doctor   # verify configuration & directories");
-    println!("  hsr          # start interactive chat");
+    println!("  hsr doctor        # verify configuration, directories & skills");
+    println!("  hsr skills sync   # download or refresh official bundled skills");
+    println!("  hsr               # start interactive chat");
     Ok(0)
+}
+
+pub async fn run_skills(home: &Path, command: Option<SkillsCommand>) -> Result<u8, String> {
+    match command.unwrap_or(SkillsCommand::List { json: false }) {
+        SkillsCommand::List { json: as_json } => {
+            let skills = skills_sync::list_installed_skills(home);
+            if as_json {
+                let out = serde_json::to_string_pretty(&skills)
+                    .map_err(|e| format!("failed formatting skills JSON: {e}"))?;
+                println!("{out}");
+            } else if skills.is_empty() {
+                println!(
+                    "No skills installed in {}. Run `hsr skills sync` to download official bundled skills.",
+                    home.join("skills").display()
+                );
+            } else {
+                println!(
+                    "Installed skills in {} ({}):",
+                    home.join("skills").display(),
+                    skills.len()
+                );
+                for skill in skills {
+                    println!("  - {skill}");
+                }
+            }
+            Ok(0)
+        }
+        SkillsCommand::Sync {
+            url,
+            from_dir,
+            force,
+        } => {
+            let _ = ensure_profile_scaffold(home)?;
+            let report = skills_sync::sync_skills(
+                home,
+                SkillsSyncOptions {
+                    url,
+                    from_dir,
+                    force,
+                },
+            )
+            .await?;
+            if report.opted_out {
+                println!(
+                    "Bundled skills sync is opted out (.no-bundled-skills). Run `hsr skills opt-in --sync` to re-enable."
+                );
+                return Ok(0);
+            }
+            println!(
+                "Skills synced from {}: {} installed, {} updated, {} kept, {} deleted skipped.",
+                report.source,
+                report.installed.len(),
+                report.updated.len(),
+                report.skipped_existing.len(),
+                report.skipped_deleted.len()
+            );
+            Ok(0)
+        }
+        SkillsCommand::OptOut => {
+            skills_sync::set_opt_out(home, true)?;
+            println!(
+                "Opted out of bundled skills seeding for {}.",
+                home.display()
+            );
+            Ok(0)
+        }
+        SkillsCommand::OptIn { sync, url } => {
+            skills_sync::set_opt_out(home, false)?;
+            println!("Re-enabled bundled skills seeding for {}.", home.display());
+            if sync {
+                let _ = ensure_profile_scaffold(home)?;
+                let report = skills_sync::sync_skills(
+                    home,
+                    SkillsSyncOptions {
+                        url,
+                        from_dir: None,
+                        force: false,
+                    },
+                )
+                .await?;
+                println!(
+                    "Skills synced: {} installed, {} kept.",
+                    report.installed.len(),
+                    report.skipped_existing.len()
+                );
+            }
+            Ok(0)
+        }
+    }
 }
 
 pub async fn run_model(home: &Path, args: ModelArgs) -> Result<u8, String> {
@@ -696,7 +951,31 @@ pub async fn run_doctor(home: &Path, args: DoctorArgs) -> Result<u8, String> {
         }
     }
 
-    // 4. cron/jobs.json
+    // 4. skills/
+    let installed_skills = skills_sync::list_installed_skills(home);
+    if !installed_skills.is_empty() {
+        checks.push(DoctorCheck {
+            name: "skills".into(),
+            status: "ok",
+            detail: format!("{} installed in skills/", installed_skills.len()),
+        });
+    } else if skills_sync::is_opted_out(home) {
+        checks.push(DoctorCheck {
+            name: "skills".into(),
+            status: "info",
+            detail: "bundled skills opted out (.no-bundled-skills)".into(),
+        });
+    } else {
+        checks.push(DoctorCheck {
+            name: "skills".into(),
+            status: "warn",
+            detail:
+                "0 skills installed (run `hsr skills sync` to download official bundled skills)"
+                    .into(),
+        });
+    }
+
+    // 5. cron/jobs.json
     match hermes_runtime::cron::store::read_jobs(home) {
         Ok(jobs) => checks.push(DoctorCheck {
             name: "cron".into(),

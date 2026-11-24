@@ -91,8 +91,9 @@ cargo build --release --locked -p hermes-cli
 # Run the interactive setup wizard (creates all profile directories, starter files, config.yaml, .env, state.db)
 hsr setup
 
-# Or quick-setup via Nous Portal OAuth / switch models / diagnose your profile
+# Or quick-setup via Nous Portal OAuth / download official bundled skills / switch models / diagnose
 hsr setup --portal
+hsr skills sync
 hsr model
 hsr doctor
 

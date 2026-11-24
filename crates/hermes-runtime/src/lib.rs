@@ -47,6 +47,7 @@ mod skill_ledger;
 mod skill_lint;
 mod skill_manage;
 mod skills;
+pub mod skills_sync;
 pub mod stall_guards;
 pub mod storage;
 mod syntax_lint;
