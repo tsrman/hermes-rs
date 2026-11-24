@@ -38,6 +38,7 @@ use tokio::task::JoinHandle;
 
 use crate::approval::{self, Grant};
 use crate::chat::{self, Event as ChatEvent, ManualCompress};
+use crate::ui::clipboard::{self, ClipboardRead};
 use crate::ui::markdown::render_markdown_lines;
 use crate::ui::{
     build_context_bar, format_context_length, format_duration_ms, format_tokens_compact,
@@ -425,6 +426,15 @@ pub async fn run(home: Option<&Path>, state: &mut ReplState) -> Result<UiOutcome
                     Some(TermEvent::Paste(pasted)) if !app.is_busy() && app.modal.is_none() => {
                         app.insert_pasted(&pasted);
                         dirty = true;
+                    }
+                    Some(TermEvent::Paste(pasted)) => {
+                        if let Some(ActiveModal::Clarify { custom, .. }) = &mut app.modal {
+                            let inline = pasted
+                                .replace("\r\n", " ")
+                                .replace(['\r', '\n'], " ");
+                            custom.push_str(&inline);
+                            dirty = true;
+                        }
                     }
                     Some(TermEvent::Resize(_, _)) => {
                         dirty = true;
@@ -895,6 +905,13 @@ async fn handle_key_event(
             app.cursor = app.input.len();
         }
         (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => app.delete_word_back(),
+        _ if is_paste_key(key) => match clipboard::read_text() {
+            ClipboardRead::Text(text) => app.insert_pasted(&text),
+            ClipboardRead::Empty => {}
+            ClipboardRead::Unavailable(msg) => {
+                TuiApp::push_notice(state, NoticeKind::Warn, msg);
+            }
+        },
         (KeyCode::Up, _) if app.history_pos.is_none() && app.input[..app.cursor].contains('\n') => {
             app.move_line_up();
         }
@@ -933,6 +950,23 @@ async fn handle_key_event(
         _ => {}
     }
     None
+}
+
+/// True for key combinations that explicitly request clipboard paste when the
+/// terminal emulator forwards the keypress directly instead of bracketed paste.
+/// Covers `Ctrl+V`, `Ctrl+Shift+V`, Russian-layout `Ctrl+М`, macOS `Cmd+V`, and `Shift+Insert`.
+fn is_paste_key(key: KeyEvent) -> bool {
+    let m = key.modifiers;
+    if m.contains(KeyModifiers::ALT) {
+        return false;
+    }
+    match key.code {
+        KeyCode::Char('v' | 'V' | 'м' | 'М') => {
+            m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::SUPER)
+        }
+        KeyCode::Insert => m.contains(KeyModifiers::SHIFT),
+        _ => false,
+    }
 }
 
 /// Handle mouse wheel scrolling in the conversation feed and scrollable modals.
@@ -1113,6 +1147,13 @@ fn handle_modal_key(app: &mut TuiApp, state: &mut ReplState, home: Option<&Path>
                 }
                 KeyCode::Backspace => {
                     custom.pop();
+                    app.modal = Some(modal);
+                }
+                _ if is_paste_key(key) => {
+                    if let ClipboardRead::Text(text) = clipboard::read_text() {
+                        let inline = text.replace("\r\n", " ").replace(['\r', '\n'], " ");
+                        custom.push_str(&inline);
+                    }
                     app.modal = Some(modal);
                 }
                 KeyCode::Enter => {
@@ -2911,5 +2952,117 @@ mod tests {
             rendered.contains("↳ 1 failed"),
             "missing indented failure detail line:\n{rendered}"
         );
+    }
+
+    #[tokio::test]
+    async fn ctrl_v_russian_layout_and_shift_insert_paste_from_clipboard() {
+        let mut state = sample_state();
+        let mut app = TuiApp::new();
+        let mut handle = None;
+        let mut rx = None;
+
+        // Ctrl+V inserts multiline clipboard text normalized to `\n`.
+        {
+            let _clip =
+                clipboard::override_for_test(ClipboardRead::Text("line1\r\nline2".to_owned()));
+            handle_key_event(
+                &mut app,
+                &mut state,
+                None,
+                KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+                &mut handle,
+                &mut rx,
+            )
+            .await;
+            assert_eq!(app.input, "line1\nline2");
+            assert_eq!(app.cursor, app.input.len());
+        }
+
+        // Russian keyboard layout Ctrl+М also pastes.
+        {
+            let _clip = clipboard::override_for_test(ClipboardRead::Text(" привет".to_owned()));
+            handle_key_event(
+                &mut app,
+                &mut state,
+                None,
+                KeyEvent::new(KeyCode::Char('м'), KeyModifiers::CONTROL),
+                &mut handle,
+                &mut rx,
+            )
+            .await;
+            assert_eq!(app.input, "line1\nline2 привет");
+        }
+
+        // Shift+Insert pastes as well.
+        {
+            let _clip = clipboard::override_for_test(ClipboardRead::Text("!".to_owned()));
+            handle_key_event(
+                &mut app,
+                &mut state,
+                None,
+                KeyEvent::new(KeyCode::Insert, KeyModifiers::SHIFT),
+                &mut handle,
+                &mut rx,
+            )
+            .await;
+            assert_eq!(app.input, "line1\nline2 привет!");
+        }
+
+        // Unavailable clipboard reports a warning notice without modifying input.
+        {
+            let _clip = clipboard::override_for_test(ClipboardRead::Unavailable(
+                "Clipboard unavailable".to_owned(),
+            ));
+            handle_key_event(
+                &mut app,
+                &mut state,
+                None,
+                KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+                &mut handle,
+                &mut rx,
+            )
+            .await;
+            assert_eq!(app.input, "line1\nline2 привет!");
+            assert!(state.feed_entries.iter().any(|e| matches!(
+                e,
+                FeedEntry::Notice {
+                    kind: NoticeKind::Warn,
+                    text
+                } if text.contains("Clipboard unavailable")
+            )));
+        }
+
+        // Ctrl+V inside Clarify modal appends single-line text into custom input.
+        {
+            let (tx, _rx_reply) = oneshot::channel();
+            app.modal = Some(ActiveModal::Clarify {
+                questions: vec![ClarifyQuestion {
+                    qid: "q1".into(),
+                    prompt: "Details?".into(),
+                    choices: vec![],
+                    multi_select: false,
+                }],
+                current: 0,
+                cursor: 0,
+                selected: BTreeSet::new(),
+                custom: String::new(),
+                answers: Map::new(),
+                reply: Some(tx),
+            });
+            let _clip = clipboard::override_for_test(ClipboardRead::Text("foo\r\nbar".to_owned()));
+            handle_key_event(
+                &mut app,
+                &mut state,
+                None,
+                KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+                &mut handle,
+                &mut rx,
+            )
+            .await;
+            match &app.modal {
+                Some(ActiveModal::Clarify { custom, .. }) => assert_eq!(custom, "foo bar"),
+                _ => panic!("expected Clarify modal to stay open"),
+            }
+        }
     }
 }

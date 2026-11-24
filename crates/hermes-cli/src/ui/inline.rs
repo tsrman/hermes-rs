@@ -20,7 +20,10 @@ use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::history::FileHistory;
 use rustyline::validate::Validator;
-use rustyline::{Config, Context, Editor, Helper};
+use rustyline::{
+    Cmd, ConditionalEventHandler, Config, Context, Editor, Event as ReadlineEvent, EventContext,
+    EventHandler, Helper, KeyEvent as ReadlineKeyEvent, RepeatCount,
+};
 use tokio::task::spawn_blocking;
 
 use crate::approval;
@@ -180,9 +183,37 @@ enum Input {
     End,
 }
 
+struct ClipboardPasteHandler;
+
+impl ConditionalEventHandler for ClipboardPasteHandler {
+    fn handle(
+        &self,
+        _evt: &ReadlineEvent,
+        _n: RepeatCount,
+        _positive: bool,
+        _ctx: &EventContext<'_>,
+    ) -> Option<Cmd> {
+        match crate::ui::clipboard::read_text() {
+            crate::ui::clipboard::ClipboardRead::Text(text) => {
+                let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+                Some(Cmd::Insert(1, normalized))
+            }
+            _ => Some(Cmd::Noop),
+        }
+    }
+}
+
+fn bind_clipboard_paste(editor: &mut Lines) {
+    editor.bind_sequence(
+        ReadlineKeyEvent::ctrl('v'),
+        EventHandler::Conditional(Box::new(ClipboardPasteHandler)),
+    );
+}
+
 fn placeholder(styled: bool) -> Lines {
     let mut ed = Editor::with_config(Config::default()).expect("a line editor can be created");
     ed.set_helper(Some(SlashHelper::new(styled)));
+    bind_clipboard_paste(&mut ed);
     ed
 }
 
@@ -342,6 +373,7 @@ pub async fn run(
     )
     .map_err(|error| error.to_string())?;
     editor.set_helper(Some(SlashHelper::new(styled)));
+    bind_clipboard_paste(&mut editor);
 
     for entry in &state.prompt_history {
         let _ = editor.add_history_entry(entry.as_str());

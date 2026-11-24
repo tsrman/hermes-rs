@@ -1,6 +1,7 @@
 //! Interactive console UI layer: enhanced inline streaming REPL, fullscreen `ratatui` TUI,
 //! and automatic plain-text fallback for pipes, `-q`, `--events-json`, `TERM=dumb`, and `NO_COLOR`.
 
+pub mod clipboard;
 pub mod inline;
 pub mod markdown;
 pub mod tui;
