@@ -15,6 +15,7 @@ pub struct OpenAiProvider {
     max_attempts: u32,
     extras: super::Extras,
     strip_tool_message_names: bool,
+    streaming: bool,
 }
 
 impl OpenAiProvider {
@@ -26,12 +27,19 @@ impl OpenAiProvider {
             max_attempts: 3,
             extras: super::Extras::default(),
             strip_tool_message_names: false,
+            streaming: true,
         })
     }
 
     /// Strip `name` and `tool_name` from `role: "tool"` messages (NVIDIA NIM strict schema).
     pub fn with_strip_tool_message_names(mut self, enabled: bool) -> Self {
         self.strip_tool_message_names = enabled;
+        self
+    }
+
+    /// Use SSE streaming (`true`, default) or non-streaming JSON response (`false`).
+    pub fn with_streaming(mut self, enabled: bool) -> Self {
+        self.streaming = enabled;
         self
     }
 
@@ -109,6 +117,16 @@ impl OpenAiProvider {
         }
         if with_extra_body {
             self.extras.merge_body(&mut request);
+        }
+        if !self.streaming {
+            request.insert("stream".into(), Value::Bool(false));
+            request.remove("stream_options");
+            let response = self.open_stream(&request).await?;
+            let payload: Value = response
+                .json()
+                .await
+                .map_err(|_| ProviderError::InvalidEvent)?;
+            return parse_non_streaming_completion(&payload, on_text);
         }
         request.insert("stream".into(), Value::Bool(true));
         request
@@ -200,6 +218,76 @@ impl OpenAiProvider {
         completion.tool_calls = calls.into_values().collect();
         Ok(completion)
     }
+}
+
+fn parse_non_streaming_completion<F>(
+    payload: &Value,
+    mut on_text: F,
+) -> Result<Completion, ProviderError>
+where
+    F: FnMut(&str),
+{
+    let mut completion = Completion::default();
+    if let Some(usage) = payload.get("usage").filter(|u| u.is_object()) {
+        let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+        completion.usage = Some(super::Usage {
+            input_tokens: count("prompt_tokens"),
+            output_tokens: count("completion_tokens"),
+        });
+    }
+    let choices = payload
+        .get("choices")
+        .and_then(Value::as_array)
+        .ok_or(ProviderError::InvalidEvent)?;
+    let choice = choices
+        .iter()
+        .find(|c| c.get("index").and_then(Value::as_u64).unwrap_or(0) == 0)
+        .or_else(|| choices.first())
+        .ok_or(ProviderError::InvalidEvent)?;
+    completion.finish_reason = Some(
+        choice
+            .get("finish_reason")
+            .and_then(Value::as_str)
+            .unwrap_or("stop")
+            .to_owned(),
+    );
+    let message = choice
+        .get("message")
+        .and_then(Value::as_object)
+        .ok_or(ProviderError::InvalidEvent)?;
+    if let Some(text) = message.get("content").and_then(Value::as_str) {
+        if !text.is_empty() {
+            on_text(text);
+            completion.content.push_str(text);
+        }
+    }
+    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+        for tool in tool_calls {
+            let id = tool
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .ok_or(ProviderError::InvalidEvent)?
+                .to_owned();
+            let name = tool
+                .pointer("/function/name")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .ok_or(ProviderError::InvalidEvent)?
+                .to_owned();
+            let arguments = tool
+                .pointer("/function/arguments")
+                .and_then(Value::as_str)
+                .unwrap_or("{}")
+                .to_owned();
+            completion.tool_calls.push(ToolCall {
+                id,
+                name,
+                arguments,
+            });
+        }
+    }
+    Ok(completion)
 }
 
 /// POST a streaming request with retry on transient failures.

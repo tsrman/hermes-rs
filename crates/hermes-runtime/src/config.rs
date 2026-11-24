@@ -94,6 +94,9 @@ impl UiModeSetting {
 pub struct ChatSettings {
     /// Interactive console UI mode (`ui.mode` / `HERMES_UI`).
     pub ui_mode: UiModeSetting,
+    /// Whether OpenAI Chat Completions requests use SSE streaming (`display.streaming`, fallback
+    /// `streaming.enabled`; default `true`).
+    pub streaming: bool,
     /// `security.redact_phone_numbers: false`: the assistant's reply keeps its phone numbers.
     pub keep_phone_numbers: bool,
     /// `agent.stall_guards` (default `true`): identical-call loop notices/stubbing and
@@ -226,6 +229,7 @@ impl Default for ChatSettings {
     fn default() -> Self {
         Self {
             ui_mode: UiModeSetting::Auto,
+            streaming: true,
             model: None,
             provider: "custom",
             responses: false,
@@ -648,6 +652,21 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     }
     settings.secrets = secrets.clone();
     settings.ui_mode = UiModeSetting::from_config(&config, &secrets);
+    settings.streaming = config
+        .get("display")
+        .and_then(|d| d.get("streaming"))
+        .filter(|v| !v.is_null())
+        .or_else(|| {
+            config
+                .get("streaming")
+                .and_then(|s| s.get("enabled"))
+                .filter(|v| !v.is_null())
+        })
+        .is_none_or(|v| truthy(v, true));
+    let ephemeral_env = std::env::var("HERMES_EPHEMERAL_SYSTEM_PROMPT")
+        .ok()
+        .or_else(|| secrets.get("HERMES_EPHEMERAL_SYSTEM_PROMPT").cloned());
+    settings.prompt = PromptSettings::from_config_with_env(&config, ephemeral_env.as_deref());
     let policy = std::env::var("HERMES_REDACT_SECRETS")
         .ok()
         .or_else(|| secrets.get("HERMES_REDACT_SECRETS").cloned())
@@ -760,7 +779,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.terminal_env = crate::terminal::TerminalSettings::from_config(&config);
     settings.approvals =
         crate::approval_policy::ApprovalSettings::from_config(&config).with_profile_dir(home);
-    settings.delegation = crate::delegation::DelegationSettings::from_config(&config);
+    settings.delegation = crate::delegation::DelegationSettings::from_config(&config, &secrets);
     settings.terminal_local = match &config["terminal"]["backend"] {
         serde_yaml::Value::Null => terminal_env.as_deref().map_or_else(
             || {

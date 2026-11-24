@@ -46,6 +46,9 @@ pub struct DelegationSettings {
     pub max_iterations: u32,
     /// Approve what the rules leave open instead of refusing it.
     pub subagent_auto_approve: bool,
+    /// Per-child timeout in seconds (`delegation.child_timeout_seconds`, floor 30s; `None` = no cap).
+    #[serde(default)]
+    pub child_timeout_seconds: Option<f64>,
 }
 
 impl Default for DelegationSettings {
@@ -55,12 +58,31 @@ impl Default for DelegationSettings {
             oneshot_max_children: 2,
             max_iterations: 250,
             subagent_auto_approve: false,
+            child_timeout_seconds: None,
         }
     }
 }
 
+/// Parse `delegation.child_timeout_seconds` matching `delegate_tool_config.py::_parse_timeout`:
+/// `<= 0` disables (`None`), positive values are floored at 30.0s.
+pub fn parse_child_timeout_seconds(raw: &serde_yaml::Value) -> Option<f64> {
+    let parsed = match raw {
+        serde_yaml::Value::Number(n) => n.as_f64(),
+        serde_yaml::Value::String(s) => s.trim().parse::<f64>().ok(),
+        _ => None,
+    }?;
+    if !parsed.is_finite() || parsed <= 0.0 {
+        None
+    } else {
+        Some(parsed.max(30.0))
+    }
+}
+
 impl DelegationSettings {
-    pub(crate) fn from_config(config: &serde_yaml::Value) -> Self {
+    pub(crate) fn from_config(
+        config: &serde_yaml::Value,
+        secrets: &std::collections::HashMap<String, String>,
+    ) -> Self {
         let section = &config["delegation"];
         let number = |key: &str| {
             let value = &section[key];
@@ -69,6 +91,13 @@ impl DelegationSettings {
                 .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
         };
         let defaults = Self::default();
+        let child_timeout_seconds = match section.get("child_timeout_seconds") {
+            Some(v) if !v.is_null() => parse_child_timeout_seconds(v),
+            _ => std::env::var("DELEGATION_CHILD_TIMEOUT_SECONDS")
+                .ok()
+                .or_else(|| secrets.get("DELEGATION_CHILD_TIMEOUT_SECONDS").cloned())
+                .and_then(|raw| parse_child_timeout_seconds(&serde_yaml::Value::String(raw))),
+        };
         Self {
             max_concurrent_children: number("max_concurrent_children")
                 .map_or(defaults.max_concurrent_children, |n| n.max(1) as usize),
@@ -87,6 +116,7 @@ impl DelegationSettings {
                     )
                 },
             ),
+            child_timeout_seconds,
         }
     }
 }
@@ -426,6 +456,30 @@ struct Family<'a> {
 }
 
 async fn run_child(index: usize, task: &Task, family: &Family<'_>) -> ChildRun {
+    let inner = run_child_inner(index, task, family);
+    match family.delegation.settings.child_timeout_seconds {
+        Some(secs) if secs > 0.0 => {
+            match tokio::time::timeout(Duration::from_secs_f64(secs), inner).await {
+                Ok(run) => run,
+                Err(_) => ChildRun {
+                    status: "timeout",
+                    exit_reason: "timeout",
+                    summary: String::new(),
+                    error: Some(format!(
+                        "Subagent timed out after {secs:.0}s without finishing. Raise delegation.child_timeout_seconds in config.yaml if these tasks legitimately take longer."
+                    )),
+                    api_calls: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    trace: Vec::new(),
+                },
+            }
+        }
+        _ => inner.await,
+    }
+}
+
+async fn run_child_inner(index: usize, task: &Task, family: &Family<'_>) -> ChildRun {
     let Family {
         options: parent,
         delegation,
@@ -443,6 +497,7 @@ async fn run_child(index: usize, task: &Task, family: &Family<'_>) -> ChildRun {
         max_turns: delegation.settings.max_iterations,
         tools: &policy,
         system_prompt_override: Some(&prompt),
+        ephemeral_system_prompt: None,
         state_scope: None,
         prefill: None,
         child: Some(index),
@@ -810,7 +865,7 @@ mod tests {
             "delegation: {max_concurrent_children: 4, oneshot_max_children: 0, max_iterations: 30, subagent_auto_approve: true}",
         )
         .unwrap();
-        let settings = DelegationSettings::from_config(&config);
+        let settings = DelegationSettings::from_config(&config, &std::collections::HashMap::new());
         assert_eq!(
             (
                 settings.max_concurrent_children,
@@ -820,7 +875,10 @@ mod tests {
             ),
             (4, 0, 30, true)
         );
-        let default = DelegationSettings::from_config(&serde_yaml::Value::Null);
+        let default = DelegationSettings::from_config(
+            &serde_yaml::Value::Null,
+            &std::collections::HashMap::new(),
+        );
         assert_eq!(
             (
                 default.max_concurrent_children,

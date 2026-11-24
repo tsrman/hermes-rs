@@ -448,6 +448,14 @@ impl ModelRoute {
     }
 }
 
+fn apply_ephemeral_prompt(base: &str, ephemeral: Option<&str>) -> String {
+    match ephemeral.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(extra) if base.is_empty() => extra.to_owned(),
+        Some(extra) => format!("{base}\n\n{extra}"),
+        None => base.to_owned(),
+    }
+}
+
 pub enum TurnEvent<'a> {
     Text(&'a str),
     Fallback(&'a str),
@@ -510,6 +518,9 @@ pub struct TurnOptions<'a> {
     pub delegation: Option<&'a crate::delegation::Delegation>,
     /// A subagent's own system prompt, used as is.
     pub system_prompt_override: Option<&'a str>,
+    /// Ephemeral system prompt overlay (`display.personality` / `agent.system_prompt`),
+    /// appended at API-call time only and never baked into the saved session prompt snapshot.
+    pub ephemeral_system_prompt: Option<&'a str>,
     /// The index of the subagent this turn is, when it is one.
     pub child: Option<usize>,
     /// Messages sent after the system prompt on every request (`prefill_messages_file`).
@@ -561,11 +572,18 @@ where
         Some(prompt) => prompt.to_owned(),
         None => primary.system_prompt(saved_prompt),
     };
+    let wire_prompt = |base: &str| match options.system_prompt_override {
+        Some(_) => base.to_owned(),
+        None => apply_ephemeral_prompt(base, options.ephemeral_system_prompt),
+    };
     let (mut messages, original) = match &history.compaction {
         Some(compaction) => (compaction.replay(&history.messages), Some(history.messages)),
         None => (history.messages, None),
     };
-    messages.insert(0, json!({"role": "system", "content": system_prompt}));
+    messages.insert(
+        0,
+        json!({"role": "system", "content": wire_prompt(&system_prompt)}),
+    );
     let first_new_message = messages.len();
     messages.push(json!({"role": "user", "content": query}));
     // What each request carries. It starts as the conversation and differs from it only after a
@@ -701,7 +719,7 @@ where
                     if options.system_prompt_override.is_none() {
                         system_prompt = route.system_prompt(saved_prompt);
                     }
-                    messages[0] = json!({"role": "system", "content": system_prompt});
+                    messages[0] = json!({"role": "system", "content": wire_prompt(&system_prompt)});
                     sent[0] = messages[0].clone();
                     on_event(TurnEvent::Fallback(&route.model));
                 }

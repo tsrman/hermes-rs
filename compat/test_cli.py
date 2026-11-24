@@ -2098,6 +2098,45 @@ class CliTest(unittest.TestCase):
         )
         self.assertIn("Complete after fragment", result.stdout)
 
+    def test_display_personality_and_non_streaming_mode_work_end_to_end(self):
+        result, requests = self.chat_with_profile(
+            extra_config="display:\n  personality: kawaii\n  streaming: false\n",
+            args=("--save-session",),
+            query="read the fixture",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "Ответ модели\n")
+        self.assertEqual(len(requests), 2)
+        for req in requests:
+            self.assertIs(req.get("stream"), False)
+            self.assertNotIn("stream_options", req)
+            sys_prompt = req["messages"][0]["content"]
+            self.assertIn("kawaii assistant", sys_prompt)
+            self.assertIn("(◕‿◕)", sys_prompt)
+
+        # Saved SQLite system_prompt must NOT bake in the ephemeral personality.
+        session = result.stderr.splitlines()[-1].removeprefix("Session: ")
+        db_path = self.workdir / "hermes" / "state.db"
+        with sqlite3.connect(db_path) as db:
+            saved_prompt = db.execute(
+                "SELECT system_prompt FROM sessions WHERE id = ?", (session,)
+            ).fetchone()[0]
+        self.assertNotIn("kawaii assistant", saved_prompt)
+        self.assertNotIn("(◕‿◕)", saved_prompt)
+
+        # Resuming the same session with a different personality swaps only the wire overlay.
+        resumed, all_requests = self.chat_with_profile(
+            extra_config="display:\n  personality: pirate\n  streaming: false\n",
+            args=("--resume", session),
+            query="continue",
+        )
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        resumed_reqs = all_requests[len(requests):]
+        self.assertGreaterEqual(len(resumed_reqs), 1)
+        resumed_sys = resumed_reqs[0]["messages"][0]["content"]
+        self.assertIn("Captain Hermes", resumed_sys)
+        self.assertNotIn("kawaii assistant", resumed_sys)
+
 
 if __name__ == "__main__":
     unittest.main()

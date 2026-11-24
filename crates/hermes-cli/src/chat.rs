@@ -140,6 +140,7 @@ fn side_route(
         bedrock_guardrail: (provider == "bedrock")
             .then(|| settings.bedrock.guardrail_config())
             .flatten(),
+        streaming: settings.streaming,
     }))
 }
 
@@ -352,6 +353,10 @@ fn default_mcp_result_size_chars() -> usize {
     hermes_runtime::mcp_media::DEFAULT_MCP_RESULT_SIZE_CHARS
 }
 
+fn default_streaming() -> bool {
+    true
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 struct Route {
     model: Option<String>,
@@ -374,6 +379,8 @@ struct Route {
     bedrock_auth: Option<hermes_runtime::providers::bedrock::AwsAuth>,
     #[serde(default)]
     bedrock_guardrail: Option<serde_json::Value>,
+    #[serde(default = "default_streaming")]
+    streaming: bool,
 }
 
 impl Route {
@@ -481,6 +488,7 @@ impl Route {
                 OpenAiProvider::new(&self.base_url, &self.api_key, timeout)
                     .map_err(setup)?
                     .with_strip_tool_message_names(provider_name == "nvidia")
+                    .with_streaming(self.streaming)
                     .with_extras(self.extras.clone())
                     .with_max_attempts(attempts),
             )
@@ -780,6 +788,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
             bedrock_region,
             bedrock_auth,
             bedrock_guardrail,
+            streaming: settings.streaming,
         },
         fallbacks: settings
             .fallbacks
@@ -798,6 +807,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
                 bedrock_region: None,
                 bedrock_auth: None,
                 bedrock_guardrail: None,
+                streaming: settings.streaming,
             })
             .collect(),
         web: settings.web,
@@ -916,6 +926,7 @@ where
         journal: journal.as_ref(),
         delegation: Some(&delegation),
         system_prompt_override: None,
+        ephemeral_system_prompt: request.prompt.ephemeral_system_prompt.as_deref(),
         child: None,
         prefill: (!request.prefill.is_empty()).then_some(request.prefill.as_slice()),
         state_scope: request.state_scope.as_deref(),
@@ -1303,6 +1314,7 @@ pub async fn compress_session(
         journal: None,
         delegation: None,
         system_prompt_override: None,
+        ephemeral_system_prompt: request.prompt.ephemeral_system_prompt.as_deref(),
         child: None,
         prefill: None,
         state_scope: request.state_scope.as_deref(),

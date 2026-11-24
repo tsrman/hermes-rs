@@ -43,6 +43,8 @@ pub struct BedrockSettings {
     pub region: Option<String>,
     pub guardrail_id: Option<String>,
     pub guardrail_version: Option<String>,
+    pub stream_processing_mode: Option<String>,
+    pub trace: Option<String>,
 }
 
 impl BedrockSettings {
@@ -58,20 +60,31 @@ impl BedrockSettings {
         let guardrail = section.and_then(|s| s.get("guardrail"));
         Self {
             region: get_str(section, "region"),
-            guardrail_id: get_str(guardrail, "id")
+            guardrail_id: get_str(guardrail, "guardrail_identifier")
+                .or_else(|| get_str(guardrail, "id"))
                 .or_else(|| get_str(guardrail, "guardrailIdentifier")),
-            guardrail_version: get_str(guardrail, "version")
+            guardrail_version: get_str(guardrail, "guardrail_version")
+                .or_else(|| get_str(guardrail, "version"))
                 .or_else(|| get_str(guardrail, "guardrailVersion")),
+            stream_processing_mode: get_str(guardrail, "stream_processing_mode")
+                .or_else(|| get_str(guardrail, "streamProcessingMode")),
+            trace: get_str(guardrail, "trace"),
         }
     }
 
     pub fn guardrail_config(&self) -> Option<Value> {
         let id = self.guardrail_id.as_deref()?;
         let version = self.guardrail_version.as_deref().unwrap_or("DRAFT");
-        Some(json!({
-            "guardrailIdentifier": id,
-            "guardrailVersion": version,
-        }))
+        let mut obj = Map::new();
+        obj.insert("guardrailIdentifier".into(), json!(id));
+        obj.insert("guardrailVersion".into(), json!(version));
+        if let Some(mode) = self.stream_processing_mode.as_deref() {
+            obj.insert("streamProcessingMode".into(), json!(mode));
+        }
+        if let Some(trace) = self.trace.as_deref() {
+            obj.insert("trace".into(), json!(trace));
+        }
+        Some(Value::Object(obj))
     }
 }
 

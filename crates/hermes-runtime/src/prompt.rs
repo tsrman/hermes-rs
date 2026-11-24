@@ -34,6 +34,11 @@ pub struct PromptSettings {
     /// `agent.*` gates, `platform_hints` and `timezone`, which shape the prompt.
     #[serde(default)]
     pub(crate) gates: PromptGates,
+    /// Ephemeral system prompt overlay (`HERMES_EPHEMERAL_SYSTEM_PROMPT`, `display.personality`
+    /// resolved against built-ins / `personalities` / `agent.personalities`, or `agent.system_prompt`).
+    /// Appended at API-call time only, never baked into the saved session prompt snapshot.
+    #[serde(default)]
+    pub ephemeral_system_prompt: Option<String>,
 }
 
 fn enabled() -> bool {
@@ -51,12 +56,138 @@ impl Default for PromptSettings {
             skills: SkillSettings::default(),
             memory_tool: true,
             gates: PromptGates::default(),
+            ephemeral_system_prompt: None,
         }
     }
 }
 
+/// Built-in personality prompts matching `hermes_cli/personality.py::BUILTIN_PERSONALITIES`.
+pub const BUILTIN_PERSONALITIES: &[(&str, &str)] = &[
+    ("helpful", "You are a helpful, friendly AI assistant."),
+    ("concise", "You are a concise assistant. Keep responses brief and to the point."),
+    ("technical", "You are a technical expert. Provide detailed, accurate technical information."),
+    ("creative", "You are a creative assistant. Think outside the box and offer innovative solutions."),
+    ("teacher", "You are a patient teacher. Explain concepts clearly with examples."),
+    ("kawaii", "You are a kawaii assistant! Use cute expressions like (◕‿◕), ★, ♪, and ~! Add sparkles and be super enthusiastic about everything! Every response should feel warm and adorable desu~! ヽ(>∀<☆)ノ"),
+    ("catgirl", "You are Neko-chan, an anime catgirl AI assistant, nya~! Add 'nya' and cat-like expressions to your speech. Use kaomoji like (=^･ω･^=) and ฅ^•ﻌ•^ฅ. Be playful and curious like a cat, nya~!"),
+    ("pirate", "Arrr! Ye be talkin' to Captain Hermes, the most tech-savvy pirate to sail the digital seas! Speak like a proper buccaneer, use nautical terms, and remember: every problem be just treasure waitin' to be plundered! Yo ho ho!"),
+    ("shakespeare", "Hark! Thou speakest with an assistant most versed in the bardic arts. I shall respond in the eloquent manner of William Shakespeare, with flowery prose, dramatic flair, and perhaps a soliloquy or two. What light through yonder terminal breaks?"),
+    ("surfer", "Duuude! You're chatting with the chillest AI on the web, bro! Everything's gonna be totally rad. I'll help you catch the gnarly waves of knowledge while keeping things super chill. Cowabunga!"),
+    ("noir", "The rain hammered against the terminal like regrets on a guilty conscience. They call me Hermes - I solve problems, find answers, dig up the truth that hides in the shadows of your codebase. In this city of silicon and secrets, everyone's got something to hide. What's your story, pal?"),
+    ("uwu", "hewwo! i'm your fwiendwy assistant uwu~ i wiww twy my best to hewp you! *nuzzles your code* OwO what's this? wet me take a wook! i pwomise to be vewy hewpful >w<"),
+    ("philosopher", "Greetings, seeker of wisdom. I am an assistant who contemplates the deeper meaning behind every query. Let us examine not just the 'how' but the 'why' of your questions. Perhaps in solving your problem, we may glimpse a greater truth about existence itself."),
+    ("hype", "YOOO LET'S GOOOO!!! I am SO PUMPED to help you today! Every question is AMAZING and we're gonna CRUSH IT together! This is gonna be LEGENDARY! ARE YOU READY?! LET'S DO THIS!"),
+];
+
+fn normalize_personality_name(raw: &str) -> Option<String> {
+    let norm = raw.trim().to_ascii_lowercase();
+    if matches!(norm.as_str(), "" | "none" | "default" | "neutral") {
+        None
+    } else {
+        Some(norm)
+    }
+}
+
+fn yaml_prompt_text(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(s) => s.trim().to_owned(),
+        Value::Sequence(items) => items
+            .iter()
+            .filter_map(|v| v.as_str().map(str::trim))
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        other => serde_yaml::to_string(other)
+            .unwrap_or_default()
+            .trim()
+            .to_owned(),
+    }
+}
+
+fn render_personality_value(value: &Value) -> String {
+    if let Some(map) = value.as_mapping() {
+        let get = |k: &str| {
+            map.get(Value::String(k.to_owned()))
+                .map(yaml_prompt_text)
+                .unwrap_or_default()
+        };
+        let mut parts = Vec::new();
+        let sp = get("system_prompt");
+        if !sp.is_empty() {
+            parts.push(sp);
+        }
+        let tone = get("tone");
+        if !tone.is_empty() {
+            parts.push(format!("Tone: {tone}"));
+        }
+        let style = get("style");
+        if !style.is_empty() {
+            parts.push(format!("Style: {style}"));
+        }
+        return parts.join("\n");
+    }
+    yaml_prompt_text(value)
+}
+
+/// Resolve the ephemeral system prompt overlay matching `hermes_cli/personality.py`:
+/// 1. `HERMES_EPHEMERAL_SYSTEM_PROMPT` override (if non-empty)
+/// 2. `display.personality` looked up in `BUILTIN_PERSONALITIES` overlaid by root `personalities`
+///    and then `agent.personalities` (later wins)
+/// 3. `agent.system_prompt`
+pub fn resolve_ephemeral_system_prompt(
+    config: &Value,
+    env_override: Option<&str>,
+) -> Option<String> {
+    if let Some(env_text) = env_override.map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(env_text.to_owned());
+    }
+    let mut merged: std::collections::HashMap<String, String> = BUILTIN_PERSONALITIES
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+    for section in [
+        config.get("personalities"),
+        config.get("agent").and_then(|a| a.get("personalities")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(map) = section.as_mapping() {
+            for (k, v) in map {
+                if let Some(name) = k.as_str().and_then(normalize_personality_name) {
+                    let rendered = render_personality_value(v);
+                    if !rendered.is_empty() {
+                        merged.insert(name, rendered);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(selected) = config
+        .get("display")
+        .and_then(|d| d.get("personality"))
+        .and_then(Value::as_str)
+        .and_then(normalize_personality_name)
+    {
+        if let Some(text) = merged.get(&selected).filter(|s| !s.is_empty()) {
+            return Some(text.clone());
+        }
+    }
+    let fallback = config
+        .get("agent")
+        .and_then(|a| a.get("system_prompt"))
+        .map(yaml_prompt_text)
+        .unwrap_or_default();
+    (!fallback.is_empty()).then_some(fallback)
+}
+
 impl PromptSettings {
     pub(crate) fn from_config(config: &Value) -> Self {
+        Self::from_config_with_env(config, None)
+    }
+
+    pub(crate) fn from_config_with_env(config: &Value, ephemeral_override: Option<&str>) -> Self {
         let defaults = Self::default();
         let memory = &config["memory"];
         Self {
@@ -71,6 +202,7 @@ impl PromptSettings {
             skills: SkillSettings::from_config(&config["skills"]),
             memory_tool: true,
             gates: PromptGates::from_config(config),
+            ephemeral_system_prompt: resolve_ephemeral_system_prompt(config, ephemeral_override),
         }
     }
 }
