@@ -145,7 +145,7 @@ fn side_route(
 }
 
 /// What to do when the provider is not set up yet.
-const SETUP_HINT: &str = "Set it once with `hermes config set model.provider custom`, `hermes config set model.base_url <url>`, `hermes config set model.default <model>` and put the key in the profile .env as HERMES_API_KEY (or in config.yaml as model.api_key); --base-url, --model and --api-key do the same for one run.";
+const SETUP_HINT: &str = "Set it once with `hsr config set model.provider custom`, `hsr config set model.base_url <url>`, `hsr config set model.default <model>` and put the key in the profile .env as HERMES_API_KEY (or in config.yaml as model.api_key); --base-url, --model and --api-key do the same for one run.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum UiModeArg {

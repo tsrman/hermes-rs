@@ -362,7 +362,7 @@ pub async fn run(
             );
             eprintln!("{banner}");
         } else if io::stdin().is_terminal() {
-            eprintln!("hermes: type a request, /help for commands, Ctrl-D to leave");
+            eprintln!("hsr: type a request, /help for commands, Ctrl-D to leave");
         }
     }
 
@@ -762,10 +762,10 @@ pub fn announce(session: &Option<String>, styled: bool) {
     if let Some(id) = session {
         if styled {
             eprintln!(
-                "{DIM}Session: {RESET}{FG_CYAN}{id}{RESET}  {DIM}(continue with: hermes chat --resume {id}){RESET}"
+                "{DIM}Session: {RESET}{FG_CYAN}{id}{RESET}  {DIM}(continue with: hsr chat --resume {id}){RESET}"
             );
         } else {
-            eprintln!("Session: {id}  (continue with: hermes chat --resume {id})");
+            eprintln!("Session: {id}  (continue with: hsr chat --resume {id})");
         }
     }
 }

@@ -13,7 +13,7 @@ from compat.model_server import Handler
 
 
 ROOT = Path(__file__).resolve().parent.parent
-BINARY = ROOT / "target/debug/hermes"
+BINARY = ROOT / "target/debug/hsr"
 OPENSSL = shutil.which("openssl")
 BWRAP = shutil.which("bwrap")
 

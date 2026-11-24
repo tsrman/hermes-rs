@@ -18,8 +18,8 @@ HERMES_COMPAT_PROFILE=/tmp/hermes-profile-lumio cargo test -p hermes-agent --loc
 ```bash
 cargo build --locked -p hermes-cli
 /tmp/hermes-reference-venv/bin/python compat/create_reference_fixture.py /tmp/hermes-main /tmp/hermes-profile-rust
-HERMES_HOME=/tmp/hermes-profile-rust target/debug/hermes sessions show compat-session
-HERMES_HOME=/tmp/hermes-profile-rust target/debug/hermes sessions search 'привет' --limit 10
+HERMES_HOME=/tmp/hermes-profile-rust target/debug/hsr sessions show compat-session
+HERMES_HOME=/tmp/hermes-profile-rust target/debug/hsr sessions search 'привет' --limit 10
 ```
 
 Команды возвращают JSON и открывают базу в режиме чтения. `show` выводит активные строки в порядке записи. `--all` включает архивные и отменённые строки, а `--follow-compression` показывает последний сегмент цепочки сжатия. `search` принимает выражение SQLite FTS5 и находит активные и архивные сообщения за исключением результатов инструментов. Поддерживаются схемы 32 и 33. Версия схемы проверяется отдельно от формата индекса.
@@ -30,9 +30,9 @@ HERMES_HOME=/tmp/hermes-profile-rust target/debug/hermes sessions search 'при
 git -C /tmp/hermes-main fetch --no-tags --depth=1 origin 10d25f8ad65fdf71304e9272959421a0c22e5d23
 git -C /tmp/hermes-main worktree add --detach /tmp/hermes-v32 10d25f8ad65fdf71304e9272959421a0c22e5d23
 /tmp/hermes-reference-venv/bin/python compat/create_reference_fixture.py /tmp/hermes-v32 /tmp/hermes-profile-v32 --schema-version 32
-HERMES_HOME=/tmp/hermes-profile-v32 target/debug/hermes sessions show compat-legacy-root --all
-HERMES_HOME=/tmp/hermes-profile-v32 target/debug/hermes sessions show compat-legacy-root --follow-compression
-HERMES_HOME=/tmp/hermes-profile-v32 target/debug/hermes sessions search 'архивный'
+HERMES_HOME=/tmp/hermes-profile-v32 target/debug/hsr sessions show compat-legacy-root --all
+HERMES_HOME=/tmp/hermes-profile-v32 target/debug/hsr sessions show compat-legacy-root --follow-compression
+HERMES_HOME=/tmp/hermes-profile-v32 target/debug/hsr sessions search 'архивный'
 ```
 
 Исторический профиль содержит архивное сообщение, сводку, продолжение и отдельную сессию субагента. Rust читает его без миграции схемы. `chat --save-session` и `chat --resume` требуют схему 33.
@@ -43,8 +43,8 @@ HERMES_HOME=/tmp/hermes-profile-v32 target/debug/hermes sessions search 'арх�
 
 ```bash
 migrated_profile="$(mktemp -d)"
-HERMES_HOME=/tmp/hermes-profile-v32 target/debug/hermes sessions migrate --output "$migrated_profile/state.db"
-HERMES_HOME="$migrated_profile" target/debug/hermes sessions show compat-legacy-root --all
+HERMES_HOME=/tmp/hermes-profile-v32 target/debug/hsr sessions migrate --output "$migrated_profile/state.db"
+HERMES_HOME="$migrated_profile" target/debug/hsr sessions show compat-legacy-root --all
 ```
 
 Команда переносит только базу сессий. Для запуска `chat --resume` на копии укажите параметры модели и ключ в окружении или настройте отдельный профиль. Базы со старым встроенным FTS по-прежнему доступны через `sessions show` и `sessions search`.
@@ -77,7 +77,7 @@ HERMES_HOME="$pilot_parent/profile" hermes sessions search 'привет'
 Репетиция с принудительными прерываниями создаёт одноразовый профиль из зафиксированного Python-эталона и использует локальный имитатор.
 
 ```bash
-python3 compat/rehearse_profile_pilot.py target/x86_64-unknown-linux-gnu/release/hermes \
+python3 compat/rehearse_profile_pilot.py target/x86_64-unknown-linux-gnu/release/hsr \
   /tmp/hermes-reference-venv/bin/python /tmp/hermes-main
 ```
 
@@ -91,7 +91,7 @@ python3 compat/rehearse_profile_pilot.py target/x86_64-unknown-linux-gnu/release
 4. Сверьте выполненные действия инструментов по истории и состоянию рабочих файлов. В репетиции созданный Rust файл сохранился при возврате на Python, а его вызов и результат передались в историю без повторного исполнения.
 
 ```bash
-python3 compat/rehearse_profile_rollback.py target/x86_64-unknown-linux-gnu/release/hermes \
+python3 compat/rehearse_profile_rollback.py target/x86_64-unknown-linux-gnu/release/hsr \
   /tmp/hermes-reference-venv/bin/python /tmp/hermes-main /tmp/hermes-v32.wAEl1m
 ```
 
@@ -124,7 +124,7 @@ CLI оценивает размер запроса по байтам и отпр
 
 ## Локальный владелец сессий
 
-На Unix запустите `HERMES_HOME=/tmp/hermes-profile-rust target/debug/hermes owner` в отдельном терминале. `chat`, `chat --save-session` и `chat --resume` с тем же профилем автоматически подключаются к сокету `rust-owner/owner.sock`. `stdout`, `stderr` и код выхода доступны в вызывающем CLI. Рабочий каталог и настройки модели берутся из вызова `chat`. Системные сертификаты и сетевое окружение доступны процессу владельца.
+На Unix запустите `HERMES_HOME=/tmp/hermes-profile-rust target/debug/hsr owner` в отдельном терминале. `chat`, `chat --save-session` и `chat --resume` с тем же профилем автоматически подключаются к сокету `rust-owner/owner.sock`. `stdout`, `stderr` и код выхода доступны в вызывающем CLI. Рабочий каталог и настройки модели берутся из вызова `chat`. Системные сертификаты и сетевое окружение доступны процессу владельца.
 
 Второй владелец того же профиля отклоняется. При `Ctrl+C` или отключении клиента владелец отменяет незавершённый ход. После перезапуска новый клиент может возобновить сохранённую сессию по её ID. При принудительном завершении самого владельца во время хода аренда действует до истечения TTL. Команды для запущенного владельца проверяются через `python3 -m unittest -v compat.test_owner`.
 
@@ -204,10 +204,10 @@ url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
   else
     shasum -a 256 -c "$archive.sha256"
   fi
-  tar -xzf "$archive" hermes
+  tar -xzf "$archive" hsr
   mkdir -p "$HOME/.local/hermes-rs/$tag"
-  install -m 755 hermes "$HOME/.local/hermes-rs/$tag/hermes"
-) && "$HOME/.local/hermes-rs/$tag/hermes" --help
+  install -m 755 hsr "$HOME/.local/hermes-rs/$tag/hsr"
+) && "$HOME/.local/hermes-rs/$tag/hsr" --help
 ```
 
 Для Windows используйте `.zip` и распакуйте его в PowerShell.
@@ -222,7 +222,7 @@ $Expected = (Get-Content "$Archive.sha256").Split(' ')[0]
 if ((Get-FileHash $Archive -Algorithm SHA256).Hash -ne $Expected) { throw 'SHA-256 mismatch' }
 $InstallDir = Join-Path $env:LOCALAPPDATA "hermes-rs\$Tag"
 Expand-Archive -LiteralPath $Archive -DestinationPath $InstallDir
-& (Join-Path $InstallDir 'hermes.exe') --help
+& (Join-Path $InstallDir 'hsr.exe') --help
 ```
 
 Устанавливайте каждую версию в свой каталог. Для обновления или возврата запускайте бинарник нужной версии по его пути. Профиль выбирается отдельно через `HERMES_HOME` или `-p`. По умолчанию в Windows используется `%USERPROFILE%\.hermes`.
@@ -257,7 +257,7 @@ python3 -m compat.smoke_cli_release "$output/hermes-0.5.0-x86_64-unknown-linux-m
 ### Замеры производительности
 
 ```bash
-python3 compat/benchmark_cli.py target/x86_64-unknown-linux-gnu/release/hermes \
+python3 compat/benchmark_cli.py target/x86_64-unknown-linux-gnu/release/hsr \
   /tmp/hermes-reference-venv/bin/python /tmp/hermes-main --samples 15
 ```
 

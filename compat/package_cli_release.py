@@ -65,7 +65,7 @@ def package(target, output):
         build_env.setdefault("CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS", "-C target-feature=+crt-static")
     subprocess.run(["cargo", "build", "--release", "--locked", "-p", "hermes-cli", "--target", target],
                    env=build_env, check=True)
-    executable = "hermes.exe" if windows else "hermes"
+    executable = "hsr.exe" if windows else "hsr"
     binary = Path(metadata["target_directory"]) / target / "release" / executable
     output.mkdir(parents=True, exist_ok=True)
     extension = "zip" if windows else "tar.gz"

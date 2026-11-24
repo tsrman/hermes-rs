@@ -2,7 +2,7 @@
 """Live task suite: runs the hermes CLI on small real tasks against a real provider and checks the
 results by running code, not by reading the model's words.
 
-    compat/live_suite.py --model deepseek-flash-1017 [--only name,...] [--binary target/debug/hermes]
+    compat/live_suite.py --model deepseek-flash-1017 [--only name,...] [--binary target/debug/hsr]
 
 The provider comes from the environment (LLM_GATEWAY_URL, GATEWAY_API_KEY) or from the repository's
 untracked .env. Each task runs in its own temporary profile and project; keys are never printed.
@@ -250,7 +250,7 @@ def run_task(name, binary, model, env, timeout, provider="custom"):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True)
-    parser.add_argument("--binary", default=str(ROOT / "target/debug/hermes"))
+    parser.add_argument("--binary", default=str(ROOT / "target/debug/hsr"))
     parser.add_argument("--only", default="")
     parser.add_argument("--provider", default="custom", help="custom (chat completions) or anthropic (messages API)")
     parser.add_argument("--timeout", type=int, default=300)

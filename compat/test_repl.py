@@ -102,7 +102,7 @@ class ReplTest(ReplBase):
         self.assertEqual(users, ["first question", "second question", "third question"])
         sessions = self.sessions()
         self.assertEqual(len(sessions), 1, sessions)
-        self.assertIn(b"hermes chat --resume " + sessions[0][0].encode(), bytes(self.transcript))
+        self.assertIn(b"hsr chat --resume " + sessions[0][0].encode(), bytes(self.transcript))
         self.assertEqual(self.transcript.count("Ответ модели".encode()), 3)
 
     def test_piped_input_runs_each_line_and_help_and_unknown_commands_do_not_call_the_model(self):
@@ -181,7 +181,7 @@ class ReplTest(ReplBase):
         run = subprocess.run([str(BINARY), "chat", "-q", "hi"], cwd=self.root, env=env,
                              capture_output=True, text=True, timeout=10)
         self.assertNotEqual(run.returncode, 0)
-        self.assertIn("hermes config set model.base_url", run.stderr)
+        self.assertIn("hsr config set model.base_url", run.stderr)
 
 
 @unittest.skipUnless(sys.platform == "linux", "requires Linux terminals")

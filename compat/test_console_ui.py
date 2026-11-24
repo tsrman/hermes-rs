@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-BINARY = ROOT / "target" / "debug" / ("hermes.exe" if os.name == "nt" else "hermes")
+BINARY = ROOT / "target" / "debug" / ("hsr.exe" if os.name == "nt" else "hsr")
 
 
 def _start_mock_server(reply_text="Hello **world**\n```rust\nfn main() {}\n```", with_tool=False):

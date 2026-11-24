@@ -18,7 +18,7 @@ if sys.platform in ("linux", "darwin"):
 
 
 ROOT = Path(__file__).resolve().parent.parent
-BINARY = Path(os.environ.get("HERMES_TEST_BINARY", ROOT / "target/debug/hermes")).resolve()
+BINARY = Path(os.environ.get("HERMES_TEST_BINARY", ROOT / "target/debug/hsr")).resolve()
 
 
 # Flagged by the dangerous-command detector (a recursive delete) but harmless: the path does not exist.

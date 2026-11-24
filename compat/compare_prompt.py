@@ -21,7 +21,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
-BINARY = Path(os.environ.get("HERMES_TEST_BINARY", ROOT / "target/debug/hermes"))
+BINARY = Path(os.environ.get("HERMES_TEST_BINARY", ROOT / "target/debug/hsr"))
 
 
 AUTO_LOAD_CONFIG = """skills:

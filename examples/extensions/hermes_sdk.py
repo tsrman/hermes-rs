@@ -174,7 +174,7 @@ class HermesClient:
     def __init__(
         self,
         *,
-        binary: str | Path = "hermes",
+        binary: str | Path = "hsr",
         profile_home: str | Path | None = None,
         profile: str | None = None,
         workdir: str | Path | None = None,

@@ -33,16 +33,16 @@ def unpack(archive, destination):
         raise ValueError(f"checksum mismatch for {archive.name}")
     if archive.suffix == ".zip":
         with zipfile.ZipFile(archive) as contents:
-            if contents.namelist() != ["hermes.exe"]:
+            if contents.namelist() != ["hsr.exe"]:
                 raise ValueError(f"unexpected archive contents in {archive.name}")
-            contents.extract("hermes.exe", destination)
-        return destination / "hermes.exe"
+            contents.extract("hsr.exe", destination)
+        return destination / "hsr.exe"
     with tarfile.open(archive, "r:gz") as contents:
         members = contents.getmembers()
-        if len(members) != 1 or members[0].name != "hermes" or not members[0].isfile():
+        if len(members) != 1 or members[0].name != "hsr" or not members[0].isfile():
             raise ValueError(f"unexpected archive contents in {archive.name}")
         contents.extractall(destination, filter="data")
-    return destination / "hermes"
+    return destination / "hsr"
 
 
 @contextmanager
@@ -76,10 +76,10 @@ def smoke_linux(archive, image, work):
         docker = [
             "docker", "run", "--rm", "--network", f"container:{fixture}", "--user", "1000:1000",
             "--env", "HOME=/tmp", "--env", "HERMES_HOME=/tmp/hermes-profile",
-            "--env", "HERMES_API_KEY=fixture", *mount(binary, "/usr/local/bin/hermes"),
+            "--env", "HERMES_API_KEY=fixture", *mount(binary, "/usr/local/bin/hsr"),
         ]
         rejected = subprocess.run([
-            *docker, image, "hermes", "chat", "--oneshot", "--model", "fixture",
+            *docker, image, "hsr", "chat", "--oneshot", "--model", "fixture",
             "--base-url", BASE_URL, "-q", "release smoke untrusted",
         ], capture_output=True, text=True, timeout=120)
         if rejected.returncode != 1 or "UnknownIssuer" not in rejected.stderr:
@@ -90,16 +90,16 @@ def smoke_linux(archive, image, work):
             *docker, *root, image, "sh", "-ec", '''
                 if command -v python || command -v python3; then exit 1; fi
                 cd /tmp
-                hermes --help >/dev/null
-                answer=$(hermes chat --oneshot --save-session --model fixture --base-url "$1" \
+                hsr --help >/dev/null
+                answer=$(hsr chat --oneshot --save-session --model fixture --base-url "$1" \
                     -q 'release smoke first' 2>/tmp/hermes-session.log)
                 test "$answer" = 'Ответ модели'
                 session=$(sed -n 's/^Session: //p' /tmp/hermes-session.log)
                 test -n "$session"
-                answer=$(hermes chat --oneshot --resume "$session" --model fixture --base-url "$1" \
+                answer=$(hsr chat --oneshot --resume "$session" --model fixture --base-url "$1" \
                     -q 'release smoke resumed')
                 test "$answer" = 'Ответ модели'
-                hermes sessions search '"release smoke resumed"'
+                hsr sessions search '"release smoke resumed"'
             ''', "hermes-smoke", BASE_URL,
         ], text=True, timeout=120)
         hits = json.loads(result)

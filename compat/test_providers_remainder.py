@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 ROOT = Path(__file__).resolve().parent.parent
-BINARY = ROOT / "target" / "debug" / ("hermes.exe" if os.name == "nt" else "hermes")
+BINARY = ROOT / "target" / "debug" / ("hsr.exe" if os.name == "nt" else "hsr")
 
 
 def _b64url(data: bytes) -> str:

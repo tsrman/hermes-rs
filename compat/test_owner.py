@@ -13,7 +13,7 @@ from urllib.request import urlopen
 
 
 ROOT = Path(__file__).resolve().parent.parent
-BINARY = ROOT / "target/debug/hermes"
+BINARY = ROOT / "target/debug/hsr"
 
 
 @unittest.skipUnless(os.name == "posix", "requires Unix sockets and signals")

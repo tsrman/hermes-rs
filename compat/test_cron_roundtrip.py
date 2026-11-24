@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-BINARY = ROOT / "target/debug/hermes"
+BINARY = ROOT / "target/debug/hsr"
 REFERENCE = Path(os.environ.get("HERMES_REFERENCE", Path.home() / "ref/hermes-main"))
 PYTHON = Path(os.environ.get("HERMES_REFERENCE_PYTHON", Path.home() / "ref/hermes-reference-venv/bin/python"))
 

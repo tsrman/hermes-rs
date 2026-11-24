@@ -1,6 +1,6 @@
 # hermes-rs
 
-A fast, standalone Rust implementation of [Hermes Agent](https://github.com/NousResearch/hermes-agent) — a single native CLI binary with no Python runtime dependency, designed for drop-in compatibility with existing `~/.hermes` profiles, `config.yaml`, `.env`, `auth.json`, skills, cron jobs, and SQLite `state.db` history.
+A fast, standalone Rust implementation of [Hermes Agent](https://github.com/NousResearch/hermes-agent) — a single native CLI binary (`hsr`) with no Python runtime dependency, designed to live cleanly side-by-side with Python `hermes` while staying drop-in compatible with existing `~/.hermes` profiles, `config.yaml`, `.env`, `auth.json`, skills, cron jobs, and SQLite `state.db` history.
 
 > Current release: **`v0.5.0`** (Linux x86_64/arm64 GNU & musl, macOS Apple Silicon & Intel, Windows x64)
 
@@ -55,10 +55,10 @@ url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
   else
     shasum -a 256 -c "$archive.sha256"
   fi
-  tar -xzf "$archive" hermes
+  tar -xzf "$archive" hsr
   mkdir -p "$HOME/.local/bin"
-  install -m 755 hermes "$HOME/.local/bin/hermes"
-) && hermes --help
+  install -m 755 hsr "$HOME/.local/bin/hsr"
+) && hsr --help
 ```
 
 **Windows (PowerShell):**
@@ -73,7 +73,7 @@ $Expected = (Get-Content "$Archive.sha256").Split(' ')[0]
 if ((Get-FileHash $Archive -Algorithm SHA256).Hash -ne $Expected) { throw 'SHA-256 mismatch' }
 $InstallDir = Join-Path $env:LOCALAPPDATA "hermes-rs\$Tag"
 Expand-Archive -LiteralPath $Archive -DestinationPath $InstallDir
-& (Join-Path $InstallDir 'hermes.exe') --help
+& (Join-Path $InstallDir 'hsr.exe') --help
 ```
 
 ### Build from Source
@@ -82,30 +82,30 @@ Requires Rust `1.95.0` (or compatible stable toolchain):
 
 ```bash
 cargo build --release --locked -p hermes-cli
-./target/release/hermes --help
+./target/release/hsr --help
 ```
 
 ## Quick Start
 
 ```bash
 # Start an interactive conversation (uses ~/.hermes by default)
-hermes chat
+hsr chat
 
 # Start in full-screen TUI mode
-hermes chat --ui tui
+hsr chat --ui tui
 
 # Run a single non-interactive query and save the session
-hermes chat --oneshot -q "Summarize the files in this directory" --save-session
+hsr chat --oneshot -q "Summarize the files in this directory" --save-session
 
 # Resume the last CLI session or a specific session ID
-hermes chat --continue
-hermes chat --resume <session-id>
+hsr chat --continue
+hsr chat --resume <session-id>
 
 # Use a separate profile directory
-hermes -p work chat
+hsr -p work chat
 
 # Stream machine-readable NDJSON events (version: 1)
-hermes chat --events-json -q "Read README.md"
+hsr chat --events-json -q "Read README.md"
 ```
 
 ### Migrating an Existing Python Hermes Profile
@@ -114,24 +114,24 @@ Before switching an existing `~/.hermes` profile (including older `state.db` sch
 
 ```bash
 # Check profile inventory and schema version (Linux)
-hermes profile check
+hsr profile check
 
 # Migrate a copy of an older state.db (v1..v32 -> v33 with FTS5 v3)
-hermes sessions migrate --output /path/to/migrated-state.db
+hsr sessions migrate --output /path/to/migrated-state.db
 ```
 
 ## CLI Commands
 
 | Command | Description |
 | --- | --- |
-| `hermes chat [OPTIONS]` | Interactive REPL/TUI or single-turn `-q` chat (`--ui`, `--model`, `--provider`, `--base-url`, `--save-session`, `--resume`, `--continue`, `--yolo`, `--oneshot`, `--events-json`, `--max-turns`). |
-| `hermes sessions <list\|show\|search\|migrate>` | Inspect, full-text search, or migrate SQLite `state.db` sessions (`v1..v32 → v33`). |
-| `hermes profile <check\|migrate>` | Inspect a profile directory and prepare a verified migration copy (Linux). |
-| `hermes cron <list\|add\|edit\|pause\|resume\|run\|cancel\|remove\|status\|runs\|incidents\|notepad\|doctor\|tick\|preview>` | Manage and execute local scheduled jobs in the shared `cron/jobs.json` / `executions.db` / `notepad.db` format. |
-| `hermes config set <key> <value>` | Update nested keys in the selected profile's `config.yaml`. |
-| `hermes owner` | Run the local Unix-socket session authority daemon for the selected profile (Unix). |
+| `hsr chat [OPTIONS]` | Interactive REPL/TUI or single-turn `-q` chat (`--ui`, `--model`, `--provider`, `--base-url`, `--save-session`, `--resume`, `--continue`, `--yolo`, `--oneshot`, `--events-json`, `--max-turns`). |
+| `hsr sessions <list\|show\|search\|migrate>` | Inspect, full-text search, or migrate SQLite `state.db` sessions (`v1..v32 → v33`). |
+| `hsr profile <check\|migrate>` | Inspect a profile directory and prepare a verified migration copy (Linux). |
+| `hsr cron <list\|add\|edit\|pause\|resume\|run\|cancel\|remove\|status\|runs\|incidents\|notepad\|doctor\|tick\|preview>` | Manage and execute local scheduled jobs in the shared `cron/jobs.json` / `executions.db` / `notepad.db` format. |
+| `hsr config set <key> <value>` | Update nested keys in the selected profile's `config.yaml`. |
+| `hsr owner` | Run the local Unix-socket session authority daemon for the selected profile (Unix). |
 
-Inside interactive `hermes chat`, available slash commands include `/help`, `/new`, `/sessions`, `/resume`, `/model`, `/compress` (`/compact`), `/yolo`, `/retry`, `/ui [inline|tui|plain]`, and `/exit`.
+Inside interactive `hsr chat`, available slash commands include `/help`, `/new`, `/sessions`, `/resume`, `/model`, `/compress` (`/compact`), `/yolo`, `/retry`, `/ui [inline|tui|plain]`, and `/exit`.
 
 ## Workspace Architecture
 
@@ -140,7 +140,7 @@ hermes-rs/
 ├── crates/
 │   ├── hermes-core/     # Protocol primitives (UTF-8 chunk-safe SSE decoder)
 │   ├── hermes-runtime/  # Config, providers, OAuth, SQLite storage, compaction, tools, MCP, cron, turn loop
-│   └── hermes-cli/      # `hermes` executable, REPL/TUI, approvals, session owner, subcommands
+│   └── hermes-cli/      # `hsr` executable, REPL/TUI, approvals, session owner, subcommands
 ├── compat/              # Local fixture model server, Python end-to-end compat suite, release packaging
 ├── docs/                # Extension interface docs and migration plans
 └── examples/            # Python SDK wrapper (`--events-json`) and MCP plugin example
@@ -168,7 +168,7 @@ For quick local experiments without an external API key:
 ```bash
 python3 compat/model_server.py --scenario tool
 # Use the printed address:
-HERMES_API_KEY=test target/debug/hermes chat --oneshot \
+HERMES_API_KEY=test target/debug/hsr chat --oneshot \
   -q 'Read fixture.txt' --base-url http://127.0.0.1:<port>/v1 --model fixture
 ```
 

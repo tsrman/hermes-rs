@@ -26,7 +26,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
-BINARY = Path(os.environ.get("HERMES_TEST_BINARY", str(ROOT / "target/debug/hermes")))
+BINARY = Path(os.environ.get("HERMES_TEST_BINARY", str(ROOT / "target/debug/hsr")))
 PLUGIN_SCRIPT = ROOT / "examples/extensions/python_mcp_plugin.py"
 
 sys.path.insert(0, str(ROOT / "examples/extensions"))
