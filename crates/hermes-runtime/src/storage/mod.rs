@@ -20,6 +20,7 @@ pub use write::SessionWriter;
 
 const SCHEMA_VERSION: i64 = 33;
 const LEGACY_SCHEMA_VERSION: i64 = 32;
+const MIN_MIGRATABLE_SCHEMA_VERSION: i64 = 1;
 const CONTENT_JSON_PREFIX: &str = "\0json:";
 
 #[derive(Debug)]
@@ -51,13 +52,16 @@ impl fmt::Display for StorageError {
             Self::Io(error) => write!(f, "state.db: {error}"),
             Self::MissingSchemaVersion => write!(f, "state.db lacks a single schema version"),
             Self::UnsupportedSchema(version) => write!(f, "unsupported state.db schema version {version}"),
-            Self::ReadOnlySchema(version) => write!(f, "state.db schema version {version} is read-only in Rust (writing requires version {SCHEMA_VERSION})"),
+            Self::ReadOnlySchema(version) => write!(
+                f,
+                "state.db schema version {version} is read-only in Rust (writing requires version {SCHEMA_VERSION}; run `hermes sessions migrate` or `hermes profile migrate`)"
+            ),
             Self::UnsupportedFtsLayout => {
                 write!(f, "writing state.db requires a complete FTS layout 3")
             }
             Self::MigrationSourceVersion(version) => write!(
                 f,
-                "migration requires state.db schema version {LEGACY_SCHEMA_VERSION}, found {version}"
+                "migration requires state.db schema version {MIN_MIGRATABLE_SCHEMA_VERSION}..={LEGACY_SCHEMA_VERSION} (or legacy FTS layout), found {version}"
             ),
             Self::MigrationDestinationExists(path) => {
                 write!(f, "migration output already exists at {}", path.display())

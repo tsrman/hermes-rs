@@ -10,12 +10,12 @@ use serde_json::{Map, Value};
 
 use super::{
     read_schema_version, resume::ResumeState, StorageError, CONTENT_JSON_PREFIX,
-    LEGACY_SCHEMA_VERSION, SCHEMA_VERSION,
+    MIN_MIGRATABLE_SCHEMA_VERSION, SCHEMA_VERSION,
 };
 use crate::turn::{CompletedTurn, TurnHistory};
 
-const SCHEMA: &str = include_str!("schema_v33.sql");
-const FTS_STORAGE_VERSION: &str = "3";
+pub(super) const SCHEMA: &str = include_str!("schema_v33.sql");
+pub(super) const FTS_STORAGE_VERSION: &str = "3";
 pub(super) const RANDOM_UID: &str = "SELECT lower(hex(randomblob(16)))";
 
 pub struct SessionWriter<'a> {
@@ -176,7 +176,9 @@ pub(super) fn open_write(path: &Path) -> Result<Connection, StorageError> {
 pub(super) fn verify_write_schema(connection: &Connection) -> Result<(), StorageError> {
     match read_schema_version(connection)? {
         SCHEMA_VERSION => {}
-        LEGACY_SCHEMA_VERSION => return Err(StorageError::ReadOnlySchema(LEGACY_SCHEMA_VERSION)),
+        version if (MIN_MIGRATABLE_SCHEMA_VERSION..SCHEMA_VERSION).contains(&version) => {
+            return Err(StorageError::ReadOnlySchema(version));
+        }
         version => return Err(StorageError::UnsupportedSchema(version)),
     }
     verify_fts_layout(connection)

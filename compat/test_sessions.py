@@ -390,19 +390,81 @@ class SessionMigrationTest(unittest.TestCase):
         self.assertEqual(wal.read_bytes(), b"existing WAL")
 
     def test_rejects_unsupported_source_layout_or_version(self):
+        # Migrating a v32 DB with legacy FTS layout 2 now succeeds and upgrades FTS to layout 3.
         with closing(sqlite3.connect(self.source)) as db, db:
             db.execute("UPDATE state_meta SET value = '2' WHERE key = 'fts_storage_version'")
-        result = self.hermes(self.home, "migrate", "--output", str(self.destination))
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("FTS layout 3", result.stderr)
-        self.assertEqual(list(self.output.iterdir()), [])
+        legacy_fts_out = self.output / "legacy_fts.db"
+        result = self.hermes(self.home, "migrate", "--output", str(legacy_fts_out))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with closing(sqlite3.connect(legacy_fts_out)) as db:
+            self.assertEqual(db.execute("SELECT version FROM schema_version").fetchone(), (33,))
+            self.assertEqual(
+                db.execute("SELECT value FROM state_meta WHERE key = 'fts_storage_version'").fetchone(),
+                ("3",),
+            )
+        legacy_fts_out.unlink()
 
+        # Already-v33 DB with FTS layout 3 is rejected by `sessions migrate`.
         with closing(sqlite3.connect(self.source)) as db, db:
+            db.execute("UPDATE state_meta SET value = '3' WHERE key = 'fts_storage_version'")
             db.execute("UPDATE schema_version SET version = 33")
         result = self.hermes(self.home, "migrate", "--output", str(self.destination))
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("requires state.db schema version 32", result.stderr)
+        self.assertIn("requires state.db schema version 1..=32", result.stderr)
         self.assertEqual(list(self.output.iterdir()), [])
+
+        # Unknown / future schema versions are rejected.
+        with closing(sqlite3.connect(self.source)) as db, db:
+            db.execute("UPDATE schema_version SET version = 999")
+        result = self.hermes(self.home, "migrate", "--output", str(self.destination))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsupported state.db schema version 999", result.stderr)
+        self.assertEqual(list(self.output.iterdir()), [])
+
+    def test_migrates_early_v15_schema_via_cli_and_supports_search_and_resume(self):
+        early_home = self.home / "early_v15"
+        early_home.mkdir()
+        early_db = early_home / "state.db"
+        with closing(sqlite3.connect(early_db)) as db, db:
+            db.executescript(
+                """
+                CREATE TABLE schema_version (version INTEGER NOT NULL);
+                INSERT INTO schema_version VALUES (15);
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    model TEXT,
+                    system_prompt TEXT,
+                    started_at REAL NOT NULL,
+                    ended_at REAL,
+                    message_count INTEGER DEFAULT 0,
+                    title TEXT
+                );
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL REFERENCES sessions(id),
+                    role TEXT NOT NULL,
+                    content TEXT,
+                    timestamp REAL NOT NULL
+                );
+                INSERT INTO sessions(id, source, model, system_prompt, started_at, ended_at, message_count, title)
+                VALUES ('v15-sess', 'cli', 'fixture', 'Early v15 prompt', 500.0, 505.0, 2, 'Old Chat');
+                INSERT INTO messages(id, session_id, role, content, timestamp)
+                VALUES
+                    (1, 'v15-sess', 'user', 'Legacy v15 needle query', 500.0),
+                    (2, 'v15-sess', 'assistant', 'Legacy v15 reply', 501.0);
+                """
+            )
+        migrated_home = self.home / "early_v15_migrated"
+        migrated_home.mkdir()
+        migrated_db = migrated_home / "state.db"
+        result = self.hermes(early_home, "migrate", "--output", str(migrated_db))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        shown = self.read_json(migrated_home, "show", "v15-sess")
+        self.assertEqual(shown["session"]["id"], "v15-sess")
+        self.assertEqual([m["content"] for m in shown["messages"]], ["Legacy v15 needle query", "Legacy v15 reply"])
+        hits = self.read_json(migrated_home, "search", "needle")
+        self.assertEqual([h["session_id"] for h in hits], ["v15-sess"])
 
     def test_fts_integrity_failure_does_not_publish_a_copy(self):
         with closing(sqlite3.connect(self.source)) as db, db:

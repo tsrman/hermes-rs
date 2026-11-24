@@ -33,6 +33,11 @@
 
 ## Журнал
 
+- 2026-11-24: расширена миграция `state.db` на все ранние схемы оригинала `v1..v32` → `v33` (с запасом покрывая v0.15 оригинала, а также legacy FTS layout `v0`/`v1`/`v2` → `v3`, `storage/{migration,mod,write}.rs`):
+  - декларативное выравнивание таблиц и колонок по in-memory эталону `schema_v33.sql` (как `_reconcile_columns` в `persistence/sqlite/_schema.py`), удаление устаревшего `messages_fts_cjk`, пересборка составных первичных ключей `gateway_routing(scope, session_key)` и `session_model_usage(..., task)`;
+  - миграции данных: лечение `NULL` в `messages.{active,compacted,_compressed_summary,display_order,message_uid}`, наполнение `session_model_usage` (v20), дедупликация `sessions.system_prompt` → `system_prompts` по SHA-256 (v25), разметка `model_config._delegate_from` (v33), развод дублей `sessions.title` (`#2`, `#3` для `user`, очистка для `llm`/`derived`) перед `idx_sessions_title_unique`;
+  - пересборка канонических FTS5-индексов (`messages_fts` + `messages_fts_trigram` + 6 триггеров + `fts_storage_version = 3`) для ранних схем/legacy FTS с сохранением строгой проверки целостности на `v32` с FTS 3 и побайтовой сверкой истории (включая эффективные системные промпты через `COALESCE(s.system_prompt, sp.prompt)`) до и после миграции;
+  - добавлены Rust-тесты `crates/hermes-runtime/tests/sqlite_migrations.rs` (миграция минимальной `v1`, `v15`-эпохи и отказ на `0`/`33+FTS3`/`34`/`999`) и сквозные CLI-тесты в `compat/test_sessions.py` (16/16). Проверено 8 мутаций (8 из 8 убито).
 - 2026-11-24: Фаза 1 плана доделки `tools` до оригинала (`file_tools/linux.rs`, `file_tools.rs`, `file_tools/search.rs`, `turn.rs`, `tools.rs`, `delegation.rs`, `hermes-cli/src/chat.rs`):
   - `write_file`, `patch` и `skill_manage` разблокированы на macOS: создание временного файла переведено с `/proc/self/fd` на `openat(O_CREAT|O_EXCL|O_NOFOLLOW)` (`ScopedTempFile` с `Drop`-очисткой) и `linkat`+`unlinkat` для атомарного no-replace на Linux и macOS; расширен список системных защищённых путей (`/System`, `/Library/LaunchDaemons`);
   - `search_files` при явном абсолютном `path` внутри рабочей папки возвращает абсолютные пути в `matches`/`files`/`counts` (как в эталоне), сохраняя все проверки границ и защищённых путей;
