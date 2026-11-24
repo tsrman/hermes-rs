@@ -2,7 +2,7 @@
 
 A fast, standalone Rust implementation of [Hermes Agent](https://github.com/NousResearch/hermes-agent) — a single native CLI binary (`hsr`) with no Python runtime dependency, designed to live cleanly side-by-side with Python `hermes` while staying drop-in compatible with existing `~/.hermes` profiles, `config.yaml`, `.env`, `auth.json`, skills, cron jobs, and SQLite `state.db` history.
 
-> Current release: **`v0.5.0`** (Linux x86_64/arm64 GNU & musl, macOS Apple Silicon & Intel, Windows x64)
+> Current release: **`v0.5.1`** (Linux x86_64/arm64 GNU & musl, macOS Apple Silicon & Intel, Windows x64)
 
 ## Highlights
 
@@ -40,7 +40,7 @@ Download the archive and `.sha256` checksum for your platform from [Releases](ht
 **Linux / macOS:**
 
 ```bash
-tag=v0.5.0
+tag=v0.5.1
 target=x86_64-unknown-linux-gnu
 archive="hermes-${tag#v}-$target.tar.gz"
 url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
@@ -64,7 +64,7 @@ url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
 **Windows (PowerShell):**
 
 ```powershell
-$Tag = 'v0.5.0'
+$Tag = 'v0.5.1'
 $Archive = "hermes-$($Tag.Substring(1))-x86_64-pc-windows-msvc.zip"
 $Url = "https://github.com/tsrman/hermes-rs/releases/download/$Tag"
 Invoke-WebRequest "$Url/$Archive" -OutFile $Archive
