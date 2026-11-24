@@ -170,6 +170,7 @@ jobs:
           cat hsr-gui-*.sha256 | sort -k2 > SHA256SUMS
           tag="$GITHUB_REF_NAME"
           gh release create "$tag" hsr-gui-* SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "Hermes GUI $tag" \
             --generate-notes
