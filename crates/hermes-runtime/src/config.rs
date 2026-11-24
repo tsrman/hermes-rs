@@ -123,6 +123,8 @@ pub struct ChatSettings {
     pub named_custom: bool,
     /// `auxiliary.compression`: where the compression summary is made.
     pub compression_route: AuxiliaryRoute,
+    /// `auxiliary.vision`: optional dedicated model route for `vision_analyze`.
+    pub vision_route: AuxiliaryRoute,
     /// `delegation.model/provider/base_url/api_key/api_mode`: the route of subagents.
     pub delegation_route: AuxiliaryRoute,
     /// `model.default_headers`.
@@ -149,6 +151,10 @@ pub struct ChatSettings {
     pub web: WebSettings,
     pub browser: BrowserSettings,
     pub memory: MemorySettings,
+    pub vision: crate::vision_tool::VisionSettings,
+    pub image_gen: crate::image_gen::ImageGenSettings,
+    pub tts: crate::tts_tool::TtsSettings,
+    pub x_search: crate::x_search::XSearchSettings,
     pub tools: ToolPolicy,
     pub vertex: crate::providers::vertex::VertexSettings,
     pub bedrock: crate::providers::bedrock::BedrockSettings,
@@ -244,6 +250,7 @@ impl Default for ChatSettings {
             prefill_file: None,
             named_custom: false,
             compression_route: AuxiliaryRoute::default(),
+            vision_route: AuxiliaryRoute::default(),
             delegation_route: AuxiliaryRoute::default(),
             default_headers: Vec::new(),
             custom_providers: Vec::new(),
@@ -264,6 +271,10 @@ impl Default for ChatSettings {
             web: WebSettings::default(),
             browser: BrowserSettings::default(),
             memory: MemorySettings::default(),
+            vision: crate::vision_tool::VisionSettings::default(),
+            image_gen: crate::image_gen::ImageGenSettings::default(),
+            tts: crate::tts_tool::TtsSettings::default(),
+            x_search: crate::x_search::XSearchSettings::default(),
             tools: ToolPolicy::allow_all(),
             vertex: crate::providers::vertex::VertexSettings::default(),
             bedrock: crate::providers::bedrock::BedrockSettings::default(),
@@ -761,6 +772,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     .map(|path| path.trim().to_owned())
     .find(|path| !path.is_empty());
     settings.compression_route = AuxiliaryRoute::from_config(&config, "compression");
+    settings.vision_route = AuxiliaryRoute::from_config(&config, "vision");
     settings.delegation_route = AuxiliaryRoute {
         // A subagent route has no timeout or body fields of its own.
         timeout_secs: None,
@@ -773,6 +785,19 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.web = WebSettings::from_config(&config, &secrets, Some(home));
     settings.browser = BrowserSettings::from_config(&config, &secrets);
     settings.memory = MemorySettings::from_config(&config);
+    settings.vision = crate::vision_tool::VisionSettings::from_config(
+        &config,
+        settings.web.website_policy.clone(),
+        settings.web.allow_private_urls,
+    );
+    settings.image_gen = crate::image_gen::ImageGenSettings::from_config(
+        &config,
+        &secrets,
+        settings.web.allow_private_urls,
+    );
+    settings.tts = crate::tts_tool::TtsSettings::from_config(&config, &secrets);
+    settings.x_search =
+        crate::x_search::XSearchSettings::from_config(&config, &secrets, Some(home));
     settings.tools = ToolPolicy::from_config(&config);
     settings.clarify_timeout_secs = clarify_timeout(&config);
     settings.prompt.memory_tool = settings.tools.allows("memory");

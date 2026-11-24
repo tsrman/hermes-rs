@@ -1,0 +1,41 @@
+{
+  "name": "image_generate",
+  "description": "Generate or edit images using the configured FAL.ai image model. Returns the generated image URL and local MEDIA:<path>.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "description": "The text prompt describing the desired image (text-to-image) or the edit to apply (image-to-image). Be detailed and descriptive."
+      },
+      "aspect_ratio": {
+        "type": "string",
+        "enum": [
+          "landscape",
+          "square",
+          "portrait"
+        ],
+        "description": "The aspect ratio of the generated image. 'landscape' is 16:9 wide, 'portrait' is 16:9 tall, 'square' is 1:1.",
+        "default": "landscape"
+      },
+      "image_url": {
+        "type": "string",
+        "description": "Optional source image URL or local path for image-to-image editing (when supported by the configured model)."
+      },
+      "reference_image_urls": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Optional list of reference image URLs for multi-reference editing (when supported by the configured model)."
+      },
+      "seed": {
+        "type": "integer",
+        "description": "Optional integer seed for reproducible generation."
+      }
+    },
+    "required": [
+      "prompt"
+    ]
+  }
+}

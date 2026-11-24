@@ -1,0 +1,48 @@
+{
+  "name": "x_search",
+  "description": "Search X (Twitter) posts, profiles and threads via xAI's built-in X Search. Read-only discovery only: use this for current discussion, reactions, or claims on public X rather than general web pages. Do not use it to post, reply, like, DM, upload media, delete, or inspect the user's authenticated X account — those require a separate authenticated X API surface outside this tool. Available when xAI credentials are configured (SuperGrok OAuth or XAI_API_KEY).",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "What to look up on X."
+      },
+      "allowed_x_handles": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Optional list of X handles to include exclusively (max 10)."
+      },
+      "excluded_x_handles": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Optional list of X handles to exclude (max 10)."
+      },
+      "from_date": {
+        "type": "string",
+        "description": "Optional start date in YYYY-MM-DD format."
+      },
+      "to_date": {
+        "type": "string",
+        "description": "Optional end date in YYYY-MM-DD format."
+      },
+      "enable_image_understanding": {
+        "type": "boolean",
+        "description": "Whether xAI should analyze images attached to matching X posts.",
+        "default": false
+      },
+      "enable_video_understanding": {
+        "type": "boolean",
+        "description": "Whether xAI should analyze videos attached to matching X posts.",
+        "default": false
+      }
+    },
+    "required": [
+      "query"
+    ]
+  }
+}

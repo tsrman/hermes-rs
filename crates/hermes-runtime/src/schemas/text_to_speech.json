@@ -1,0 +1,32 @@
+{
+  "name": "text_to_speech",
+  "description": "Convert text to speech audio. Returns a MEDIA: path that the platform delivers as native audio. In CLI mode, saves to the configured output directory or voice-memos/.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "The text to convert to speech. Provider-specific per-request character caps apply automatically (OpenAI 4096, xAI 15000, MiniMax 10000, ElevenLabs 5000); longer input is split into ordered chunks without silent truncation."
+      },
+      "output_path": {
+        "type": "string",
+        "description": "Optional output file path inside the working directory or profile voice-memos folder."
+      },
+      "speed": {
+        "type": "number",
+        "description": "Playback speed multiplier. 1.0 = normal, 0.5 = very slow, 2.0 = fast. Range: 0.25-4.0. Overrides the speed configured in config.yaml."
+      },
+      "instructions": {
+        "type": "string",
+        "description": "Optional voice-design guidance: tone, emotion, pacing, accent, whispering, impressions. Forwarded to OpenAI-compatible backends and silently ignored by backends that don't support it."
+      },
+      "voice": {
+        "type": "string",
+        "description": "Optional voice name or ID override for this call."
+      }
+    },
+    "required": [
+      "text"
+    ]
+  }
+}

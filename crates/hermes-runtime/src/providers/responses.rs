@@ -330,10 +330,46 @@ pub(super) fn translate_request(request: &Value) -> Result<Map<String, Value>, P
         let content = message.get("content").and_then(Value::as_str);
         match message.get("role").and_then(Value::as_str) {
             Some("system") => instructions.push(content.ok_or(ProviderError::InvalidRequest)?),
-            Some("user") => input.push(json!({
-                "role": "user",
-                "content": content.ok_or(ProviderError::InvalidRequest)?
-            })),
+            Some("user") => {
+                let raw = message.get("content").ok_or(ProviderError::InvalidRequest)?;
+                let user_content = match raw {
+                    Value::String(text) => Value::String(text.clone()),
+                    Value::Array(parts) => {
+                        let mut blocks = Vec::new();
+                        for part in parts {
+                            match part.get("type").and_then(Value::as_str) {
+                                Some("text") | Some("input_text") => {
+                                    if let Some(t) = part.get("text").and_then(Value::as_str) {
+                                        blocks.push(json!({"type": "input_text", "text": t}));
+                                    }
+                                }
+                                Some("image_url") => {
+                                    let url = part
+                                        .pointer("/image_url/url")
+                                        .or_else(|| part.get("image_url"))
+                                        .and_then(Value::as_str);
+                                    if let Some(u) = url.filter(|u| !u.is_empty()) {
+                                        blocks.push(json!({"type": "input_image", "image_url": u}));
+                                    }
+                                }
+                                Some("input_image") => {
+                                    blocks.push(part.clone());
+                                }
+                                _ => {}
+                            }
+                        }
+                        if blocks.is_empty() {
+                            return Err(ProviderError::InvalidRequest);
+                        }
+                        Value::Array(blocks)
+                    }
+                    _ => return Err(ProviderError::InvalidRequest),
+                };
+                input.push(json!({
+                    "role": "user",
+                    "content": user_content
+                }));
+            }
             Some("assistant") => {
                 if let Some(text) = content.filter(|text| !text.is_empty()) {
                     input.push(json!({

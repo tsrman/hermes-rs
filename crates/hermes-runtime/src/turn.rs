@@ -481,6 +481,16 @@ pub struct TurnOptions<'a> {
     pub browser: Option<&'a BrowserSettings>,
     /// Memory store limits; the tool is offered when a profile directory and a writable store exist.
     pub memory: Option<&'a MemorySettings>,
+    /// `vision_analyze` settings (native attachment or `auxiliary.vision` route).
+    pub vision: Option<&'a crate::vision_tool::VisionSettings>,
+    /// Optional dedicated `auxiliary.vision` route for `vision_analyze`.
+    pub vision_route: Option<&'a ModelRoute>,
+    /// `image_generate` settings (FAL.ai).
+    pub image_gen: Option<&'a crate::image_gen::ImageGenSettings>,
+    /// `text_to_speech` settings (HTTP providers or `type: command`).
+    pub tts: Option<&'a crate::tts_tool::TtsSettings>,
+    /// `x_search` settings (xAI Responses built-in `x_search`).
+    pub x_search: Option<&'a crate::x_search::XSearchSettings>,
     pub root: &'a Path,
     pub profile: Option<&'a Path>,
     /// The saved session this turn continues, which `session_search` leaves out of recall.
@@ -819,6 +829,7 @@ where
         let assistant = json!({"role": "assistant", "content": content, "tool_calls": calls});
         sent.push(assistant.clone());
         messages.push(assistant);
+        let mut attached_images: Vec<Value> = Vec::new();
         for call in result.tool_calls {
             // The bridge answers searches and descriptions itself and hands a call back as the
             // real tool, which every later step then sees by its own name.
@@ -872,6 +883,17 @@ where
                 // A tool the toolset configuration does not allow is unknown, whatever the model sends.
                 json!({"error": format!("Unknown tool: {name}")})
             };
+            // Strip internal multimodal image envelopes before persisting or feeding tool JSON,
+            // and attach the images natively as a follow-up multimodal user turn on `sent`.
+            let output = match output {
+                Value::Object(mut map) => {
+                    if let Some(Value::Array(imgs)) = map.remove("_hermes_multimodal_images") {
+                        attached_images.extend(imgs);
+                    }
+                    Value::Object(map)
+                }
+                other => other,
+            };
             // A tool may answer with ready-made text, such as the web tools' indented JSON.
             let (content, structured) = match output {
                 Value::String(text) => {
@@ -916,6 +938,34 @@ where
                 name: &name,
                 succeeded,
             });
+        }
+        if !attached_images.is_empty() {
+            let mut parts: Vec<Value> = Vec::new();
+            let mut labels: Vec<String> = Vec::new();
+            for img in &attached_images {
+                if let Some(label) = img.get("label").and_then(Value::as_str) {
+                    if !label.is_empty() {
+                        labels.push(label.to_owned());
+                    }
+                }
+            }
+            let caption = if labels.is_empty() {
+                "Attached image(s) from the tool call above:".to_owned()
+            } else {
+                format!(
+                    "Attached image(s) from the tool call above ({}):",
+                    labels.join("; ")
+                )
+            };
+            parts.push(json!({"type": "text", "text": caption}));
+            for img in &attached_images {
+                if let Some(url) = img.get("data_url").and_then(Value::as_str) {
+                    parts.push(json!({"type": "image_url", "image_url": {"url": url}}));
+                }
+            }
+            if parts.len() > 1 {
+                sent.push(json!({"role": "user", "content": parts}));
+            }
         }
     }
     on_event(TurnEvent::IterationLimit(options.max_turns));

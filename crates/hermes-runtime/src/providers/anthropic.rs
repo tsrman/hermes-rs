@@ -391,7 +391,58 @@ fn apply_anthropic_oauth_request_transforms(
 }
 
 /// Convert an OpenAI chat-format request into a streaming Messages request.
-pub(super) fn translate_request(request: &Value) -> Result<Map<String, Value>, ProviderError> {
+pub(super) fn translate_user_content(raw: &Value) -> Result<Value, ProviderError> {
+    match raw {
+        Value::String(text) => Ok(Value::String(text.clone())),
+        Value::Array(parts) => {
+            let mut blocks = Vec::new();
+            for part in parts {
+                match part.get("type").and_then(Value::as_str) {
+                    Some("text") => {
+                        if let Some(t) = part.get("text").and_then(Value::as_str) {
+                            blocks.push(json!({"type": "text", "text": t}));
+                        }
+                    }
+                    Some("image_url") => {
+                        let url = part
+                            .pointer("/image_url/url")
+                            .or_else(|| part.get("image_url"))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        if let Some(rest) = url.strip_prefix("data:") {
+                            if let Some((meta, b64)) = rest.split_once(";base64,") {
+                                if !meta.is_empty() && !b64.is_empty() {
+                                    blocks.push(json!({
+                                        "type": "image",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": meta,
+                                            "data": b64,
+                                        }
+                                    }));
+                                }
+                            }
+                        } else if url.starts_with("http://") || url.starts_with("https://") {
+                            blocks.push(json!({
+                                "type": "image",
+                                "source": {"type": "url", "url": url}
+                            }));
+                        }
+                    }
+                    Some("image") => blocks.push(part.clone()),
+                    _ => {}
+                }
+            }
+            if blocks.is_empty() {
+                return Err(ProviderError::InvalidRequest);
+            }
+            Ok(Value::Array(blocks))
+        }
+        _ => Err(ProviderError::InvalidRequest),
+    }
+}
+
+fn translate_request(request: &Value) -> Result<Map<String, Value>, ProviderError> {
     let request = request.as_object().ok_or(ProviderError::InvalidRequest)?;
     let messages = request
         .get("messages")
@@ -403,10 +454,42 @@ pub(super) fn translate_request(request: &Value) -> Result<Map<String, Value>, P
         let content = message.get("content").and_then(Value::as_str);
         match message.get("role").and_then(Value::as_str) {
             Some("system") => system.push(content.ok_or(ProviderError::InvalidRequest)?),
-            Some("user") => converted.push(json!({
-                "role": "user",
-                "content": content.ok_or(ProviderError::InvalidRequest)?
-            })),
+            Some("user") => {
+                let raw = message
+                    .get("content")
+                    .ok_or(ProviderError::InvalidRequest)?;
+                let user_blocks = translate_user_content(raw)?;
+                // Merge adjacent user messages (e.g. a native multimodal image block immediately
+                // after a `tool_result` user turn) so Anthropic's role alternation stays valid.
+                if let Some(last) = converted.last_mut().filter(|m| m["role"] == "user") {
+                    match last.get_mut("content") {
+                        Some(Value::Array(existing)) => match user_blocks {
+                            Value::Array(extra) => existing.extend(extra),
+                            Value::String(text) => {
+                                existing.push(json!({"type": "text", "text": text}))
+                            }
+                            other => existing.push(other),
+                        },
+                        Some(Value::String(existing_text)) => {
+                            let mut merged =
+                                vec![json!({"type": "text", "text": existing_text.clone()})];
+                            match user_blocks {
+                                Value::Array(extra) => merged.extend(extra),
+                                Value::String(text) => {
+                                    merged.push(json!({"type": "text", "text": text}))
+                                }
+                                other => merged.push(other),
+                            }
+                            last["content"] = Value::Array(merged);
+                        }
+                        _ => {
+                            converted.push(json!({"role": "user", "content": user_blocks}));
+                        }
+                    }
+                } else {
+                    converted.push(json!({"role": "user", "content": user_blocks}));
+                }
+            }
             Some("assistant") => {
                 let mut blocks = Vec::new();
                 if let Some(text) = content.filter(|text| !text.is_empty()) {

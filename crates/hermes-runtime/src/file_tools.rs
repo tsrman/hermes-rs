@@ -183,11 +183,33 @@ impl<'a> FileWorkspace<'a> {
         if !metadata.is_file() || metadata.len() > READ_LIMIT {
             return Err("File must be a regular file no larger than 10 MB".into());
         }
-        let mut data = String::new();
+        let mut raw_bytes = Vec::new();
         file.take(READ_LIMIT + 1)
-            .read_to_string(&mut data)
+            .read_to_end(&mut raw_bytes)
             .map_err(|error| error.to_string())?;
-        if data.len() as u64 > READ_LIMIT || data.contains('\0') {
+        if raw_bytes.len() as u64 > READ_LIMIT {
+            return Err("File must be a regular file no larger than 10 MB".into());
+        }
+        if let Some(mime) = detect_image_mime(&raw_bytes) {
+            let b64 = crate::providers::oauth::base64_encode(&raw_bytes);
+            let data_url = format!("data:{mime};base64,{b64}");
+            return Ok(json!({
+                "is_image": true,
+                "is_binary": true,
+                "mime_type": mime,
+                "file_size": raw_bytes.len(),
+                "path": path,
+                "note": format!("Image loaded ({mime}, {} bytes) and attached for vision inspection.", raw_bytes.len()),
+                "_hermes_multimodal_images": [{
+                    "data_url": data_url,
+                    "media_type": mime,
+                    "label": format!("Image from read_file({path})")
+                }]
+            }));
+        }
+        let data = String::from_utf8(raw_bytes)
+            .map_err(|_| "File must be UTF-8 text no larger than 10 MB".to_owned())?;
+        if data.contains('\0') {
             return Err("File must be UTF-8 text no larger than 10 MB".into());
         }
         // A leading BOM belongs to the first page only, and is not shown.
@@ -789,6 +811,20 @@ fn protected_component(component: Component<'_>) -> bool {
             name.as_str(),
             ".envrc" | ".git" | ".ssh" | ".aws" | "vault" | "mcp-tokens" | "browser-profile"
         )
+}
+
+pub(crate) fn detect_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
 }
 
 fn fingerprint(bytes: &[u8]) -> [u8; 32] {

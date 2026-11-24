@@ -431,7 +431,16 @@ fn convert_content_to_converse(content: Option<&Value>) -> Vec<Value> {
                         .and_then(|u| u.get("url"))
                         .and_then(Value::as_str)
                         .unwrap_or_default();
-                    blocks.push(json!({"text": format!("[Image: {url}]")}));
+                    if let Some((fmt, b64)) = parse_bedrock_image_data_url(url) {
+                        blocks.push(json!({
+                            "image": {
+                                "format": fmt,
+                                "source": {"bytes": b64}
+                            }
+                        }));
+                    } else {
+                        blocks.push(json!({"text": format!("[Image: {url}]")}));
+                    }
                 }
                 _ => {}
             }
@@ -441,6 +450,22 @@ fn convert_content_to_converse(content: Option<&Value>) -> Vec<Value> {
         blocks.push(json!({"text": EMPTY_TEXT_PLACEHOLDER}));
     }
     blocks
+}
+
+fn parse_bedrock_image_data_url(url: &str) -> Option<(&'static str, &str)> {
+    let rest = url.strip_prefix("data:")?;
+    let (meta, b64) = rest.split_once(";base64,")?;
+    if b64.is_empty() {
+        return None;
+    }
+    let fmt = match meta.trim().to_ascii_lowercase().as_str() {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpeg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => return None,
+    };
+    Some((fmt, b64))
 }
 
 fn parse_tool_args(args: Option<&Value>) -> Value {

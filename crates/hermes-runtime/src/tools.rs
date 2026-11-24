@@ -19,6 +19,7 @@ use crate::execute_code::{self, EXECUTE_CODE};
 use crate::file_tools::{
     patch_schema, search_schema, write_schema, FileWorkspace, PATCH, SEARCH_FILES, WRITE_FILE,
 };
+use crate::image_gen::{self, IMAGE_GENERATE};
 use crate::memory_tool::{self, MemorySettings, MemoryTurn, MEMORY};
 use crate::process::{self, PROCESS_MANAGE};
 use crate::session_search::{self, Recall, SESSION_SEARCH};
@@ -27,8 +28,11 @@ use crate::skills::{SkillCatalog, SKILLS_LIST, SKILL_VIEW};
 use crate::terminal::{self, TERMINAL};
 use crate::todo_tool::{self, TodoStore, TODO_LIST};
 use crate::tool_policy::ToolPolicy;
+use crate::tts_tool::{self, TEXT_TO_SPEECH};
 use crate::turn::{ApprovalDecision, ApprovalRequest, TurnOptions};
+use crate::vision_tool::{self, VISION_ANALYZE};
 use crate::web_tools::{self, WebSettings, WEB_EXTRACT, WEB_SEARCH};
+use crate::x_search::{self, X_SEARCH};
 
 pub(crate) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -52,6 +56,10 @@ pub(crate) struct ToolEnv {
     pub web: Option<WebSettings>,
     pub browser: Option<BrowserSettings>,
     pub memory: Option<MemorySettings>,
+    pub vision_available: bool,
+    pub image_gen_available: bool,
+    pub tts_available: bool,
+    pub x_search_available: bool,
     pub policy: ToolPolicy,
     /// Whether the system prompt carries the skills index.
     pub skills_indexed: bool,
@@ -74,6 +82,11 @@ impl ToolEnv {
             web: options.web.cloned(),
             browser: options.browser.cloned(),
             memory: options.memory.cloned(),
+            vision_available: options.vision_route.is_some()
+                || options.vision.is_some_and(|v| v.native),
+            image_gen_available: options.image_gen.is_some_and(|g| g.is_available()),
+            tts_available: options.tts.is_some_and(|t| t.is_available()),
+            x_search_available: options.x_search.is_some_and(|x| x.is_available()),
             policy: options.tools.clone(),
             skills_indexed: false,
             skill_desc_limit: 0,
@@ -297,6 +310,52 @@ fn web_extract_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFu
     })
 }
 
+fn vision_analyze_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
+    Box::pin(async move {
+        let default_settings = vision_tool::VisionSettings::default();
+        let settings = cx.options.vision.unwrap_or(&default_settings);
+        vision_tool::execute(
+            args,
+            cx.options.root,
+            cx.options.profile,
+            settings,
+            cx.options.vision_route,
+        )
+        .await
+    })
+}
+
+fn image_generate_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
+    Box::pin(async move {
+        match cx.options.image_gen.filter(|g| g.is_available()) {
+            Some(settings) => {
+                image_gen::execute(args, settings, cx.options.root, cx.options.profile).await
+            }
+            None => json!({"error": format!("Unknown tool: {IMAGE_GENERATE}")}),
+        }
+    })
+}
+
+fn text_to_speech_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
+    Box::pin(async move {
+        match cx.options.tts.filter(|t| t.is_available()) {
+            Some(settings) => {
+                tts_tool::execute(args, settings, cx.options.root, cx.options.profile).await
+            }
+            None => json!({"error": format!("Unknown tool: {TEXT_TO_SPEECH}")}),
+        }
+    })
+}
+
+fn x_search_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
+    Box::pin(async move {
+        match cx.options.x_search.filter(|x| x.is_available()) {
+            Some(settings) => x_search::execute(args, settings).await,
+            None => json!({"error": format!("Unknown tool: {X_SEARCH}")}),
+        }
+    })
+}
+
 /// Put the questions of a `clarify` call to the person, when someone is there to answer.
 async fn ask_questions(
     arguments: &str,
@@ -381,6 +440,11 @@ static TOOLS: &[ToolDef] = &[
         call: execute_code::call,
     },
     ToolDef {
+        name: IMAGE_GENERATE,
+        offered: |env| env.image_gen_available.then(image_gen::schema),
+        call: image_generate_call,
+    },
+    ToolDef {
         name: MEMORY,
         offered: |env| memory_available(env).map(|_| memory_tool::schema()),
         call: memory_call,
@@ -452,10 +516,20 @@ static TOOLS: &[ToolDef] = &[
         call: terminal_call,
     },
     ToolDef {
+        name: TEXT_TO_SPEECH,
+        offered: |env| env.tts_available.then(tts_tool::schema),
+        call: text_to_speech_call,
+    },
+    ToolDef {
         // Hidden behind the tool-search bridge unless the profile lists it directly.
         name: TODO_LIST,
         offered: |env| (!env.policy.is_deferred(TODO_LIST)).then(todo_tool::schema),
         call: todo_call,
+    },
+    ToolDef {
+        name: VISION_ANALYZE,
+        offered: |env| env.vision_available.then(vision_tool::schema),
+        call: vision_analyze_call,
     },
     ToolDef {
         name: WEB_EXTRACT,
@@ -481,6 +555,11 @@ static TOOLS: &[ToolDef] = &[
         name: WRITE_FILE,
         offered: |env| env.write_files.then(write_schema),
         call: write_file_call,
+    },
+    ToolDef {
+        name: X_SEARCH,
+        offered: |env| env.x_search_available.then(x_search::schema),
+        call: x_search_call,
     },
 ];
 
@@ -576,6 +655,10 @@ mod tests {
             skill_desc_limit: 0,
             memory: Some(MemorySettings::default()),
             browser: None,
+            vision_available: false,
+            image_gen_available: false,
+            tts_available: false,
+            x_search_available: false,
             web: Some(WebSettings {
                 search: crate::web_tools::Backend::Tavily,
                 extract: crate::web_tools::Backend::Tavily,

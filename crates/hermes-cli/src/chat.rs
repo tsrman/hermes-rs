@@ -284,6 +284,9 @@ pub struct ChatRequest {
     /// Where subagents run; the main route when unset.
     #[serde(default)]
     delegate: Option<Route>,
+    /// Optional dedicated `auxiliary.vision` route for `vision_analyze`.
+    #[serde(default)]
+    vision_route: Option<Route>,
     /// Messages sent after the system prompt on every request.
     #[serde(default)]
     prefill: Vec<serde_json::Value>,
@@ -334,6 +337,14 @@ pub struct ChatRequest {
     browser: BrowserSettings,
     #[serde(default)]
     memory: MemorySettings,
+    #[serde(default)]
+    vision: hermes_runtime::vision_tool::VisionSettings,
+    #[serde(default)]
+    image_gen: hermes_runtime::image_gen::ImageGenSettings,
+    #[serde(default)]
+    tts: hermes_runtime::tts_tool::TtsSettings,
+    #[serde(default)]
+    x_search: hermes_runtime::x_search::XSearchSettings,
     #[serde(default)]
     tools: ToolPolicy,
     model_override: Option<String>,
@@ -742,6 +753,14 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         prefill,
         summary,
         delegate,
+        vision_route: side_route(
+            &settings,
+            &settings.vision_route,
+            "auxiliary.vision",
+            &base_url,
+            &api_key,
+            false,
+        )?,
         root: std::env::current_dir()
             .map_err(|error| error.to_string())?
             .into_os_string(),
@@ -813,6 +832,10 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         web: settings.web,
         browser: settings.browser,
         memory: settings.memory,
+        vision: settings.vision,
+        image_gen: settings.image_gen,
+        tts: settings.tts,
+        x_search: settings.x_search,
         tools: settings.tools,
         model_override: args.model,
     })
@@ -918,6 +941,13 @@ where
         )?),
         None => None,
     };
+    let vision_route = match &request.vision_route {
+        Some(route) => Some(route.open(
+            route.model.clone().unwrap_or_else(|| primary.model.clone()),
+            request.attempts,
+        )?),
+        None => None,
+    };
     let delegation =
         hermes_runtime::delegation::Delegation::new(request.delegation.clone(), request.oneshot)
             .with_route(delegate_route);
@@ -937,6 +967,11 @@ where
         web: Some(&request.web),
         browser: Some(&request.browser),
         memory: Some(&request.memory),
+        vision: Some(&request.vision),
+        vision_route: vision_route.as_ref(),
+        image_gen: Some(&request.image_gen),
+        tts: Some(&request.tts),
+        x_search: Some(&request.x_search),
         tools: &request.tools,
         root,
         profile: home,
@@ -1334,6 +1369,11 @@ pub async fn compress_session(
         web: Some(&request.web),
         browser: Some(&request.browser),
         memory: Some(&request.memory),
+        vision: Some(&request.vision),
+        vision_route: None,
+        image_gen: Some(&request.image_gen),
+        tts: Some(&request.tts),
+        x_search: Some(&request.x_search),
         tools: &request.tools,
         root,
         profile: Some(home),
