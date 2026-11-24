@@ -381,9 +381,8 @@ class TerminalToolTest(ToolTestCase):
         result, requests = self.last_tool_result()
         tools = [tool["function"]["name"] for tool in requests[0]["tools"]]
         self.assertIn("terminal", tools)
-        if sys.platform == "darwin":
-            self.assertNotIn("write_file", tools)
-            self.assertNotIn("patch", tools)
+        self.assertIn("write_file", tools)
+        self.assertIn("patch", tools)
         self.assertEqual(result["exit_code"], 0)
         self.assertEqual(result["output"].splitlines(), ["no-key", str(self.root / "subdir")])
         process, tty = self.interactive(tool="terminal", arguments={"command": f"{FLAGGED}; exit 7"})
