@@ -17,7 +17,10 @@ pub use crate::compaction::{
 };
 
 mod edit;
-pub use edit::set_config_value;
+pub use edit::{
+    ensure_profile_scaffold, set_config_value, set_env_value, ProfileScaffoldReport,
+    PROFILE_DIRECTORIES,
+};
 
 pub(crate) fn truthy(value: &serde_yaml::Value, default: bool) -> bool {
     use serde_yaml::Value;

@@ -33,6 +33,7 @@
 
 ## Журнал
 
+- 2026-11-25: добавлен интерактивный мастер настройки профиля `hsr setup` (`--portal`, `--non-interactive`), быстрый выбор модели `hsr model` и диагностика `hsr doctor` (`--json`, `--fix`), плюс полная инициализация дерева директорий и стартовых файлов профиля (`ensure_profile_scaffold`, `set_env_value`, `storage::ensure_initialized`: `memories/{MEMORY,USER}.md`, `skills/`, `plugins/`, `scripts/`, `cron/{output,cancels,jobs.json}`, `cache/{scratch,images,audio,documents,spillover}`, `logs/`, `vault/`, `mcp_oauth/`, `rust-owner/`, `.env` `0600`, `config.yaml` `0600`, `state.db` v33 + FTS3 без перезаписи существующих данных); добавлены модульные тесты и сквозной тест `compat/test_setup.py`.
 - 2026-11-24: выпущен релиз CLI `v0.6.0` (`f1dc0fc`, GitHub Release workflow прошёл успешно) и начат Этап 5 (GUI на GPUI):
   - вынесен общий кроссплатформенный локальный владелец сессий `hermes-runtime::local_owner` (`crates/hermes-runtime/src/local_owner.rs`): Unix domain socket (`owner.sock`) на Unix и аутентифицированный loopback TCP (`127.0.0.1:0`, 256-битный токен, `owner.addr` + `owner.lock`) на Windows, протокол v2 с буфером событий, догонкой по `after_seq`, сохранением ожидающих подтверждений при отключении клиента и обзором профилей/сессий;
   - `crates/hermes-cli/src/owner.rs` переведён на `hermes_runtime::local_owner` на всех ОС (сохранена совместимость v1, добавлены тесты `compat/test_owner_v2.py`);

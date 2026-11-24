@@ -44,6 +44,49 @@ impl<'a> SessionWriter<'a> {
         Ok(writer)
     }
 
+    /// Ensure `<profile>/state.db` exists with the canonical v33 + FTS3 schema.
+    ///
+    /// Returns `Ok(true)` if a fresh database was initialized, or `Ok(false)` if an existing
+    /// compatible database was already present (never overwrites existing data).
+    pub fn ensure_initialized(profile: &Path) -> Result<bool, StorageError> {
+        let path = profile.join("state.db");
+        if database_exists(&path)? {
+            let connection = open_database(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            verify_write_schema(&connection)?;
+            return Ok(false);
+        }
+        fs::create_dir_all(profile)?;
+        let temporary = tempfile::NamedTempFile::new_in(profile)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = temporary
+                .as_file()
+                .set_permissions(fs::Permissions::from_mode(0o600));
+        }
+        {
+            let mut connection = open_write(temporary.path())?;
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            initialize_schema(&transaction)?;
+            transaction.commit()?;
+        }
+        temporary.as_file().sync_all()?;
+        match temporary.persist_noclobber(&path) {
+            Ok(_) => {
+                #[cfg(unix)]
+                fs::File::open(profile)?.sync_all()?;
+                if let Ok(conn) = open_write(&path) {
+                    let _ = conn
+                        .execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+                }
+                Ok(true)
+            }
+            Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+            Err(error) => Err(error.error.into()),
+        }
+    }
+
     /// The session being resumed; a new session has no id until its first turn is saved.
     pub fn session_id(&self) -> Option<&str> {
         self.resume.as_ref().map(ResumeState::id)

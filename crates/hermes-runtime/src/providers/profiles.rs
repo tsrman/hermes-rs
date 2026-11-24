@@ -49,6 +49,11 @@ fn normalise(name: &str) -> String {
     name.trim().to_ascii_lowercase().replace('_', "-")
 }
 
+/// Every named API-key provider profile shipped from the Python reference.
+pub fn all() -> &'static [Profile] {
+    &PROFILES
+}
+
 /// The profile named `name` or listed under one of its aliases.
 pub fn lookup(name: &str) -> Option<&'static Profile> {
     let wanted = normalise(name);

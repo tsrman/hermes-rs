@@ -13,6 +13,7 @@ mod owner;
 mod profile;
 mod repl;
 mod sessions;
+mod setup;
 mod ui;
 
 #[derive(Parser)]
@@ -29,6 +30,12 @@ struct Cli {
 // The cron subcommand carries every job flag, so it is by far the largest variant.
 #[allow(clippy::large_enum_variant)]
 enum Command {
+    /// Interactive setup wizard: initialize profile directories, provider, model, and secrets.
+    Setup(setup::SetupArgs),
+    /// Show or switch the default LLM provider and model.
+    Model(setup::ModelArgs),
+    /// Diagnose profile directories, config.yaml, credentials, database, and local owner.
+    Doctor(setup::DoctorArgs),
     /// Authenticate with OAuth providers and inspect stored credentials.
     Auth {
         #[command(subcommand)]
@@ -100,6 +107,15 @@ async fn run() -> Result<u8, String> {
     let home = home.as_deref();
     let command = command.unwrap_or(Command::Chat(chat));
     match command {
+        Command::Setup(args) => {
+            setup::run_setup(home.ok_or("profile root is unavailable")?, args).await
+        }
+        Command::Model(args) => {
+            setup::run_model(home.ok_or("profile root is unavailable")?, args).await
+        }
+        Command::Doctor(args) => {
+            setup::run_doctor(home.ok_or("profile root is unavailable")?, args).await
+        }
         Command::Auth { command } => {
             auth::run(home.ok_or("profile root is unavailable")?, command).await
         }

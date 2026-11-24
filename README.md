@@ -88,6 +88,14 @@ cargo build --release --locked -p hermes-cli
 ## Quick Start
 
 ```bash
+# Run the interactive setup wizard (creates all profile directories, starter files, config.yaml, .env, state.db)
+hsr setup
+
+# Or quick-setup via Nous Portal OAuth / switch models / diagnose your profile
+hsr setup --portal
+hsr model
+hsr doctor
+
 # Start an interactive conversation in full-screen TUI mode (uses ~/.hsr by default; `hsr chat` is equivalent)
 hsr
 

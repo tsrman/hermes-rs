@@ -19,6 +19,11 @@ pub use migration::migrate_session_copy;
 pub(crate) use migration::{write_verified_snapshot, SnapshotReport};
 pub use write::SessionWriter;
 
+/// Ensure `<profile>/state.db` exists with schema v33 and FTS layout 3 without clobbering.
+pub fn ensure_initialized(profile: &Path) -> Result<bool, StorageError> {
+    SessionWriter::ensure_initialized(profile)
+}
+
 pub(super) const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 const SCHEMA_VERSION: i64 = 33;
 const LEGACY_SCHEMA_VERSION: i64 = 32;
