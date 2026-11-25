@@ -24,11 +24,16 @@ tokio-tungstenite = { version = "0.29", default-features = false, features = ["c
 futures-util = { version = "0.3", default-features = false, features = ["sink", "alloc"] }
 rust-stemmers = "1.2.0"
 ignore = "0.4"
+calamine = { version = "0.38", features = ["chrono"] }
+rust_xlsxwriter = "0.104"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
 rustpython-vm = { version = "0.6", default-features = false, features = ["compiler", "encodings", "freeze-stdlib", "gc", "importlib", "stdio"] }
 rustpython-stdlib = { version = "0.6", default-features = false, features = ["compiler"] }
 rustpython-pylib = { version = "0.6", features = ["freeze-stdlib"] }
-calamine = { version = "0.38", features = ["chrono"] }
-rust_xlsxwriter = "0.104"
+
+[target.'cfg(windows)'.dependencies]
+rustpython-host_env = { version = "0.6", features = ["ctypes"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 rustix = { version = "1.1", features = ["fs", "process"] }

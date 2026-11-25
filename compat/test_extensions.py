@@ -430,8 +430,13 @@ class ExtensionsInterfaceTest(unittest.TestCase):
                 reqs = json.load(response)
             tool_msg = next(m for m in reqs[-1]["messages"] if m.get("role") == "tool")
             payload = json.loads(tool_msg["content"])
-            self.assertEqual(payload["status"], "error")
-            self.assertIn("No python3 was found", payload["error"])
+            if sys.platform == "darwin":
+                self.assertEqual(payload["status"], "error")
+                self.assertIn("No python3 was found", payload["error"])
+            else:
+                # Embedded RustPython executes code cleanly even when no system `python3` exists.
+                self.assertEqual(payload["status"], "success")
+                self.assertEqual(payload["output"], "2\n")
 
     def test_events_json_setup_errors_and_missing_query(self):
         # `--events-json` without `-q` emits structured JSON error + done and exits 1.

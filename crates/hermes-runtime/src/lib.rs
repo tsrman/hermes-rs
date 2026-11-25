@@ -17,6 +17,7 @@ pub mod cronjob_tool;
 pub mod delegation;
 mod difflib;
 mod doc_extract;
+#[cfg(not(target_os = "macos"))]
 mod embedded_python;
 mod excel_tools;
 pub mod execute_code;

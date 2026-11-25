@@ -60,7 +60,9 @@ def package(target, output):
     build_env = os.environ.copy()
     if target.endswith("-musl"):
         compiler = f"CC_{target.replace('-', '_')}"
+        linker = f"CARGO_TARGET_{target.upper().replace('-', '_')}_LINKER"
         build_env.setdefault(compiler, "musl-gcc")
+        build_env.setdefault(linker, "musl-gcc")
     if windows:
         build_env.setdefault("CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS", "-C target-feature=+crt-static")
     subprocess.run(["cargo", "build", "--release", "--locked", "-p", "hermes-cli", "--target", target],

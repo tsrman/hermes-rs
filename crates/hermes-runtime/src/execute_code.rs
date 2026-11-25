@@ -36,6 +36,7 @@ use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+#[cfg(not(target_os = "macos"))]
 use crate::embedded_python::{EmbeddedEvent, EmbeddedKernel};
 use crate::excel_tools;
 use crate::file_tools::{
@@ -252,6 +253,7 @@ struct UnixKernel {
 enum SessionKernel {
     #[cfg(unix)]
     Unix(Box<UnixKernel>),
+    #[cfg(not(target_os = "macos"))]
     Embedded(EmbeddedKernel),
 }
 
@@ -260,6 +262,7 @@ impl SessionKernel {
         match self {
             #[cfg(unix)]
             Self::Unix(k) => &k.tools,
+            #[cfg(not(target_os = "macos"))]
             Self::Embedded(k) => &k.tools,
         }
     }
@@ -271,6 +274,7 @@ impl SessionKernel {
                 k.cells += 1;
                 k.cells
             }
+            #[cfg(not(target_os = "macos"))]
             Self::Embedded(k) => {
                 k.cells += 1;
                 k.cells
@@ -280,23 +284,29 @@ impl SessionKernel {
 
     fn clear_raw(&self) {
         #[cfg(unix)]
-        if let Self::Unix(k) = self {
-            if let Ok(mut raw) = k.raw.lock() {
-                raw.clear();
+        {
+            #[allow(irrefutable_let_patterns)]
+            if let Self::Unix(k) = self {
+                if let Ok(mut raw) = k.raw.lock() {
+                    raw.clear();
+                }
             }
         }
     }
 
     async fn take_raw_text(&self) -> String {
         #[cfg(unix)]
-        if let Self::Unix(k) = self {
-            // Let the reader catch up with what the processes wrote last.
-            tokio::time::sleep(Duration::from_millis(30)).await;
-            return k
-                .raw
-                .lock()
-                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-                .unwrap_or_default();
+        {
+            #[allow(irrefutable_let_patterns)]
+            if let Self::Unix(k) = self {
+                // Let the reader catch up with what the processes wrote last.
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                return k
+                    .raw
+                    .lock()
+                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                    .unwrap_or_default();
+            }
         }
         String::new()
     }
@@ -341,6 +351,7 @@ fn discard(kernel: SessionKernel) {
             }
             let _ = k.child.start_kill();
         }
+        #[cfg(not(target_os = "macos"))]
         SessionKernel::Embedded(k) => {
             k.shutdown();
         }
@@ -350,6 +361,7 @@ fn discard(kernel: SessionKernel) {
 /// The interpreter: the active virtual environment's, else `python3` on the command PATH.
 #[cfg(unix)]
 fn interpreter(env: &[(String, String)]) -> Option<PathBuf> {
+    #[cfg(not(target_os = "macos"))]
     if std::env::var("HERMES_PYTHON_ENGINE")
         .ok()
         .is_some_and(|v| v.eq_ignore_ascii_case("embedded") || v.eq_ignore_ascii_case("rustpython"))
@@ -603,6 +615,7 @@ async fn run_unix_cell(
 }
 
 /// Run one cell on the embedded RustPython kernel.
+#[cfg(not(target_os = "macos"))]
 async fn run_embedded_cell(
     kernel: &mut EmbeddedKernel,
     code: &str,
@@ -775,11 +788,18 @@ pub(crate) fn call<'a>(
                             }
                         }
                     } else {
-                        match EmbeddedKernel::spawn(&tools, env) {
-                            Ok(k) => SessionKernel::Embedded(k),
-                            Err(message) => {
-                                return json!({"status": "error", "error": format!("The embedded Python kernel could not start: {message}"), "tool_calls_made": 0, "duration_seconds": 0});
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            match EmbeddedKernel::spawn(&tools, env) {
+                                Ok(k) => SessionKernel::Embedded(k),
+                                Err(message) => {
+                                    return json!({"status": "error", "error": format!("The embedded Python kernel could not start: {message}"), "tool_calls_made": 0, "duration_seconds": 0});
+                                }
                             }
+                        }
+                        #[cfg(target_os = "macos")]
+                        {
+                            return json!({"status": "error", "error": "No python3 was found on PATH (or in the active VIRTUAL_ENV / CONDA_PREFIX).", "tool_calls_made": 0, "duration_seconds": 0});
                         }
                     }
                 }
@@ -814,6 +834,7 @@ pub(crate) fn call<'a>(
                 )
                 .await
             }
+            #[cfg(not(target_os = "macos"))]
             SessionKernel::Embedded(k) => {
                 run_embedded_cell(
                     k,
