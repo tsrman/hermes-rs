@@ -166,6 +166,7 @@ pub struct CompletionItem {
 
 const GUI_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/help", "show commands & @ / ! shortcuts"),
+    ("/setup", "open profile setup & provider settings"),
     ("/new", "start a new conversation"),
     ("/reset", "alias for /new"),
     ("/clear", "clear the visible chat feed"),

@@ -45,6 +45,21 @@ pub enum BackendUpdate {
         turn_id: String,
         event: SequencedTurnEvent,
     },
+    SkillsSynced {
+        profile: PathBuf,
+        count: usize,
+        message: String,
+        is_error: bool,
+    },
+    OAuthProgress {
+        profile: PathBuf,
+        message: String,
+    },
+    OAuthFinished {
+        profile: PathBuf,
+        message: String,
+        is_error: bool,
+    },
     Error(String),
 }
 
@@ -221,6 +236,100 @@ impl OwnerClient {
             };
             if let Err(err) = send_v2_command(&profile, cmd).await {
                 let _ = tx.send(BackendUpdate::Error(err));
+            }
+        });
+    }
+
+    pub fn sync_bundled_skills(&self, profile: PathBuf) {
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            let _ = hermes_runtime::config::ensure_profile_scaffold(&profile);
+            match hermes_runtime::skills_sync::sync_skills(
+                &profile,
+                hermes_runtime::skills_sync::SkillsSyncOptions::default(),
+            )
+            .await
+            {
+                Ok(report) => {
+                    let count = hermes_runtime::skills_sync::list_installed_skills(&profile).len();
+                    let msg = if report.opted_out {
+                        "Bundled skills opted out (.no-bundled-skills).".into()
+                    } else {
+                        format!(
+                            "Skills synced: {} installed, {} kept ({count} total).",
+                            report.installed.len(),
+                            report.skipped_existing.len()
+                        )
+                    };
+                    let _ = tx.send(BackendUpdate::SkillsSynced {
+                        profile,
+                        count,
+                        message: msg,
+                        is_error: false,
+                    });
+                }
+                Err(err) => {
+                    let count = hermes_runtime::skills_sync::list_installed_skills(&profile).len();
+                    let _ = tx.send(BackendUpdate::SkillsSynced {
+                        profile,
+                        count,
+                        message: format!("Skills download failed: {err}"),
+                        is_error: true,
+                    });
+                }
+            }
+        });
+    }
+
+    pub fn run_oauth_login(&self, profile: PathBuf, provider: String) {
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            let tx_cb = tx.clone();
+            let prof_cb = profile.clone();
+            let opts = hermes_runtime::providers::oauth_login::LoginOptions {
+                provider: provider.clone(),
+                device_code: false,
+                no_browser: false,
+                port: None,
+                region: None,
+                portal_url: None,
+                timeout_secs: 300,
+                token: None,
+            };
+            let res =
+                hermes_runtime::providers::oauth_login::login(&profile, opts, move |prompt| {
+                    let msg = match prompt {
+                        hermes_runtime::providers::oauth_login::LoginPrompt::OpenUrl { url } => {
+                            format!("Opened browser sign-in: {url}")
+                        }
+                        hermes_runtime::providers::oauth_login::LoginPrompt::DeviceCode {
+                            verification_uri,
+                            user_code,
+                            ..
+                        } => format!("Open {verification_uri} and enter code: {user_code}"),
+                        hermes_runtime::providers::oauth_login::LoginPrompt::Info(info) => info,
+                    };
+                    let _ = tx_cb.send(BackendUpdate::OAuthProgress {
+                        profile: prof_cb.clone(),
+                        message: msg,
+                    });
+                })
+                .await;
+            match res {
+                Ok(done) => {
+                    let _ = tx.send(BackendUpdate::OAuthFinished {
+                        profile,
+                        message: format!("Authenticated '{}' in auth.json (0600).", done.provider),
+                        is_error: false,
+                    });
+                }
+                Err(err) => {
+                    let _ = tx.send(BackendUpdate::OAuthFinished {
+                        profile,
+                        message: format!("OAuth sign-in failed: {err}"),
+                        is_error: true,
+                    });
+                }
             }
         });
     }

@@ -4,6 +4,7 @@
 mod editor;
 mod markdown;
 mod owner_client;
+mod setup_state;
 mod state;
 
 use std::path::PathBuf;
@@ -20,6 +21,7 @@ use hermes_runtime::turn::{ApprovalAction, ApprovalDecision};
 use crate::editor::TextBuffer;
 use crate::markdown::{parse_blocks, MdBlock};
 use crate::owner_client::{BackendUpdate, OwnerClient};
+use crate::setup_state::{SetupDraft, SetupField, GUI_PROVIDER_PRESETS, GUI_WEB_BACKENDS};
 use crate::state::{FeedRow, GuiState, PendingClarify, ToolCardState};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -27,10 +29,12 @@ enum InputTarget {
     Composer,
     Search,
     Clarify,
+    Setup(SetupField),
 }
 
 struct HermesAppView {
     state: GuiState,
+    setup: SetupDraft,
     workspace_root: PathBuf,
     client: OwnerClient,
     rx: Receiver<BackendUpdate>,
@@ -68,13 +72,20 @@ impl HermesAppView {
         .detach();
 
         let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let setup = SetupDraft::load_from_profile(&home);
+        let initial_target = if setup.open {
+            InputTarget::Setup(SetupField::Model)
+        } else {
+            InputTarget::Composer
+        };
         Self {
             state: GuiState::new(home),
+            setup,
             workspace_root,
             client,
             rx,
             focus_handle,
-            input_target: InputTarget::Composer,
+            input_target: initial_target,
         }
     }
 
@@ -169,6 +180,36 @@ impl HermesAppView {
                         );
                     }
                 }
+                BackendUpdate::SkillsSynced {
+                    profile,
+                    count,
+                    message,
+                    is_error,
+                } => {
+                    if profile == self.state.active_profile {
+                        self.setup.syncing_skills = false;
+                        self.setup.installed_skills_count = count;
+                        self.setup.notice = Some((is_error, message.clone()));
+                        self.state.status_message = message;
+                    }
+                }
+                BackendUpdate::OAuthProgress { profile, message } => {
+                    if profile == self.state.active_profile {
+                        self.setup.notice = Some((false, message.clone()));
+                        self.state.status_message = message;
+                    }
+                }
+                BackendUpdate::OAuthFinished {
+                    profile,
+                    message,
+                    is_error,
+                } => {
+                    if profile == self.state.active_profile {
+                        self.setup.oauth_in_progress = false;
+                        self.setup.notice = Some((is_error, message.clone()));
+                        self.state.status_message = message;
+                    }
+                }
                 BackendUpdate::Error(msg) => {
                     self.state.feed.push(FeedRow::Notice {
                         is_error: true,
@@ -191,7 +232,25 @@ impl HermesAppView {
                 .pending_clarify
                 .as_mut()
                 .and_then(PendingClarify::active_buffer_mut),
+            InputTarget::Setup(field) => Some(self.setup.buffer_mut(field)),
         }
+    }
+
+    fn save_setup(&mut self, cx: &mut Context<Self>) {
+        match self.setup.save(&self.state.active_profile) {
+            Ok(msg) => {
+                self.state.status_message = msg;
+                self.client.connect_and_sync(
+                    self.state.active_profile.clone(),
+                    self.state.search_input.as_str().to_owned(),
+                );
+            }
+            Err(err) => {
+                self.setup.notice = Some((true, err.clone()));
+                self.state.status_message = err;
+            }
+        }
+        cx.notify();
     }
 
     fn send_composer(&mut self, cx: &mut Context<Self>) {
@@ -248,8 +307,15 @@ impl HermesAppView {
                 "help" => {
                     self.state.feed.push(FeedRow::Notice {
                         is_error: false,
-                        text: "Commands: /new (/reset), /clear, /undo, /skills [search], /yolo, /<skill-name> [args]\nShortcuts: @file:path[:a-b], @folder:dir, @diff, @staged, @git:N, @url:https://..., !<shell cmd>, Ctrl+P palette".into(),
+                        text: "Commands: /setup, /new (/reset), /clear, /undo, /skills [search], /yolo, /<skill-name> [args]\nShortcuts: @file:path[:a-b], @folder:dir, @diff, @staged, @git:N, @url:https://..., !<shell cmd>, Ctrl+P palette".into(),
                     });
+                    cx.notify();
+                    return;
+                }
+                "setup" => {
+                    self.setup = SetupDraft::load_from_profile(&self.state.active_profile);
+                    self.setup.open = true;
+                    self.input_target = InputTarget::Setup(SetupField::Model);
                     cx.notify();
                     return;
                 }
@@ -572,9 +638,16 @@ impl HermesAppView {
                 InputTarget::Clarify => {
                     self.submit_clarify(cx);
                 }
+                InputTarget::Setup(_) => {
+                    self.save_setup(cx);
+                }
             },
             "escape" => {
-                if self.state.pending_clarify.is_some() {
+                if self.setup.open {
+                    self.setup.open = false;
+                    self.input_target = InputTarget::Composer;
+                    cx.notify();
+                } else if self.state.pending_clarify.is_some() {
                     self.cancel_clarify(cx);
                 } else if let Some(tid) = self.state.active_turn_id.clone() {
                     self.client
@@ -742,6 +815,12 @@ impl Render for HermesAppView {
                         MouseButton::Left,
                         cx.listener(move |view, _, _, cx| {
                             view.state.reset_for_profile(path.clone());
+                            view.setup = SetupDraft::load_from_profile(&path);
+                            view.input_target = if view.setup.open {
+                                InputTarget::Setup(SetupField::Model)
+                            } else {
+                                InputTarget::Composer
+                            };
                             view.client.connect_and_sync(
                                 path.clone(),
                                 view.state.search_input.as_str().to_owned(),
@@ -1252,6 +1331,580 @@ impl Render for HermesAppView {
             None
         };
 
+        let setup_view = self.setup.open.then(|| {
+            let is_custom = self.setup.provider == "custom";
+            let is_ollama = self.setup.provider == "ollama";
+            let is_oauth = self.setup.preset().is_some_and(|p| p.is_oauth);
+            let is_keyless = self.setup.preset().is_some_and(|p| p.keyless);
+
+            let provider_pills: Vec<_> = GUI_PROVIDER_PRESETS
+                .iter()
+                .map(|preset| {
+                    let active = self.setup.provider == preset.id;
+                    let id = preset.id;
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .bg(if active { accent } else { bg_card })
+                        .border_1()
+                        .border_color(if active { accent } else { border })
+                        .text_color(if active { rgb(0x0b1017) } else { text_main })
+                        .text_xs()
+                        .child(SharedString::from(preset.label))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |view, _, window, cx| {
+                                let profile = view.state.active_profile.clone();
+                                view.setup.select_provider(&profile, id);
+                                view.input_target = InputTarget::Setup(SetupField::Model);
+                                window.focus(&view.focus_handle);
+                                cx.notify();
+                            }),
+                        )
+                })
+                .collect();
+
+            let api_mode_pills: Vec<_> = ["openai", "responses", "anthropic"]
+                .into_iter()
+                .map(|mode| {
+                    let active = self.setup.api_mode == mode;
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .bg(if active { accent } else { bg_card })
+                        .text_color(if active { rgb(0x0b1017) } else { text_main })
+                        .text_xs()
+                        .child(SharedString::from(mode))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |view, _, _, cx| {
+                                view.setup.api_mode = mode.to_owned();
+                                cx.notify();
+                            }),
+                        )
+                })
+                .collect();
+
+            let web_pills: Vec<_> = GUI_WEB_BACKENDS
+                .iter()
+                .map(|&(name, _)| {
+                    let active = self.setup.web_backend == name;
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .bg(if active { accent } else { bg_card })
+                        .text_color(if active { rgb(0x0b1017) } else { text_main })
+                        .text_xs()
+                        .child(SharedString::from(name))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |view, _, _, cx| {
+                                view.setup.web_backend = name.to_owned();
+                                cx.notify();
+                            }),
+                        )
+                })
+                .collect();
+
+            let base_url_display = self.setup.base_url.display(
+                self.input_target == InputTarget::Setup(SetupField::BaseUrl),
+                "https://api.example.com/v1",
+            );
+            let model_display = self.setup.model.display(
+                self.input_target == InputTarget::Setup(SetupField::Model),
+                "Model identifier (e.g. gpt-4.1, deepseek-chat)",
+            );
+            let key_label = self.setup.key_env_name().unwrap_or("HERMES_API_KEY");
+            let key_placeholder = if self.setup.has_existing_api_key {
+                format!("{key_label} already configured in .env (leave blank to keep)")
+            } else {
+                format!("Paste {key_label} (saved to .env with chmod 600)")
+            };
+            let api_key_display = SetupDraft::masked_display(
+                &self.setup.api_key,
+                self.input_target == InputTarget::Setup(SetupField::ApiKey),
+                &key_placeholder,
+            );
+
+            let web_env_name = self.setup.web_env_name();
+            let web_key_display = web_env_name.map(|var| {
+                SetupDraft::masked_display(
+                    &self.setup.web_api_key,
+                    self.input_target == InputTarget::Setup(SetupField::WebApiKey),
+                    &format!("Optional {var} (leave blank to keep existing)"),
+                )
+            });
+
+            let oauth_provider = self.setup.provider.clone();
+            let oauth_busy = self.setup.oauth_in_progress;
+            let skills_busy = self.setup.syncing_skills;
+            let skills_count = self.setup.installed_skills_count;
+            let notice = self.setup.notice.clone();
+
+            div()
+                .id("setup-scroll")
+                .flex_1()
+                .overflow_y_scroll()
+                .p_4()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_between()
+                        .items_center()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .text_base()
+                                        .text_color(accent)
+                                        .child("Profile Setup & Settings"),
+                                )
+                                .child(div().text_xs().text_color(text_dim).child(
+                                    SharedString::from(format!(
+                                        "Profile: {} (saving initializes all directories, starter files & state.db)",
+                                        self.state.active_profile.display()
+                                    )),
+                                )),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .bg(bg_card)
+                                .border_1()
+                                .border_color(border)
+                                .text_xs()
+                                .text_color(text_dim)
+                                .child("Close (Esc)")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _, window, cx| {
+                                        view.setup.open = false;
+                                        view.input_target = InputTarget::Composer;
+                                        window.focus(&view.focus_handle);
+                                        cx.notify();
+                                    }),
+                                ),
+                        ),
+                )
+                .children(notice.map(|(is_err, text)| {
+                    div()
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .bg(if is_err { rgb(0x301619) } else { rgb(0x162638) })
+                        .border_1()
+                        .border_color(if is_err { red } else { accent })
+                        .text_xs()
+                        .text_color(if is_err { red } else { text_main })
+                        .child(SharedString::from(text))
+                }))
+                // Provider selector
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(div().text_xs().text_color(text_dim).child("1. LLM Provider"))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .flex_wrap()
+                                .gap_1()
+                                .children(provider_pills),
+                        ),
+                )
+                // OAuth button when an OAuth provider is selected
+                .when(is_oauth, |el| {
+                    el.child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .px_3()
+                                    .py_1()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .bg(accent)
+                                    .text_color(rgb(0x0b1017))
+                                    .text_xs()
+                                    .child(if oauth_busy {
+                                        "Waiting for browser sign-in..."
+                                    } else {
+                                        "Sign in via Browser (OAuth)"
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |view, _, _, cx| {
+                                            if !view.setup.oauth_in_progress {
+                                                view.setup.oauth_in_progress = true;
+                                                view.setup.notice = Some((
+                                                    false,
+                                                    format!("Starting OAuth login for {oauth_provider}..."),
+                                                ));
+                                                view.client.run_oauth_login(
+                                                    view.state.active_profile.clone(),
+                                                    oauth_provider.clone(),
+                                                );
+                                                cx.notify();
+                                            }
+                                        }),
+                                    ),
+                            ),
+                    )
+                })
+                // Base URL + API mode for custom / ollama
+                .when(is_custom || is_ollama, |el| {
+                    el.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(text_dim)
+                                    .child("Endpoint Base URL"),
+                            )
+                            .child(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_md()
+                                    .cursor_text()
+                                    .bg(bg_card)
+                                    .border_1()
+                                    .border_color(
+                                        if self.input_target
+                                            == InputTarget::Setup(SetupField::BaseUrl)
+                                        {
+                                            accent
+                                        } else {
+                                            border
+                                        },
+                                    )
+                                    .text_xs()
+                                    .text_color(text_main)
+                                    .child(SharedString::from(base_url_display))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|view, _, window, cx| {
+                                            view.input_target =
+                                                InputTarget::Setup(SetupField::BaseUrl);
+                                            window.focus(&view.focus_handle);
+                                            cx.notify();
+                                        }),
+                                    ),
+                            ),
+                    )
+                    .when(is_custom, |el2| {
+                        el2.child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap_2()
+                                .child(div().text_xs().text_color(text_dim).child("API Mode:"))
+                                .children(api_mode_pills),
+                        )
+                    })
+                })
+                // Default Model
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(div().text_xs().text_color(text_dim).child("2. Default Model"))
+                        .child(
+                            div()
+                                .px_3()
+                                .py_2()
+                                .rounded_md()
+                                .cursor_text()
+                                .bg(bg_card)
+                                .border_1()
+                                .border_color(
+                                    if self.input_target == InputTarget::Setup(SetupField::Model) {
+                                        accent
+                                    } else {
+                                        border
+                                    },
+                                )
+                                .text_xs()
+                                .text_color(text_main)
+                                .child(SharedString::from(model_display))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _, window, cx| {
+                                        view.input_target = InputTarget::Setup(SetupField::Model);
+                                        window.focus(&view.focus_handle);
+                                        cx.notify();
+                                    }),
+                                ),
+                        ),
+                )
+                // API Key (masked, saved to .env 0600)
+                .when(!is_oauth && !is_keyless, |el| {
+                    el.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_xs().text_color(text_dim).child(
+                                SharedString::from(format!("3. API Key ({key_label} → .env 0600)")),
+                            ))
+                            .child(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_md()
+                                    .cursor_text()
+                                    .bg(bg_card)
+                                    .border_1()
+                                    .border_color(
+                                        if self.input_target
+                                            == InputTarget::Setup(SetupField::ApiKey)
+                                        {
+                                            accent
+                                        } else {
+                                            border
+                                        },
+                                    )
+                                    .text_xs()
+                                    .text_color(if self.setup.api_key.is_empty() {
+                                        text_dim
+                                    } else {
+                                        text_main
+                                    })
+                                    .child(SharedString::from(api_key_display))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|view, _, window, cx| {
+                                            view.input_target =
+                                                InputTarget::Setup(SetupField::ApiKey);
+                                            window.focus(&view.focus_handle);
+                                            cx.notify();
+                                        }),
+                                    ),
+                            ),
+                    )
+                })
+                // Web search backend
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(text_dim)
+                                .child("4. Web Search Backend (optional)"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .flex_wrap()
+                                .gap_1()
+                                .children(web_pills),
+                        )
+                        .children(web_key_display.map(|display| {
+                            div()
+                                .mt_1()
+                                .px_3()
+                                .py_2()
+                                .rounded_md()
+                                .cursor_text()
+                                .bg(bg_card)
+                                .border_1()
+                                .border_color(
+                                    if self.input_target
+                                        == InputTarget::Setup(SetupField::WebApiKey)
+                                    {
+                                        accent
+                                    } else {
+                                        border
+                                    },
+                                )
+                                .text_xs()
+                                .text_color(if self.setup.web_api_key.is_empty() {
+                                    text_dim
+                                } else {
+                                    text_main
+                                })
+                                .child(SharedString::from(display))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _, window, cx| {
+                                        view.input_target =
+                                            InputTarget::Setup(SetupField::WebApiKey);
+                                        window.focus(&view.focus_handle);
+                                        cx.notify();
+                                    }),
+                                )
+                        })),
+                )
+                // Memory & Bundled Skills row
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            div()
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .bg(if self.setup.memory_enabled {
+                                    bg_user
+                                } else {
+                                    bg_card
+                                })
+                                .border_1()
+                                .border_color(if self.setup.memory_enabled {
+                                    accent
+                                } else {
+                                    border
+                                })
+                                .text_xs()
+                                .text_color(text_main)
+                                .child(if self.setup.memory_enabled {
+                                    "✓ Memory (MEMORY.md & USER.md)"
+                                } else {
+                                    "○ Memory disabled"
+                                })
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _, _, cx| {
+                                        view.setup.memory_enabled = !view.setup.memory_enabled;
+                                        cx.notify();
+                                    }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .bg(bg_card)
+                                .border_1()
+                                .border_color(accent)
+                                .text_xs()
+                                .text_color(accent)
+                                .child(SharedString::from(if skills_busy {
+                                    "Downloading bundled skills...".into()
+                                } else {
+                                    format!(
+                                        "⬇ Download Official Skills ({skills_count} installed)"
+                                    )
+                                }))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _, _, cx| {
+                                        if !view.setup.syncing_skills {
+                                            view.setup.syncing_skills = true;
+                                            view.setup.notice = Some((
+                                                false,
+                                                "Downloading bundled skills from GitHub...".into(),
+                                            ));
+                                            view.client.sync_bundled_skills(
+                                                view.state.active_profile.clone(),
+                                            );
+                                            cx.notify();
+                                        }
+                                    }),
+                                ),
+                        ),
+                )
+                // Save button
+                .child(
+                    div()
+                        .pt_2()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .child(
+                            div()
+                                .px_4()
+                                .py_2()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .bg(green)
+                                .text_color(rgb(0x0b1017))
+                                .text_sm()
+                                .child("Save & Initialize Profile")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _, _, cx| {
+                                        view.save_setup(cx);
+                                    }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .px_3()
+                                .py_2()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .bg(bg_card)
+                                .border_1()
+                                .border_color(border)
+                                .text_color(text_main)
+                                .text_sm()
+                                .child("Back to Chat")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _, window, cx| {
+                                        view.setup.open = false;
+                                        view.input_target = InputTarget::Composer;
+                                        window.focus(&view.focus_handle);
+                                        cx.notify();
+                                    }),
+                                ),
+                        ),
+                )
+        });
+
+        // Scrollable feed or Setup screen
+        let main_body = if let Some(setup_el) = setup_view {
+            setup_el.into_any_element()
+        } else {
+            div()
+                .id("chat-feed")
+                .flex_1()
+                .overflow_y_scroll()
+                .p_4()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .children(feed_ui)
+                .into_any_element()
+        };
+
         let search_display = self.state.search_input.display(
             self.input_target == InputTarget::Search,
             "Search sessions...",
@@ -1450,6 +2103,39 @@ impl Render for HermesAppView {
                                             .py_1()
                                             .rounded_md()
                                             .cursor_pointer()
+                                            .bg(if self.setup.open { accent } else { bg_card })
+                                            .text_color(if self.setup.open {
+                                                rgb(0x0b1017)
+                                            } else {
+                                                text_main
+                                            })
+                                            .text_xs()
+                                            .child("⚙ Setup")
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|view, _, window, cx| {
+                                                    if view.setup.open {
+                                                        view.setup.open = false;
+                                                        view.input_target = InputTarget::Composer;
+                                                    } else {
+                                                        view.setup = SetupDraft::load_from_profile(
+                                                            &view.state.active_profile,
+                                                        );
+                                                        view.setup.open = true;
+                                                        view.input_target =
+                                                            InputTarget::Setup(SetupField::Model);
+                                                    }
+                                                    window.focus(&view.focus_handle);
+                                                    cx.notify();
+                                                }),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .py_1()
+                                            .rounded_md()
+                                            .cursor_pointer()
                                             .bg(bg_card)
                                             .text_xs()
                                             .child("Reconnect")
@@ -1466,18 +2152,8 @@ impl Render for HermesAppView {
                                     ),
                             ),
                     )
-                    // Scrollable feed
-                    .child(
-                        div()
-                            .id("chat-feed")
-                            .flex_1()
-                            .overflow_y_scroll()
-                            .p_4()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .children(feed_ui),
-                    )
+                    // Scrollable feed or in-app Setup screen
+                    .child(main_body)
                     // Pending approval, clarify modal, or `@` / `/` completion popup
                     .children(approval_panel)
                     .children(clarify_panel)
