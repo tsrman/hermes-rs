@@ -24,6 +24,12 @@ impl TextBuffer {
         self.cursor
     }
 
+    /// Return the text slices immediately before and after the current cursor position.
+    pub fn split_at_cursor(&self) -> (&str, &str) {
+        let idx = self.cursor.min(self.text.len());
+        (&self.text[..idx], &self.text[idx..])
+    }
+
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;
@@ -90,6 +96,7 @@ impl TextBuffer {
     }
 
     /// Format the text with a visible caret when focused, or the placeholder when empty & unfocused.
+    #[cfg(test)]
     pub fn display(&self, focused: bool, placeholder: &str) -> String {
         if self.text.is_empty() {
             return if focused {
@@ -146,6 +153,10 @@ mod tests {
         buf.move_end();
         buf.insert_char('!');
         assert_eq!(buf.as_str(), "ривет новыймир!");
+        assert_eq!(buf.split_at_cursor(), ("ривет новыймир!", ""));
+        buf.move_left();
+        assert_eq!(buf.split_at_cursor(), ("ривет новыймир", "!"));
+        buf.move_end();
         assert!(buf.display(true, "hint").ends_with("!▏"));
         assert_eq!(buf.display(false, "hint"), "ривет новыймир!");
         buf.clear();

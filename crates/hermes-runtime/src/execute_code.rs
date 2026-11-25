@@ -37,7 +37,9 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
 #[cfg(not(target_os = "macos"))]
-use crate::embedded_python::{EmbeddedEvent, EmbeddedKernel};
+use crate::embedded_python::{
+    use_subprocess_worker, EmbeddedEvent, EmbeddedKernel, EmbeddedSubprocessKernel,
+};
 use crate::excel_tools;
 use crate::file_tools::{
     approval_error, request_approval, ApprovalAction, ApprovalDecision, ApprovalRequest,
@@ -255,6 +257,8 @@ enum SessionKernel {
     Unix(Box<UnixKernel>),
     #[cfg(not(target_os = "macos"))]
     Embedded(EmbeddedKernel),
+    #[cfg(not(target_os = "macos"))]
+    EmbeddedProcess(Box<EmbeddedSubprocessKernel>),
 }
 
 impl SessionKernel {
@@ -264,6 +268,8 @@ impl SessionKernel {
             Self::Unix(k) => &k.tools,
             #[cfg(not(target_os = "macos"))]
             Self::Embedded(k) => &k.tools,
+            #[cfg(not(target_os = "macos"))]
+            Self::EmbeddedProcess(k) => &k.tools,
         }
     }
 
@@ -276,6 +282,11 @@ impl SessionKernel {
             }
             #[cfg(not(target_os = "macos"))]
             Self::Embedded(k) => {
+                k.cells += 1;
+                k.cells
+            }
+            #[cfg(not(target_os = "macos"))]
+            Self::EmbeddedProcess(k) => {
                 k.cells += 1;
                 k.cells
             }
@@ -337,11 +348,11 @@ pub fn kill_all_kernels() {
 /// End the kernel of a finished conversation (a subagent's).
 pub(crate) async fn end_session(session: &str) {
     if let Some(kernel) = KERNELS.lock().await.remove(session) {
-        discard(kernel);
+        discard_and_reap(kernel).await;
     }
 }
 
-fn discard(kernel: SessionKernel) {
+async fn discard_and_reap(kernel: SessionKernel) {
     match kernel {
         #[cfg(unix)]
         SessionKernel::Unix(mut k) => {
@@ -350,12 +361,44 @@ fn discard(kernel: SessionKernel) {
                 groups.remove(&k.pgid);
             }
             let _ = k.child.start_kill();
+            let _ = tokio::time::timeout(Duration::from_secs(2), k.child.wait()).await;
         }
         #[cfg(not(target_os = "macos"))]
         SessionKernel::Embedded(k) => {
             k.shutdown();
         }
+        #[cfg(not(target_os = "macos"))]
+        SessionKernel::EmbeddedProcess(mut k) => {
+            #[cfg(unix)]
+            {
+                kill_group(k.pgid);
+                if let Ok(mut groups) = GROUPS.lock() {
+                    groups.remove(&k.pgid);
+                }
+            }
+            let _ = k.child.start_kill();
+            let _ = tokio::time::timeout(Duration::from_secs(2), k.child.wait()).await;
+        }
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn spawn_embedded(
+    tools: &[&'static str],
+    directory: &Path,
+    env: Vec<(String, String)>,
+) -> Result<SessionKernel, String> {
+    if use_subprocess_worker() {
+        if let Ok(exe) = std::env::current_exe() {
+            let kernel = EmbeddedSubprocessKernel::spawn(&exe, tools, directory, env).await?;
+            #[cfg(unix)]
+            if let Ok(mut groups) = GROUPS.lock() {
+                groups.insert(kernel.pgid);
+            }
+            return Ok(SessionKernel::EmbeddedProcess(Box::new(kernel)));
+        }
+    }
+    EmbeddedKernel::spawn(tools, env).map(SessionKernel::Embedded)
 }
 
 /// The interpreter: the active virtual environment's, else `python3` on the command PATH.
@@ -651,6 +694,43 @@ async fn run_embedded_cell(
     }
 }
 
+/// Run one cell on the embedded RustPython subprocess kernel.
+#[cfg(not(target_os = "macos"))]
+async fn run_embedded_process_cell(
+    kernel: &mut EmbeddedSubprocessKernel,
+    code: &str,
+    directory: &Path,
+    cx: &mut ToolContext<'_, '_>,
+    deadline: Instant,
+    max_calls: usize,
+    calls: &mut usize,
+) -> Cell {
+    if !kernel.start_cell(code, directory).await {
+        return Cell::Died;
+    }
+    let allowed = kernel.tools.clone();
+    loop {
+        match kernel.next_event(deadline).await {
+            EmbeddedEvent::Done(payload) => return Cell::Done(payload),
+            EmbeddedEvent::TimedOut => return Cell::TimedOut,
+            EmbeddedEvent::Died => return Cell::Died,
+            EmbeddedEvent::ToolCall { tool, args } => {
+                let value = match dispatch_sandbox_tool(
+                    &tool, &args, &allowed, directory, cx, deadline, max_calls, calls,
+                )
+                .await
+                {
+                    Ok(v) => v,
+                    Err(()) => return Cell::TimedOut,
+                };
+                if !kernel.send_tool_reply(value).await {
+                    return Cell::Died;
+                }
+            }
+        }
+    }
+}
+
 /// ANSI escapes removed and credential shapes masked, as the reference cleans code output.
 fn clean(text: &str) -> String {
     redact_with(
@@ -753,6 +833,7 @@ pub(crate) fn call<'a>(
                 action: ApprovalAction::RunCode,
                 timeout_secs: approval_timeout,
             },
+            cx.options.approval_policy,
             &mut ask,
         )
         .await;
@@ -767,7 +848,8 @@ pub(crate) fn call<'a>(
             match kernels.remove(&session) {
                 Some(kernel) if args.reset || kernel.tools() != tools.as_slice() => {
                     state_reset = true;
-                    discard(kernel);
+                    drop(kernels);
+                    discard_and_reap(kernel).await;
                     None
                 }
                 other => other,
@@ -790,8 +872,8 @@ pub(crate) fn call<'a>(
                     } else {
                         #[cfg(not(target_os = "macos"))]
                         {
-                            match EmbeddedKernel::spawn(&tools, env) {
-                                Ok(k) => SessionKernel::Embedded(k),
+                            match spawn_embedded(&tools, &directory, env).await {
+                                Ok(k) => k,
                                 Err(message) => {
                                     return json!({"status": "error", "error": format!("The embedded Python kernel could not start: {message}"), "tool_calls_made": 0, "duration_seconds": 0});
                                 }
@@ -805,8 +887,8 @@ pub(crate) fn call<'a>(
                 }
                 #[cfg(not(unix))]
                 {
-                    match EmbeddedKernel::spawn(&tools, env) {
-                        Ok(k) => SessionKernel::Embedded(k),
+                    match spawn_embedded(&tools, &directory, env).await {
+                        Ok(k) => k,
                         Err(message) => {
                             return json!({"status": "error", "error": format!("The embedded Python kernel could not start: {message}"), "tool_calls_made": 0, "duration_seconds": 0});
                         }
@@ -837,6 +919,19 @@ pub(crate) fn call<'a>(
             #[cfg(not(target_os = "macos"))]
             SessionKernel::Embedded(k) => {
                 run_embedded_cell(
+                    k,
+                    &code,
+                    &directory,
+                    cx,
+                    started + timeout,
+                    max_calls,
+                    &mut calls,
+                )
+                .await
+            }
+            #[cfg(not(target_os = "macos"))]
+            SessionKernel::EmbeddedProcess(k) => {
+                run_embedded_process_cell(
                     k,
                     &code,
                     &directory,
@@ -907,7 +1002,7 @@ pub(crate) fn call<'a>(
                     }
                 }
                 if status == "exit" {
-                    discard(kernel);
+                    discard_and_reap(kernel).await;
                 } else {
                     KERNELS.lock().await.insert(session, kernel);
                 }
@@ -918,7 +1013,7 @@ pub(crate) fn call<'a>(
                     timeout.as_secs()
                 );
                 let (shown, meta) = head_tail(&clean(&raw_text), MAX_STDOUT_BYTES);
-                discard(kernel);
+                discard_and_reap(kernel).await;
                 result.insert("status".into(), json!("timeout"));
                 result.insert(
                     "output".into(),
@@ -937,7 +1032,7 @@ pub(crate) fn call<'a>(
             }
             Cell::Died => {
                 let detail = clean(raw_text.trim());
-                discard(kernel);
+                discard_and_reap(kernel).await;
                 result.insert("status".into(), json!("error"));
                 result.insert("output".into(), json!(""));
                 result.insert("exit_code".into(), json!(-1));

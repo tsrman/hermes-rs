@@ -314,6 +314,8 @@ pub struct ChatRequest {
     debug_log: Option<OsString>,
     #[serde(default)]
     approvals: hermes_runtime::approval_policy::ApprovalSettings,
+    #[serde(skip)]
+    approval_policy: Option<std::sync::Arc<hermes_runtime::approval_policy::ApprovalPolicy>>,
     #[serde(default)]
     delegation: hermes_runtime::delegation::DelegationSettings,
     #[serde(default)]
@@ -788,6 +790,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
             approvals.approve_all |= args.yolo;
             approvals
         },
+        approval_policy: None,
         approval_timeout_secs: ((!oneshot && crate::approval::available())
             || settings.approvals.answers_without_a_person()
             || args.yolo)
@@ -968,6 +971,7 @@ where
         steer_queue: None,
         prefill: (!request.prefill.is_empty()).then_some(request.prefill.as_slice()),
         state_scope: request.state_scope.as_deref(),
+        approval_policy: request.approval_policy.as_deref(),
         mcp: Some(&mcp),
         web: Some(&request.web),
         browser: Some(&request.browser),
@@ -1290,10 +1294,10 @@ pub async fn run_text(
             request.tools = request.tools.without_tools(&["cronjob_manage"]);
         }
         // No person answers a cron job: unflagged commands run, flagged ones follow `cron_mode`.
-        crate::approval::install(request.approvals().clone());
-        if let Some(policy) = hermes_runtime::approval_policy::installed() {
-            policy.set_unattended(request.approvals().cron_approves);
-        }
+        let policy =
+            hermes_runtime::approval_policy::ApprovalPolicy::new(request.approvals().clone());
+        policy.set_unattended(request.approvals().cron_approves);
+        request.approval_policy = Some(std::sync::Arc::new(policy));
     }
     let mut text = String::new();
     let code = execute(
@@ -1443,6 +1447,9 @@ pub fn prepare_gui_turn(
     // background `hsr owner` process itself has no controlling TTY on stdin.
     request.single_query = false;
     request.approval_timeout_secs = request.terminal_approval_timeout_secs.or(Some(60));
+    request.approval_policy = Some(std::sync::Arc::new(
+        hermes_runtime::approval_policy::ApprovalPolicy::new(request.approvals.clone()),
+    ));
     if let Some(dir) = cwd.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()) {
         request.set_root(OsString::from(dir));
     }
@@ -1497,6 +1504,7 @@ pub async fn compress_session(
         steer_queue: None,
         prefill: None,
         state_scope: request.state_scope.as_deref(),
+        approval_policy: request.approval_policy.as_deref(),
         mcp: None,
         web: Some(&request.web),
         browser: Some(&request.browser),

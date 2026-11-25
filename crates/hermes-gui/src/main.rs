@@ -12,17 +12,19 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
+#[cfg(target_os = "windows")]
+use gpui::WindowControlArea;
 use gpui::{
     div, prelude::*, px, rgb, size, App, Application, Bounds, ClipboardItem, Context,
-    ExternalPaths, FocusHandle, KeyDownEvent, MouseButton, PathPromptOptions, SharedString, Window,
-    WindowBounds, WindowOptions,
+    ExternalPaths, FocusHandle, HighlightStyle, KeyDownEvent, MouseButton, PathPromptOptions, Rgba,
+    SharedString, StyledText, TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 use hermes_runtime::config::profile_home;
 use hermes_runtime::turn::{ApprovalAction, ApprovalDecision};
 
 use crate::editor::TextBuffer;
 use crate::markdown::{parse_blocks, MdBlock};
-use crate::owner_client::{BackendUpdate, OwnerClient};
+use crate::owner_client::{BackendUpdate, OwnerClient, ScopedUpdate};
 use crate::setup_state::{SetupDraft, SetupField, GUI_PROVIDER_PRESETS, GUI_WEB_BACKENDS};
 use crate::state::{FeedRow, GuiState, PendingClarify, ToolCardState};
 use crate::workspace::{
@@ -45,7 +47,7 @@ struct HermesAppView {
     workspace_prefs: WorkspacePrefs,
     workspace_root: PathBuf,
     client: OwnerClient,
-    rx: Receiver<BackendUpdate>,
+    rx: Receiver<ScopedUpdate>,
     focus_handle: FocusHandle,
     input_target: InputTarget,
 }
@@ -56,8 +58,8 @@ impl HermesAppView {
             .ok()
             .flatten()
             .unwrap_or_else(|| PathBuf::from(".hsr"));
-        let (client, rx) = OwnerClient::new().expect("tokio runtime");
-        client.connect_and_sync(home.clone(), String::new());
+        let (mut client, rx) = OwnerClient::new().expect("tokio runtime");
+        client.connect_and_sync(home.clone());
         let focus_handle = cx.focus_handle();
 
         // Poll backend events smoothly every 40ms so streaming deltas, approvals, and clarify
@@ -103,13 +105,16 @@ impl HermesAppView {
 
     fn drain_updates(&mut self) -> bool {
         let mut changed = false;
-        while let Ok(update) = self.rx.try_recv() {
+        while let Ok(reply) = self.rx.try_recv() {
+            let Some(update) = self.client.current_update(reply) else {
+                continue;
+            };
             changed = true;
             match update {
                 BackendUpdate::Connected {
                     profile,
                     profiles,
-                    sessions,
+                    view_revision,
                     active_turns,
                 } => {
                     if profile != self.state.active_profile {
@@ -117,7 +122,11 @@ impl HermesAppView {
                     }
                     self.state.owner_connected = true;
                     self.state.profiles = profiles;
-                    self.state.sessions = sessions;
+                    self.client
+                        .list_sessions(profile, self.state.search_input.as_str().to_owned());
+                    if self.client.view_revision() != view_revision {
+                        continue;
+                    }
                     self.state.status_message = "Connected to local owner".into();
                     if let Some((turn_id, after_seq)) = self.state.note_active_turns(&active_turns)
                     {
@@ -142,12 +151,9 @@ impl HermesAppView {
                         self.state.pending_clarify = None;
                         self.state.status_message =
                             "Local owner restarted; syncing saved history...".into();
-                        self.client.connect_and_sync(
-                            profile.clone(),
-                            self.state.search_input.as_str().to_owned(),
-                        );
+                        self.client.connect_and_sync(profile.clone());
                         if let Some(sid) = self.state.selected_session_id.clone() {
-                            self.client.load_session(profile, sid);
+                            self.load_session(sid);
                         }
                     }
                 }
@@ -168,24 +174,37 @@ impl HermesAppView {
                     }
                 }
                 BackendUpdate::TurnStarted { turn_id } => {
+                    self.client.subscribe_turn(
+                        self.state.active_profile.clone(),
+                        turn_id.clone(),
+                        0,
+                    );
                     self.state.active_turn_id = Some(turn_id);
                     self.state.last_seq = 0;
                     self.state.streaming = true;
                     self.state.status_message = "Streaming...".into();
                 }
                 BackendUpdate::TurnEvent { turn_id, event } => {
-                    self.state.owner_connected = true;
                     let finished = matches!(
                         event.event,
                         hermes_runtime::local_owner::TurnStreamEvent::Done { .. }
                     );
-                    self.state.apply_turn_event(&turn_id, event);
+                    if !self.state.apply_turn_event(&turn_id, event) {
+                        continue;
+                    }
+                    self.state.owner_connected = true;
                     if self.state.pending_clarify.is_some() {
                         self.input_target = InputTarget::Clarify;
                     } else if self.input_target == InputTarget::Clarify {
                         self.input_target = InputTarget::Composer;
                     }
                     if finished {
+                        self.client.change_view();
+                        if self.state.reload_after_gap {
+                            if let Some(id) = self.state.selected_session_id.clone() {
+                                self.load_session(id);
+                            }
+                        }
                         self.client.list_sessions(
                             self.state.active_profile.clone(),
                             self.state.search_input.as_str().to_owned(),
@@ -222,17 +241,39 @@ impl HermesAppView {
                         self.state.status_message = message;
                     }
                 }
-                BackendUpdate::Error(msg) => {
-                    self.state.feed.push(FeedRow::Notice {
-                        is_error: true,
-                        text: msg.clone(),
-                    });
-                    self.state.status_message = msg;
+                BackendUpdate::ConversationError(msg) => {
                     self.state.streaming = false;
+                    self.state.loading_session = false;
+                    self.state.pending_approval = None;
+                    self.state.pending_clarify = None;
+                    self.state.active_turn_id = None;
+                    self.show_backend_error(msg);
                 }
+                BackendUpdate::Error(msg) => self.show_backend_error(msg),
             }
         }
         changed
+    }
+
+    fn show_backend_error(&mut self, msg: String) {
+        self.state.feed.push(FeedRow::Notice {
+            is_error: true,
+            text: msg.clone(),
+        });
+        self.state.status_message = msg;
+    }
+
+    fn load_session(&mut self, id: String) {
+        self.state.select_session(id.clone());
+        self.input_target = InputTarget::Composer;
+        self.client
+            .load_session(self.state.active_profile.clone(), id);
+    }
+
+    fn new_chat(&mut self) {
+        self.client.change_view();
+        self.state.start_new_chat();
+        self.input_target = InputTarget::Composer;
     }
 
     fn active_buffer_mut(&mut self) -> Option<&mut TextBuffer> {
@@ -285,9 +326,15 @@ impl HermesAppView {
             multiple: false,
             prompt: Some("Select project working directory".into()),
         });
+        let revision = self.client.view_revision();
+        let workspace = self.workspace_root.clone();
         cx.spawn(async move |this, cx| {
             let result = rx.await;
-            let _ = this.update(cx, |view, cx| match result {
+            let _ = this.update(cx, |view, cx| {
+                if revision != view.client.view_revision() || workspace != view.workspace_root {
+                    return;
+                }
+                match result {
                 Ok(Ok(Some(paths))) => {
                     if let Some(dir) = paths.into_iter().next() {
                         view.set_workspace_root(dir, cx);
@@ -306,6 +353,7 @@ impl HermesAppView {
                     cx.notify();
                 }
                 Err(_) => {}
+                }
             });
         })
         .detach();
@@ -318,9 +366,15 @@ impl HermesAppView {
             multiple: true,
             prompt: Some("Attach files to project & message".into()),
         });
+        let revision = self.client.view_revision();
+        let workspace = self.workspace_root.clone();
         cx.spawn(async move |this, cx| {
             let result = rx.await;
-            let _ = this.update(cx, |view, cx| match result {
+            let _ = this.update(cx, |view, cx| {
+                if revision != view.client.view_revision() || workspace != view.workspace_root {
+                    return;
+                }
+                match result {
                 Ok(Ok(Some(paths))) => {
                     view.attach_paths(&paths, cx);
                 }
@@ -337,6 +391,7 @@ impl HermesAppView {
                     cx.notify();
                 }
                 Err(_) => {}
+                }
             });
         })
         .detach();
@@ -386,10 +441,8 @@ impl HermesAppView {
         match self.setup.save(&self.state.active_profile) {
             Ok(msg) => {
                 self.state.status_message = msg;
-                self.client.connect_and_sync(
-                    self.state.active_profile.clone(),
-                    self.state.search_input.as_str().to_owned(),
-                );
+                self.client
+                    .connect_and_sync(self.state.active_profile.clone());
             }
             Err(err) => {
                 self.setup.notice = Some((true, err.clone()));
@@ -401,7 +454,10 @@ impl HermesAppView {
 
     fn send_composer(&mut self, cx: &mut Context<Self>) {
         let text = self.state.composer_input.as_str().trim().to_owned();
-        if (text.is_empty() && self.state.attachments.is_empty()) || self.state.streaming {
+        if (text.is_empty() && self.state.attachments.is_empty())
+            || self.state.streaming
+            || self.state.loading_session
+        {
             return;
         }
         self.state.composer_input.clear();
@@ -507,7 +563,7 @@ impl HermesAppView {
                     return;
                 }
                 "new" | "reset" => {
-                    self.state.start_new_chat();
+                    self.new_chat();
                     cx.notify();
                     return;
                 }
@@ -540,8 +596,7 @@ impl HermesAppView {
                             Ok(removed) => {
                                 self.state.status_message =
                                     format!("Undid last exchange ({removed} message(s) removed)");
-                                self.client
-                                    .load_session(self.state.active_profile.clone(), sid);
+                                self.load_session(sid);
                             }
                             Err(err) => {
                                 self.state.feed.push(FeedRow::Notice {
@@ -682,10 +737,18 @@ impl HermesAppView {
         cx.notify();
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let mods = &event.keystroke.modifiers;
         let primary = mods.control || mods.platform;
+
+        if (mods.alt && key.eq_ignore_ascii_case("f4"))
+            || (primary && key.eq_ignore_ascii_case("q"))
+        {
+            window.remove_window();
+            cx.quit();
+            return;
+        }
 
         if primary && key.eq_ignore_ascii_case("v") {
             if let Some(item) = cx.read_from_clipboard() {
@@ -879,26 +942,170 @@ impl HermesAppView {
                 }
             }
             _ => {
-                if !mods.control && !mods.alt && !mods.platform {
-                    if let Some(ch) = event.keystroke.key_char.as_deref() {
-                        if let Some(buf) = self.active_buffer_mut() {
-                            buf.insert_str(ch);
-                        }
-                        if self.input_target == InputTarget::Composer {
-                            self.state.palette_dismissed = false;
-                            self.state.palette_index = 0;
-                        } else if self.input_target == InputTarget::Search {
-                            self.client.list_sessions(
-                                self.state.active_profile.clone(),
-                                self.state.search_input.as_str().to_owned(),
-                            );
-                        }
-                        cx.notify();
+                if let Some(ch) = text_from_keystroke(
+                    key,
+                    event.keystroke.key_char.as_deref(),
+                    mods.control,
+                    mods.alt,
+                    mods.platform,
+                ) {
+                    if let Some(buf) = self.active_buffer_mut() {
+                        buf.insert_str(ch);
                     }
+                    if self.input_target == InputTarget::Composer {
+                        self.state.palette_dismissed = false;
+                        self.state.palette_index = 0;
+                    } else if self.input_target == InputTarget::Search {
+                        self.client.list_sessions(
+                            self.state.active_profile.clone(),
+                            self.state.search_input.as_str().to_owned(),
+                        );
+                    }
+                    cx.notify();
                 }
             }
         }
     }
+}
+
+/// Extract insertable text from a GPUI keystroke.
+///
+/// On Windows, `gpui 0.2.2` maps `VK_SPACE` via `parse_immutable` to `key = "space"` with
+/// `key_char = None`, so `"space"` must be handled explicitly alongside `key_char`.
+fn text_from_keystroke<'a>(
+    key: &str,
+    key_char: Option<&'a str>,
+    control: bool,
+    alt: bool,
+    platform: bool,
+) -> Option<&'a str> {
+    if control || alt || platform {
+        return None;
+    }
+    if key == "space" {
+        return Some(" ");
+    }
+    key_char.filter(|s| !s.is_empty())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_text_field_content(
+    before: &str,
+    after: &str,
+    focused: bool,
+    placeholder: &str,
+    text_main: Rgba,
+    text_dim: Rgba,
+    caret: Rgba,
+    caret_h: f32,
+) -> gpui::AnyElement {
+    if before.is_empty() && after.is_empty() {
+        if focused {
+            return div()
+                .w_full()
+                .min_w(px(0.0))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .w(px(2.0))
+                        .h(px(caret_h))
+                        .bg(caret)
+                        .rounded_sm()
+                        .flex_shrink_0(),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_color(text_dim)
+                        .child(SharedString::from(placeholder.to_owned())),
+                )
+                .into_any_element();
+        }
+        return div()
+            .w_full()
+            .min_w(px(0.0))
+            .text_color(text_dim)
+            .child(SharedString::from(placeholder.to_owned()))
+            .into_any_element();
+    }
+    if !focused {
+        return div()
+            .w_full()
+            .min_w(px(0.0))
+            .text_color(text_main)
+            .child(SharedString::from(format!("{before}{after}")))
+            .into_any_element();
+    }
+    let mut combined = String::with_capacity(before.len() + after.len() + 1);
+    combined.push_str(before);
+    let caret_start = combined.len();
+    combined.push('|');
+    let caret_end = combined.len();
+    combined.push_str(after);
+    let styled = StyledText::new(combined).with_highlights([(
+        caret_start..caret_end,
+        HighlightStyle {
+            color: Some(caret.into()),
+            background_color: Some(caret.into()),
+            ..Default::default()
+        },
+    )]);
+    div()
+        .w_full()
+        .min_w(px(0.0))
+        .text_color(text_main)
+        .child(styled)
+        .into_any_element()
+}
+
+fn render_buffer_input(
+    buf: &TextBuffer,
+    focused: bool,
+    placeholder: &str,
+    text_main: Rgba,
+    text_dim: Rgba,
+    caret: Rgba,
+    caret_h: f32,
+) -> gpui::AnyElement {
+    let (before, after) = buf.split_at_cursor();
+    render_text_field_content(
+        before,
+        after,
+        focused,
+        placeholder,
+        text_main,
+        text_dim,
+        caret,
+        caret_h,
+    )
+}
+
+fn render_masked_input(
+    buf: &TextBuffer,
+    focused: bool,
+    placeholder: &str,
+    text_main: Rgba,
+    text_dim: Rgba,
+    caret: Rgba,
+    caret_h: f32,
+) -> gpui::AnyElement {
+    let (before_raw, after_raw) = buf.split_at_cursor();
+    let before = "•".repeat(before_raw.chars().count());
+    let after = "•".repeat(after_raw.chars().count());
+    render_text_field_content(
+        &before,
+        &after,
+        focused,
+        placeholder,
+        text_main,
+        text_dim,
+        caret,
+        caret_h,
+    )
 }
 
 fn render_markdown_blocks(text: &str, cx: &mut Context<HermesAppView>) -> Vec<gpui::AnyElement> {
@@ -912,7 +1119,11 @@ fn render_markdown_blocks(text: &str, cx: &mut Context<HermesAppView>) -> Vec<gp
         .into_iter()
         .map(|block| match block {
             MdBlock::Heading { level, text } => {
-                let el = div().text_color(accent).child(SharedString::from(text));
+                let el = div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .text_color(accent)
+                    .child(SharedString::from(text));
                 if level <= 2 {
                     el.text_base().into_any_element()
                 } else {
@@ -920,20 +1131,31 @@ fn render_markdown_blocks(text: &str, cx: &mut Context<HermesAppView>) -> Vec<gp
                 }
             }
             MdBlock::Paragraph { text } => div()
+                .w_full()
+                .min_w(px(0.0))
                 .text_sm()
                 .text_color(text_main)
                 .child(SharedString::from(text))
                 .into_any_element(),
             MdBlock::Bullet { text } => div()
+                .w_full()
+                .min_w(px(0.0))
                 .flex()
                 .flex_row()
                 .gap_2()
                 .text_sm()
                 .text_color(text_main)
-                .child(div().text_color(accent).child("•"))
-                .child(div().flex_1().child(SharedString::from(text)))
+                .child(div().flex_shrink_0().text_color(accent).child("•"))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .child(SharedString::from(text)),
+                )
                 .into_any_element(),
             MdBlock::Quote { text } => div()
+                .w_full()
+                .min_w(px(0.0))
                 .pl_3()
                 .border_l_2()
                 .border_color(accent)
@@ -945,6 +1167,8 @@ fn render_markdown_blocks(text: &str, cx: &mut Context<HermesAppView>) -> Vec<gp
                 let copy_text = code.clone();
                 let header_label = lang.unwrap_or_else(|| "code".into());
                 div()
+                    .w_full()
+                    .min_w(px(0.0))
                     .my_1()
                     .rounded_md()
                     .bg(bg_code)
@@ -1038,6 +1262,7 @@ impl Render for HermesAppView {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |view, _, _, cx| {
+                            view.client.change_profile();
                             view.state.reset_for_profile(path.clone());
                             view.setup = SetupDraft::load_from_profile(&path);
                             view.workspace_prefs = WorkspacePrefs::load(&path);
@@ -1048,10 +1273,7 @@ impl Render for HermesAppView {
                             } else {
                                 InputTarget::Composer
                             };
-                            view.client.connect_and_sync(
-                                path.clone(),
-                                view.state.search_input.as_str().to_owned(),
-                            );
+                            view.client.connect_and_sync(path.clone());
                             cx.notify();
                         }),
                     )
@@ -1075,6 +1297,10 @@ impl Render for HermesAppView {
                     None => format!("{} msgs", sess.message_count),
                 };
                 div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .flex_shrink_0()
+                    .overflow_hidden()
                     .flex()
                     .flex_col()
                     .px_2()
@@ -1086,12 +1312,16 @@ impl Render for HermesAppView {
                     .border_color(if selected { accent } else { border })
                     .child(
                         div()
+                            .w_full()
+                            .min_w(px(0.0))
                             .text_sm()
                             .text_color(text_main)
                             .child(SharedString::from(title)),
                     )
                     .child(
                         div()
+                            .w_full()
+                            .min_w(px(0.0))
                             .text_xs()
                             .text_color(text_dim)
                             .child(SharedString::from(subtitle)),
@@ -1099,8 +1329,7 @@ impl Render for HermesAppView {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |view, _, _, cx| {
-                            view.client
-                                .load_session(view.state.active_profile.clone(), sid.clone());
+                            view.load_session(sid.clone());
                             cx.notify();
                         }),
                     )
@@ -1113,11 +1342,13 @@ impl Render for HermesAppView {
             .map(|row| match row {
                 FeedRow::User(text) => div()
                     .w_full()
+                    .flex_shrink_0()
                     .flex()
                     .justify_end()
                     .child(
                         div()
                             .max_w(px(720.0))
+                            .min_w(px(0.0))
                             .px_3()
                             .py_2()
                             .rounded_lg()
@@ -1131,11 +1362,14 @@ impl Render for HermesAppView {
                     let blocks = render_markdown_blocks(text, cx);
                     div()
                         .w_full()
+                        .flex_shrink_0()
                         .flex()
                         .justify_start()
                         .child(
                             div()
+                                .w_full()
                                 .max_w(px(780.0))
+                                .min_w(px(0.0))
                                 .px_3()
                                 .py_2()
                                 .rounded_lg()
@@ -1171,16 +1405,24 @@ impl Render for HermesAppView {
                     }
                     div()
                         .w_full()
+                        .flex_shrink_0()
                         .flex()
                         .justify_start()
                         .child(
                             div()
+                                .max_w(px(780.0))
+                                .min_w(px(0.0))
+                                .overflow_hidden()
                                 .px_3()
                                 .py_1()
                                 .rounded_md()
                                 .bg(rgb(0x181e29))
                                 .border_1()
-                                .border_color(border)
+                                .border_color(if *state == ToolCardState::Failed {
+                                    red
+                                } else {
+                                    border
+                                })
                                 .text_xs()
                                 .text_color(col)
                                 .child(SharedString::from(line)),
@@ -1189,10 +1431,13 @@ impl Render for HermesAppView {
                 }
                 FeedRow::Notice { is_error, text } => div()
                     .w_full()
+                    .flex_shrink_0()
                     .flex()
                     .justify_start()
                     .child(
                         div()
+                            .max_w(px(780.0))
+                            .min_w(px(0.0))
                             .px_3()
                             .py_1()
                             .rounded_md()
@@ -1309,15 +1554,20 @@ impl Render for HermesAppView {
             let qid = active_q.qid.clone();
             let multi = active_q.multi_select;
             let chosen_set = clarify.selected.get(&qid).cloned().unwrap_or_default();
-            let custom_display = clarify
+            let custom_buf = clarify
                 .custom_answers
                 .get(&qid)
                 .cloned()
-                .unwrap_or_default()
-                .display(
-                    self.input_target == InputTarget::Clarify,
-                    "Type a custom answer (Enter to submit)...",
-                );
+                .unwrap_or_default();
+            let custom_display = render_buffer_input(
+                &custom_buf,
+                self.input_target == InputTarget::Clarify,
+                "Type a custom answer (Enter to submit)...",
+                text_main,
+                text_dim,
+                accent,
+                14.0,
+            );
 
             let tabs_ui: Vec<_> = (0..total)
                 .map(|idx| {
@@ -1435,8 +1685,7 @@ impl Render for HermesAppView {
                             border
                         })
                         .text_xs()
-                        .text_color(text_main)
-                        .child(SharedString::from(custom_display))
+                        .child(custom_display)
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|view, _, window, cx| {
@@ -1639,13 +1888,23 @@ impl Render for HermesAppView {
                 })
                 .collect();
 
-            let base_url_display = self.setup.base_url.display(
+            let base_url_display = render_buffer_input(
+                &self.setup.base_url,
                 self.input_target == InputTarget::Setup(SetupField::BaseUrl),
                 "https://api.example.com/v1",
+                text_main,
+                text_dim,
+                accent,
+                14.0,
             );
-            let model_display = self.setup.model.display(
+            let model_display = render_buffer_input(
+                &self.setup.model,
                 self.input_target == InputTarget::Setup(SetupField::Model),
                 "Model identifier (e.g. gpt-4.1, deepseek-chat)",
+                text_main,
+                text_dim,
+                accent,
+                14.0,
             );
             let key_label = self.setup.key_env_name().unwrap_or("HERMES_API_KEY");
             let key_placeholder = if self.setup.has_existing_api_key {
@@ -1653,18 +1912,26 @@ impl Render for HermesAppView {
             } else {
                 format!("Paste {key_label} (saved to .env with chmod 600)")
             };
-            let api_key_display = SetupDraft::masked_display(
+            let api_key_display = render_masked_input(
                 &self.setup.api_key,
                 self.input_target == InputTarget::Setup(SetupField::ApiKey),
                 &key_placeholder,
+                text_main,
+                text_dim,
+                accent,
+                14.0,
             );
 
             let web_env_name = self.setup.web_env_name();
             let web_key_display = web_env_name.map(|var| {
-                SetupDraft::masked_display(
+                render_masked_input(
                     &self.setup.web_api_key,
                     self.input_target == InputTarget::Setup(SetupField::WebApiKey),
                     &format!("Optional {var} (leave blank to keep existing)"),
+                    text_main,
+                    text_dim,
+                    accent,
+                    14.0,
                 )
             });
 
@@ -1677,6 +1944,8 @@ impl Render for HermesAppView {
             div()
                 .id("setup-scroll")
                 .flex_1()
+                .min_h(px(0.0))
+                .min_w(px(0.0))
                 .overflow_y_scroll()
                 .p_4()
                 .flex()
@@ -1829,8 +2098,7 @@ impl Render for HermesAppView {
                                         },
                                     )
                                     .text_xs()
-                                    .text_color(text_main)
-                                    .child(SharedString::from(base_url_display))
+                                    .child(base_url_display)
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|view, _, window, cx| {
@@ -1877,8 +2145,7 @@ impl Render for HermesAppView {
                                     },
                                 )
                                 .text_xs()
-                                .text_color(text_main)
-                                .child(SharedString::from(model_display))
+                                .child(model_display)
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|view, _, window, cx| {
@@ -1917,12 +2184,7 @@ impl Render for HermesAppView {
                                         },
                                     )
                                     .text_xs()
-                                    .text_color(if self.setup.api_key.is_empty() {
-                                        text_dim
-                                    } else {
-                                        text_main
-                                    })
-                                    .child(SharedString::from(api_key_display))
+                                    .child(api_key_display)
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|view, _, window, cx| {
@@ -1974,12 +2236,7 @@ impl Render for HermesAppView {
                                     },
                                 )
                                 .text_xs()
-                                .text_color(if self.setup.web_api_key.is_empty() {
-                                    text_dim
-                                } else {
-                                    text_main
-                                })
-                                .child(SharedString::from(display))
+                                .child(display)
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|view, _, window, cx| {
@@ -2123,6 +2380,8 @@ impl Render for HermesAppView {
             div()
                 .id("chat-feed")
                 .flex_1()
+                .min_h(px(0.0))
+                .min_w(px(0.0))
                 .overflow_y_scroll()
                 .p_4()
                 .flex()
@@ -2133,9 +2392,14 @@ impl Render for HermesAppView {
         };
 
         let workspace_label = short_folder_label(&self.workspace_root);
-        let workspace_path_display = self.state.workspace_path_input.display(
+        let workspace_path_display = render_buffer_input(
+            &self.state.workspace_path_input,
             self.input_target == InputTarget::WorkspacePath,
             "Project path (Enter to switch)...",
+            text_main,
+            text_dim,
+            accent,
+            14.0,
         );
         let current_ws_str = self.workspace_root.display().to_string();
         let recent_workspaces_ui: Vec<_> = self
@@ -2232,13 +2496,23 @@ impl Render for HermesAppView {
                 .children(chips)
         });
 
-        let search_display = self.state.search_input.display(
+        let search_display = render_buffer_input(
+            &self.state.search_input,
             self.input_target == InputTarget::Search,
             "Search sessions...",
+            text_main,
+            text_dim,
+            accent,
+            14.0,
         );
-        let composer_display = self.state.composer_input.display(
+        let composer_display = render_buffer_input(
+            &self.state.composer_input,
             self.input_target == InputTarget::Composer,
             "Message Hermes... (@file/@diff, /help, !<cmd>, or drop/attach 📎 files)",
+            text_main,
+            text_dim,
+            accent,
+            16.0,
         );
         let header_session = self
             .state
@@ -2247,23 +2521,19 @@ impl Render for HermesAppView {
             .or_else(|| self.state.selected_session_id.clone())
             .unwrap_or_else(|| "New session".into());
 
-        div()
-            .id("hermes-gui-root")
-            .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(Self::on_key_down))
-            .on_drop(cx.listener(|view, paths: &ExternalPaths, _, cx| {
-                view.attach_paths(paths.paths(), cx);
-            }))
-            .size_full()
+        let body = div()
+            .flex_1()
+            .min_h(px(0.0))
+            .w_full()
             .flex()
             .flex_row()
-            .bg(bg_app)
-            .text_color(text_main)
             // Sidebar
             .child(
                 div()
                     .w(px(280.0))
+                    .flex_shrink_0()
                     .h_full()
+                    .min_h(px(0.0))
                     .bg(bg_sidebar)
                     .border_r_1()
                     .border_color(border)
@@ -2290,7 +2560,7 @@ impl Render for HermesAppView {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|view, _, window, cx| {
-                                            view.state.start_new_chat();
+                                            view.new_chat();
                                             view.input_target = InputTarget::Composer;
                                             window.focus(&view.focus_handle);
                                             cx.notify();
@@ -2364,9 +2634,11 @@ impl Render for HermesAppView {
                                             border
                                         },
                                     )
+                                    .w_full()
+                                    .min_w(px(0.0))
+                                    .overflow_hidden()
                                     .text_xs()
-                                    .text_color(text_main)
-                                    .child(SharedString::from(workspace_path_display))
+                                    .child(workspace_path_display)
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|view, _, window, cx| {
@@ -2400,13 +2672,11 @@ impl Render for HermesAppView {
                             } else {
                                 border
                             })
+                            .w_full()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
                             .text_xs()
-                            .text_color(if self.state.search_input.is_empty() {
-                                text_dim
-                            } else {
-                                text_main
-                            })
-                            .child(SharedString::from(search_display))
+                            .child(search_display)
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|view, _, window, cx| {
@@ -2420,6 +2690,7 @@ impl Render for HermesAppView {
                         div()
                             .id("sessions-list")
                             .flex_1()
+                            .min_h(px(0.0))
                             .overflow_y_scroll()
                             .flex()
                             .flex_col()
@@ -2431,7 +2702,9 @@ impl Render for HermesAppView {
             .child(
                 div()
                     .flex_1()
+                    .min_w(px(0.0))
                     .h_full()
+                    .min_h(px(0.0))
                     .flex()
                     .flex_col()
                     // Header
@@ -2445,8 +2718,12 @@ impl Render for HermesAppView {
                             .flex_row()
                             .justify_between()
                             .items_center()
+                            .gap_3()
                             .child(
                                 div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .overflow_hidden()
                                     .flex()
                                     .flex_col()
                                     .child(
@@ -2461,6 +2738,7 @@ impl Render for HermesAppView {
                             )
                             .child(
                                 div()
+                                    .flex_shrink_0()
                                     .flex()
                                     .flex_row()
                                     .gap_2()
@@ -2548,7 +2826,6 @@ impl Render for HermesAppView {
                                                 cx.listener(|view, _, _, cx| {
                                                     view.client.connect_and_sync(
                                                         view.state.active_profile.clone(),
-                                                        view.state.search_input.as_str().to_owned(),
                                                     );
                                                     cx.notify();
                                                 }),
@@ -2608,13 +2885,9 @@ impl Render for HermesAppView {
                                     } else {
                                         border
                                     })
+                                    .min_w(px(0.0))
                                     .text_sm()
-                                    .text_color(if self.state.composer_input.is_empty() {
-                                        text_dim
-                                    } else {
-                                        text_main
-                                    })
-                                    .child(SharedString::from(composer_display))
+                                    .child(composer_display)
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|view, _, window, cx| {
@@ -2664,19 +2937,127 @@ impl Render for HermesAppView {
                                     )
                             }),
                     ),
-            )
+            );
+
+        let root = div()
+            .id("hermes-gui-root")
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(Self::on_key_down))
+            .on_drop(cx.listener(|view, paths: &ExternalPaths, _, cx| {
+                view.attach_paths(paths.paths(), cx);
+            }))
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(bg_app)
+            .text_color(text_main);
+
+        #[cfg(target_os = "windows")]
+        let root = root.child(
+            div()
+                .w_full()
+                .h(px(32.0))
+                .bg(bg_sidebar)
+                .border_b_1()
+                .border_color(border)
+                .flex()
+                .flex_row()
+                .items_center()
+                .child(
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .px_3()
+                        .flex()
+                        .items_center()
+                        .text_xs()
+                        .text_color(text_dim)
+                        .window_control_area(WindowControlArea::Drag)
+                        .child("Hermes"),
+                )
+                .child(
+                    div()
+                        .w(px(44.0))
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(text_main)
+                        .hover(|s| s.bg(bg_card))
+                        .child("—")
+                        .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                            cx.stop_propagation();
+                            window.minimize_window();
+                        }),
+                )
+                .child(
+                    div()
+                        .w(px(44.0))
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(text_main)
+                        .hover(|s| s.bg(bg_card))
+                        .child("□")
+                        .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                            cx.stop_propagation();
+                            window.zoom_window();
+                        }),
+                )
+                .child(
+                    div()
+                        .w(px(44.0))
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .text_sm()
+                        .text_color(text_main)
+                        .hover(|s| s.bg(rgb(0xc42b1c)).text_color(rgb(0xffffff)))
+                        .child("×")
+                        .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                            cx.stop_propagation();
+                            window.remove_window();
+                            cx.quit();
+                        }),
+                ),
+        );
+
+        root.child(body)
     }
 }
 
 fn main() {
     Application::new().run(|cx: &mut App| {
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
+
         let bounds = Bounds::centered(None, size(px(1160.0), px(780.0)), cx);
         let _ = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Hermes".into()),
+                    appears_transparent: cfg!(target_os = "windows"),
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
             |window, cx| {
+                window.on_window_should_close(cx, |_, cx| {
+                    cx.quit();
+                    true
+                });
                 let view = cx.new(HermesAppView::new);
                 let handle = view.read(cx).focus_handle.clone();
                 window.focus(&handle);
@@ -2684,4 +3065,38 @@ fn main() {
             },
         );
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::text_from_keystroke;
+
+    #[test]
+    fn space_key_inserts_space_even_without_key_char() {
+        // Windows GPUI 0.2.2 reports VK_SPACE as key="space", key_char=None.
+        assert_eq!(
+            text_from_keystroke("space", None, false, false, false),
+            Some(" ")
+        );
+        // Linux/macOS may also provide key_char=Some(" "); still returns a single space.
+        assert_eq!(
+            text_from_keystroke("space", Some(" "), false, false, false),
+            Some(" ")
+        );
+        // Regular printable and Unicode characters pass through.
+        assert_eq!(
+            text_from_keystroke("a", Some("a"), false, false, false),
+            Some("a")
+        );
+        assert_eq!(
+            text_from_keystroke("a", Some("ф"), false, false, false),
+            Some("ф")
+        );
+        // Modified chords do not insert text.
+        assert_eq!(text_from_keystroke("space", None, true, false, false), None);
+        assert_eq!(
+            text_from_keystroke("v", Some("v"), false, false, true),
+            None
+        );
+    }
 }

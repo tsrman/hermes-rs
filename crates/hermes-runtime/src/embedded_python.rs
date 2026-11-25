@@ -10,13 +10,15 @@
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc as std_mpsc;
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc as std_mpsc, Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use ring::rand::{SecureRandom, SystemRandom};
 use rustpython_vm::builtins::{PyDictRef, PyListRef, PyTupleRef, PyTypeRef};
 use rustpython_vm::compiler::Mode;
 use rustpython_vm::function::OptionalArg;
+use rustpython_vm::signal::{user_signal_channel, UserSignal, UserSignalSender};
 use rustpython_vm::{AsObject, Interpreter, PyObjectRef, PyResult, Settings, VirtualMachine};
 use serde_json::{json, Value};
 use tokio::sync::mpsc as tokio_mpsc;
@@ -31,11 +33,89 @@ enum PyEvent {
     CellDone(Value),
 }
 
+struct AbortState {
+    aborted: AtomicBool,
+    in_cell: AtomicBool,
+    exited: AtomicBool,
+    nudge_started: AtomicBool,
+    sleep_lock: Mutex<bool>,
+    sleep_cv: Condvar,
+}
+
+impl AbortState {
+    fn new() -> Self {
+        Self {
+            aborted: AtomicBool::new(false),
+            in_cell: AtomicBool::new(false),
+            exited: AtomicBool::new(false),
+            nudge_started: AtomicBool::new(false),
+            sleep_lock: Mutex::new(false),
+            sleep_cv: Condvar::new(),
+        }
+    }
+}
+
+struct ExitGuard(Arc<AbortState>);
+
+impl Drop for ExitGuard {
+    fn drop(&mut self) {
+        self.0.in_cell.store(false, Ordering::Release);
+        self.0.exited.store(true, Ordering::Release);
+        BRIDGE.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+    }
+}
+
+fn make_abort_signal(abort: Arc<AbortState>, tx: UserSignalSender) -> UserSignal {
+    Box::new(move |vm: &VirtualMachine| {
+        if abort.aborted.load(Ordering::Acquire) && abort.in_cell.load(Ordering::Acquire) {
+            // Re-arm immediately so `except BaseException:` inside a tight loop cannot swallow
+            // the timeout interruption and continue burning CPU.
+            let _ = tx.send(make_abort_signal(Arc::clone(&abort), tx.clone()));
+            return Err(vm.new_exception_msg(
+                vm.ctx.exceptions.keyboard_interrupt.to_owned(),
+                "execution timed out".into(),
+            ));
+        }
+        Ok(())
+    })
+}
+
+enum BridgeTransport {
+    InProcess {
+        event_tx: tokio_mpsc::UnboundedSender<PyEvent>,
+        reply_rx: std_mpsc::Receiver<String>,
+    },
+    Stdio,
+}
+
 struct BridgeState {
-    event_tx: tokio_mpsc::UnboundedSender<PyEvent>,
-    reply_rx: std_mpsc::Receiver<String>,
+    transport: BridgeTransport,
     cwd: PathBuf,
     env: Vec<(String, String)>,
+    abort: Arc<AbortState>,
+}
+
+static USE_SUBPROCESS_WORKER: AtomicBool = AtomicBool::new(false);
+
+/// Opt in to running the embedded RustPython kernel inside a dedicated killable child process
+/// (`<current_exe> __embedded-python`). Called by `hsr` at startup; library unit tests leave
+/// this disabled so they test the in-process interpreter directly.
+pub fn enable_subprocess_worker() {
+    USE_SUBPROCESS_WORKER.store(true, Ordering::Relaxed);
+}
+
+pub(crate) fn use_subprocess_worker() -> bool {
+    USE_SUBPROCESS_WORKER.load(Ordering::Relaxed)
+}
+
+fn write_stdio_line(payload: &Value) -> Result<(), String> {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    serde_json::to_writer(&mut out, payload).map_err(|e| e.to_string())?;
+    out.write_all(b"\n").map_err(|e| e.to_string())?;
+    out.flush().map_err(|e| e.to_string())
 }
 
 thread_local! {
@@ -331,15 +411,80 @@ mod _hermes_bridge {
             let Some(state) = borrow.as_ref() else {
                 return Err(vm.new_runtime_error("hermes tool bridge is not initialized"));
             };
-            state
-                .event_tx
-                .send(PyEvent::ToolCall { tool, args_json })
-                .map_err(|_| vm.new_runtime_error("host closed tool bridge"))?;
-            state
-                .reply_rx
-                .recv()
-                .map_err(|_| vm.new_runtime_error("host closed tool reply channel"))
+            if state.abort.aborted.load(Ordering::Acquire) {
+                return Err(vm.new_exception_msg(
+                    vm.ctx.exceptions.keyboard_interrupt.to_owned(),
+                    "execution timed out".into(),
+                ));
+            }
+            match &state.transport {
+                BridgeTransport::InProcess { event_tx, reply_rx } => {
+                    event_tx
+                        .send(PyEvent::ToolCall { tool, args_json })
+                        .map_err(|_| vm.new_runtime_error("host closed tool bridge"))?;
+                    reply_rx
+                        .recv()
+                        .map_err(|_| vm.new_runtime_error("host closed tool reply channel"))
+                }
+                BridgeTransport::Stdio => {
+                    let args: Value = serde_json::from_str(&args_json)
+                        .unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
+                    write_stdio_line(&json!({"type": "call", "tool": tool, "args": args}))
+                        .map_err(|_| vm.new_runtime_error("host closed tool bridge"))?;
+                    let mut line = String::new();
+                    let n = std::io::stdin()
+                        .read_line(&mut line)
+                        .map_err(|_| vm.new_runtime_error("host closed tool reply channel"))?;
+                    if n == 0 {
+                        return Err(vm.new_runtime_error("host closed tool reply channel"));
+                    }
+                    Ok(line)
+                }
+            }
         })
+    }
+
+    #[pyfunction]
+    fn sleep(object: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
+        let dur = object.try_into_value::<Duration>(vm).map_err(|e| {
+            if e.class().is(vm.ctx.exceptions.value_error) {
+                return vm.new_value_error("sleep length must be non-negative");
+            }
+            e
+        })?;
+        if dur.is_zero() {
+            return vm.check_signals();
+        }
+        let abort = BRIDGE.with(|slot| slot.borrow().as_ref().map(|s| Arc::clone(&s.abort)));
+        let Some(abort) = abort else {
+            std::thread::sleep(dur);
+            return Ok(());
+        };
+        let deadline = Instant::now() + dur;
+        let mut guard = abort
+            .sleep_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        loop {
+            if *guard || abort.aborted.load(Ordering::Acquire) {
+                return Err(vm.new_exception_msg(
+                    vm.ctx.exceptions.keyboard_interrupt.to_owned(),
+                    "execution timed out".into(),
+                ));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(());
+            }
+            let (next, result) = abort
+                .sleep_cv
+                .wait_timeout(guard, remaining)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard = next;
+            if result.timed_out() && !*guard && !abort.aborted.load(Ordering::Acquire) {
+                return Ok(());
+            }
+        }
     }
 }
 
@@ -382,6 +527,8 @@ fn bootstrap_source(tools: &[&str]) -> String {
         r#"
 import _hermes_bridge
 import contextlib, io, json, os, shlex, sys, time, traceback, types
+
+time.sleep = _hermes_bridge.sleep
 
 _LIMIT = 5000000
 
@@ -455,7 +602,9 @@ def _hermes_run_cell(code, cwd):
 
 pub(crate) struct EmbeddedKernel {
     cell_tx: std_mpsc::Sender<HostCell>,
-    reply_tx: std_mpsc::Sender<String>,
+    reply_tx: Mutex<Option<std_mpsc::Sender<String>>>,
+    signal_tx: UserSignalSender,
+    abort: Arc<AbortState>,
     event_rx: tokio_mpsc::UnboundedReceiver<PyEvent>,
     pub(crate) tools: Vec<&'static str>,
     pub(crate) cells: u64,
@@ -475,8 +624,11 @@ impl EmbeddedKernel {
     ) -> Result<Self, String> {
         let (cell_tx, cell_rx) = std_mpsc::channel::<HostCell>();
         let (reply_tx, reply_rx) = std_mpsc::channel::<String>();
+        let (signal_tx, signal_rx) = user_signal_channel();
         let (event_tx, event_rx) = tokio_mpsc::unbounded_channel::<PyEvent>();
         let (ready_tx, ready_rx) = std_mpsc::channel::<Result<(), String>>();
+        let abort = Arc::new(AbortState::new());
+        let abort_worker = Arc::clone(&abort);
         let boot_src = bootstrap_source(tools);
         let tools_owned = tools.to_vec();
 
@@ -484,12 +636,16 @@ impl EmbeddedKernel {
             .name("hsr-rustpython".into())
             .stack_size(8 * 1024 * 1024)
             .spawn(move || {
+                let _exit_guard = ExitGuard(Arc::clone(&abort_worker));
                 BRIDGE.with(|slot| {
                     *slot.borrow_mut() = Some(BridgeState {
-                        event_tx: event_tx.clone(),
-                        reply_rx,
+                        transport: BridgeTransport::InProcess {
+                            event_tx: event_tx.clone(),
+                            reply_rx,
+                        },
                         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                         env,
+                        abort: Arc::clone(&abort_worker),
                     });
                 });
 
@@ -502,6 +658,9 @@ impl EmbeddedKernel {
                     .add_native_module(os_def)
                     .add_native_module(bridge_def)
                     .add_frozen_modules(rustpython_pylib::FROZEN_STDLIB)
+                    .init_hook(move |vm| {
+                        vm.set_user_signal_channel(signal_rx);
+                    })
                     .build();
 
                 interp.enter(|vm| {
@@ -529,12 +688,21 @@ impl EmbeddedKernel {
                     let _ = ready_tx.send(Ok(()));
 
                     while let Ok(msg) = cell_rx.recv() {
+                        if abort_worker.aborted.load(Ordering::Acquire) {
+                            break;
+                        }
                         match msg {
                             HostCell::Shutdown => break,
                             HostCell::Run { code, cwd } => {
                                 let py_code: PyObjectRef = vm.ctx.new_str(code).into();
                                 let py_cwd: PyObjectRef = vm.ctx.new_str(cwd).into();
-                                let payload = match runner.call((py_code, py_cwd), vm) {
+                                abort_worker.in_cell.store(true, Ordering::Release);
+                                let call_result = runner.call((py_code, py_cwd), vm);
+                                abort_worker.in_cell.store(false, Ordering::Release);
+                                if abort_worker.aborted.load(Ordering::Acquire) {
+                                    break;
+                                }
+                                let payload = match call_result {
                                     Ok(res) => match res.str(vm) {
                                         Ok(s) => serde_json::from_str::<Value>(
                                             &s.as_wtf8().to_string_lossy(),
@@ -575,17 +743,15 @@ impl EmbeddedKernel {
                         }
                     }
                 });
-
-                BRIDGE.with(|slot| {
-                    *slot.borrow_mut() = None;
-                });
             })
             .map_err(|e| format!("failed spawning embedded Python thread: {e}"))?;
 
         match ready_rx.recv() {
             Ok(Ok(())) => Ok(Self {
                 cell_tx,
-                reply_tx,
+                reply_tx: Mutex::new(Some(reply_tx)),
+                signal_tx,
+                abort,
                 event_rx,
                 tools: tools_owned,
                 cells: 0,
@@ -596,7 +762,49 @@ impl EmbeddedKernel {
     }
 
     pub(crate) fn shutdown(&self) {
+        self.abort.aborted.store(true, Ordering::Release);
+        {
+            let mut guard = self
+                .abort
+                .sleep_lock
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *guard = true;
+            self.abort.sleep_cv.notify_all();
+        }
+        // Closing reply_tx immediately wakes any cell blocked inside `_hermes_bridge.call_tool`.
+        if let Ok(mut tx) = self.reply_tx.lock() {
+            tx.take();
+        }
         let _ = self.cell_tx.send(HostCell::Shutdown);
+        let _ = self.signal_tx.send(make_abort_signal(
+            Arc::clone(&self.abort),
+            self.signal_tx.clone(),
+        ));
+        // If another embedded VM thread cleared the process-wide EVAL_BREAKER bit before this
+        // worker inspected its own signal queue, keep nudging briefly until this worker exits.
+        if !self.abort.exited.load(Ordering::Acquire)
+            && !self.abort.nudge_started.swap(true, Ordering::AcqRel)
+        {
+            let abort = Arc::clone(&self.abort);
+            let signal_tx = self.signal_tx.clone();
+            let _ = std::thread::Builder::new()
+                .name("hsr-rustpython-abort".into())
+                .spawn(move || {
+                    for _ in 0..200 {
+                        if abort.exited.load(Ordering::Acquire) {
+                            break;
+                        }
+                        if signal_tx
+                            .send(make_abort_signal(Arc::clone(&abort), signal_tx.clone()))
+                            .is_err()
+                        {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                });
+        }
     }
 
     pub(crate) fn start_cell(&self, code: &str, directory: &Path) -> bool {
@@ -623,7 +831,295 @@ impl EmbeddedKernel {
 
     pub(crate) fn send_tool_reply(&self, value: Value) -> bool {
         let reply = json!({"value": value}).to_string();
-        self.reply_tx.send(reply).is_ok()
+        self.reply_tx
+            .lock()
+            .ok()
+            .and_then(|tx| tx.as_ref().map(|sender| sender.send(reply).is_ok()))
+            .unwrap_or(false)
+    }
+}
+
+impl Drop for EmbeddedKernel {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+/// Entry point for the dedicated killable child process (`hsr __embedded-python`).
+///
+/// Communicates with the host over stdin/stdout JSON lines using the same cell + tool-bridge
+/// protocol as the in-process kernel, so timeouts terminate the OS process cleanly even inside
+/// long-running builtins or tight loops.
+pub fn run_stdio_worker() -> Result<u8, String> {
+    let mut init_line = String::new();
+    let n = std::io::stdin()
+        .read_line(&mut init_line)
+        .map_err(|e| format!("failed reading init frame: {e}"))?;
+    if n == 0 {
+        return Ok(0);
+    }
+    #[derive(serde::Deserialize)]
+    struct InitFrame {
+        tools: Vec<String>,
+        env: Vec<(String, String)>,
+    }
+    let init: InitFrame = serde_json::from_str(&init_line)
+        .map_err(|e| format!("invalid embedded worker init frame: {e}"))?;
+    let tool_refs: Vec<&str> = init.tools.iter().map(String::as_str).collect();
+    let boot_src = bootstrap_source(&tool_refs);
+    let abort = Arc::new(AbortState::new());
+    let _exit_guard = ExitGuard(Arc::clone(&abort));
+
+    BRIDGE.with(|slot| {
+        *slot.borrow_mut() = Some(BridgeState {
+            transport: BridgeTransport::Stdio,
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            env: init.env,
+            abort,
+        });
+    });
+
+    let builder = Interpreter::builder(Settings::default());
+    let stdlib_defs = rustpython_stdlib::stdlib_module_defs(&builder.ctx);
+    let os_def = _sandbox_os::module_def(&builder.ctx);
+    let bridge_def = _hermes_bridge::module_def(&builder.ctx);
+    let interp = builder
+        .add_native_modules(&stdlib_defs)
+        .add_native_module(os_def)
+        .add_native_module(bridge_def)
+        .add_frozen_modules(rustpython_pylib::FROZEN_STDLIB)
+        .build();
+
+    let result: Result<(), String> = interp.enter(|vm| {
+        let scope = vm.new_scope_with_builtins();
+        let boot_code = match vm.compile(&boot_src, Mode::Exec, "<hermes-kernel>") {
+            Ok(c) => c,
+            Err(err) => {
+                let msg = format!("kernel compile error: {err}");
+                let _ = write_stdio_line(&json!({"type": "init_error", "error": msg}));
+                return Err(msg);
+            }
+        };
+        if let Err(exc) = vm.run_code_obj(boot_code, scope.clone()) {
+            let mut msg = String::new();
+            let _ = vm.write_exception(&mut msg, &exc);
+            let err = format!("kernel init error: {msg}");
+            let _ = write_stdio_line(&json!({"type": "init_error", "error": err}));
+            return Err(err);
+        }
+        let runner = match scope.globals.get_item("_hermes_run_cell", vm) {
+            Ok(fn_obj) => fn_obj,
+            Err(_) => {
+                let err = "kernel runner missing".to_owned();
+                let _ = write_stdio_line(&json!({"type": "init_error", "error": err}));
+                return Err(err);
+            }
+        };
+        write_stdio_line(&json!({"type": "ready"}))?;
+
+        loop {
+            let mut line = String::new();
+            match std::io::stdin().read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+                break;
+            };
+            match msg["type"].as_str() {
+                Some("shutdown") => break,
+                Some("cell") => {
+                    let code = msg["code"].as_str().unwrap_or("");
+                    let cwd = msg["cwd"].as_str().unwrap_or("");
+                    let py_code: PyObjectRef = vm.ctx.new_str(code).into();
+                    let py_cwd: PyObjectRef = vm.ctx.new_str(cwd).into();
+                    let payload = match runner.call((py_code, py_cwd), vm) {
+                        Ok(res) => match res.str(vm) {
+                            Ok(s) => serde_json::from_str::<Value>(&s.as_wtf8().to_string_lossy())
+                                .unwrap_or_else(|_| {
+                                    json!({
+                                        "type": "done",
+                                        "status": "error",
+                                        "stdout": "",
+                                        "stderr": "",
+                                        "traceback": "invalid JSON from embedded kernel"
+                                    })
+                                }),
+                            Err(_) => json!({
+                                "type": "done",
+                                "status": "error",
+                                "stdout": "",
+                                "stderr": "",
+                                "traceback": "failed converting embedded kernel result"
+                            }),
+                        },
+                        Err(exc) => {
+                            let mut trace = String::new();
+                            let _ = vm.write_exception(&mut trace, &exc);
+                            json!({
+                                "type": "done",
+                                "status": "error",
+                                "stdout": "",
+                                "stderr": "",
+                                "traceback": trace
+                            })
+                        }
+                    };
+                    if write_stdio_line(&payload).is_err() {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    });
+
+    result.map(|()| 0)
+}
+
+pub(crate) struct EmbeddedSubprocessKernel {
+    pub(crate) child: tokio::process::Child,
+    #[cfg(unix)]
+    pub(crate) pgid: i32,
+    reader: tokio::io::BufReader<tokio::process::ChildStdout>,
+    writer: tokio::process::ChildStdin,
+    pub(crate) tools: Vec<&'static str>,
+    pub(crate) cells: u64,
+}
+
+impl EmbeddedSubprocessKernel {
+    pub(crate) async fn spawn(
+        exe: &Path,
+        tools: &[&'static str],
+        directory: &Path,
+        env: Vec<(String, String)>,
+    ) -> Result<Self, String> {
+        use std::process::Stdio;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::process::Command;
+
+        let mut command = Command::new(exe);
+        command
+            .arg("__embedded-python")
+            .env_clear()
+            .current_dir(directory)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        for key in [
+            "PATH",
+            "LD_LIBRARY_PATH",
+            "SYSTEMROOT",
+            "COMSPEC",
+            "WINDIR",
+            "TEMP",
+            "TMP",
+            "TMPDIR",
+        ] {
+            if let Some(val) = std::env::var_os(key) {
+                command.env(key, val);
+            }
+        }
+        #[cfg(unix)]
+        command.process_group(0);
+
+        let mut child = command.spawn().map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        let pgid = child
+            .id()
+            .and_then(|pid| i32::try_from(pid).ok())
+            .ok_or("embedded Python worker did not start")?;
+        let mut writer = child
+            .stdin
+            .take()
+            .ok_or("embedded Python worker stdin unavailable")?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or("embedded Python worker stdout unavailable")?;
+        let mut reader = BufReader::new(stdout);
+
+        let init = json!({"type": "init", "tools": tools, "env": env});
+        writer
+            .write_all(format!("{init}\n").as_bytes())
+            .await
+            .map_err(|e| e.to_string())?;
+        writer.flush().await.map_err(|e| e.to_string())?;
+
+        let mut ready_line = String::new();
+        let read = tokio::time::timeout(Duration::from_secs(15), reader.read_line(&mut ready_line))
+            .await
+            .map_err(|_| "embedded Python worker timed out during startup".to_owned())?
+            .map_err(|e| e.to_string())?;
+        if read == 0 {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err("embedded Python worker exited during startup".into());
+        }
+        let msg: Value = serde_json::from_str(&ready_line)
+            .map_err(|_| "invalid startup response from embedded Python worker".to_owned())?;
+        if msg["type"].as_str() != Some("ready") {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            let err = msg["error"]
+                .as_str()
+                .unwrap_or("embedded Python worker failed to initialize");
+            return Err(err.to_owned());
+        }
+
+        Ok(Self {
+            child,
+            #[cfg(unix)]
+            pgid,
+            reader,
+            writer,
+            tools: tools.to_vec(),
+            cells: 0,
+        })
+    }
+
+    pub(crate) async fn start_cell(&mut self, code: &str, directory: &Path) -> bool {
+        use tokio::io::AsyncWriteExt;
+        let cell = json!({"type": "cell", "code": code, "cwd": directory.display().to_string()});
+        self.writer
+            .write_all(format!("{cell}\n").as_bytes())
+            .await
+            .is_ok()
+            && self.writer.flush().await.is_ok()
+    }
+
+    pub(crate) async fn next_event(&mut self, deadline: Instant) -> EmbeddedEvent {
+        use tokio::io::AsyncBufReadExt;
+        let mut line = String::new();
+        match tokio::time::timeout_at(deadline.into(), self.reader.read_line(&mut line)).await {
+            Err(_) => EmbeddedEvent::TimedOut,
+            Ok(Err(_) | Ok(0)) => EmbeddedEvent::Died,
+            Ok(Ok(_)) => {
+                let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+                    return EmbeddedEvent::Died;
+                };
+                match msg["type"].as_str() {
+                    Some("done") => EmbeddedEvent::Done(msg),
+                    Some("call") => EmbeddedEvent::ToolCall {
+                        tool: msg["tool"].as_str().unwrap_or("").to_owned(),
+                        args: msg["args"].clone(),
+                    },
+                    _ => EmbeddedEvent::Died,
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn send_tool_reply(&mut self, value: Value) -> bool {
+        use tokio::io::AsyncWriteExt;
+        let reply = json!({"value": value});
+        self.writer
+            .write_all(format!("{reply}\n").as_bytes())
+            .await
+            .is_ok()
+            && self.writer.flush().await.is_ok()
     }
 }
 
@@ -698,5 +1194,56 @@ print(avg, wb["sheets"]["Data"][1])
         let out2 = p2["stdout"].as_str().unwrap();
         assert!(out2.contains("25") && out2.contains("Mean"), "{p2}");
         kernel.shutdown();
+    }
+
+    async fn wait_for_exit(abort: &AbortState, max_wait: Duration) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < max_wait {
+            if abort.exited.load(Ordering::Acquire) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        abort.exited.load(Ordering::Acquire)
+    }
+
+    #[tokio::test]
+    async fn embedded_rustpython_shutdown_interrupts_infinite_loop_and_sleep() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // 1. Tight CPU loop, even wrapped in `except BaseException: pass`.
+        {
+            let mut kernel = EmbeddedKernel::spawn(&[], Vec::new()).expect("spawn kernel");
+            let abort = Arc::clone(&kernel.abort);
+            assert!(kernel.start_cell(
+                "while True:\n    try:\n        pass\n    except BaseException:\n        pass\n",
+                dir.path()
+            ));
+            let event = kernel
+                .next_event(Instant::now() + Duration::from_millis(120))
+                .await;
+            assert!(matches!(event, EmbeddedEvent::TimedOut));
+            kernel.shutdown();
+            assert!(
+                wait_for_exit(&abort, Duration::from_secs(2)).await,
+                "embedded worker thread kept burning CPU after timeout + shutdown"
+            );
+        }
+
+        // 2. Long `time.sleep(...)` is interrupted immediately on shutdown.
+        {
+            let mut kernel = EmbeddedKernel::spawn(&[], Vec::new()).expect("spawn kernel");
+            let abort = Arc::clone(&kernel.abort);
+            assert!(kernel.start_cell("import time\ntime.sleep(60)\n", dir.path()));
+            let event = kernel
+                .next_event(Instant::now() + Duration::from_millis(120))
+                .await;
+            assert!(matches!(event, EmbeddedEvent::TimedOut));
+            kernel.shutdown();
+            assert!(
+                wait_for_exit(&abort, Duration::from_secs(2)).await,
+                "embedded worker thread remained blocked in time.sleep after shutdown"
+            );
+        }
     }
 }

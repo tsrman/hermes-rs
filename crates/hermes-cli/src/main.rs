@@ -86,8 +86,37 @@ enum ConfigCommand {
     },
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
+    #[cfg(not(target_os = "macos"))]
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "__embedded-python")
+    {
+        return match hermes_runtime::embedded_python::run_stdio_worker() {
+            Ok(code) => ExitCode::from(code),
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    #[cfg(not(target_os = "macos"))]
+    hermes_runtime::embedded_python::enable_subprocess_worker();
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(error) => {
+            eprintln!("failed to start async runtime: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    runtime.block_on(async_main())
+}
+
+async fn async_main() -> ExitCode {
     let outcome = run().await;
     // Background processes belong to this run; none is left behind.
     hermes_runtime::process::kill_all();

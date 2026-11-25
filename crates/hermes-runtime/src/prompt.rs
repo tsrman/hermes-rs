@@ -382,8 +382,8 @@ pub(crate) fn normalize_text(text: &str) -> String {
 
 fn project_context(root: &Path, cap: usize) -> Option<String> {
     let cwd = root.canonicalize().ok()?;
-    let git_root = cwd.ancestors().find(|dir| dir.join(".git").exists());
-    let root = git_root.unwrap_or(&cwd);
+    let git_root = system_prompt::git_root(&cwd);
+    let root = git_root.as_deref().unwrap_or(&cwd);
     let home = std::env::home_dir().and_then(|dir| dir.canonicalize().ok());
     let broad_root = home.as_ref().is_none_or(|home| home.starts_with(root));
     let mut dirs = Vec::new();

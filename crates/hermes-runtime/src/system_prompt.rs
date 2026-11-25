@@ -414,10 +414,20 @@ fn home_dir() -> Option<PathBuf> {
     std::env::home_dir().and_then(|dir| dir.canonicalize().ok())
 }
 
-fn git_root(cwd: &Path) -> Option<PathBuf> {
-    cwd.ancestors()
-        .find(|dir| dir.join(".git").exists())
-        .map(Path::to_path_buf)
+pub(crate) fn git_root(cwd: &Path) -> Option<PathBuf> {
+    let candidate = cwd.ancestors().find(|dir| dir.join(".git").exists())?;
+    // Verify both a working tree and its root. An empty .git marker can occur in
+    // shared temporary directories or inside a real parent repository.
+    let command = GitProbe::command_at(
+        candidate,
+        &[],
+        &["rev-parse", "--is-inside-work-tree", "--show-prefix"],
+    );
+    let output = bounded(command)?;
+    output
+        .lines()
+        .eq(["true", ""])
+        .then(|| candidate.to_path_buf())
 }
 
 /// The nearest ancestor (up to six levels above) that looks like a project root; the home
@@ -478,14 +488,15 @@ fn coding_workspace(root: &Path, mode: CodingMode, has_tools: bool) -> Option<Ve
         return None;
     }
     let cwd = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let git = git_root(&cwd);
     let coding = mode == CodingMode::On
         || marker_root(&cwd).is_some()
-        || git_root(&cwd)
-            .is_some_and(|git| Some(&git) != home_dir().as_ref() && has_code_files(&git));
+        || git
+            .as_ref()
+            .is_some_and(|git| Some(git) != home_dir().as_ref() && has_code_files(git));
     if !coding {
         return None;
     }
-    let git = git_root(&cwd);
     let workspace = git.clone().or_else(|| marker_root(&cwd));
     Some(
         workspace
@@ -770,9 +781,9 @@ impl GitProbe {
         probe
     }
 
-    fn command(&self, args: &[&str]) -> Command {
+    fn command_at(cwd: &Path, config: &[(String, String)], args: &[&str]) -> Command {
         let mut command = Command::new("git");
-        command.arg("-C").arg(&self.cwd).args(args);
+        command.arg("-C").arg(cwd).args(args);
         command.stdin(Stdio::null()).stderr(Stdio::null());
         for (key, _) in std::env::vars() {
             if key.starts_with("GIT_CONFIG")
@@ -799,8 +810,8 @@ impl GitProbe {
             .env("GIT_EDITOR", "true")
             .env("GIT_CONFIG_GLOBAL", null)
             .env("GIT_CONFIG_SYSTEM", null)
-            .env("GIT_CONFIG_COUNT", self.config.len().to_string());
-        for (index, (key, value)) in self.config.iter().enumerate() {
+            .env("GIT_CONFIG_COUNT", config.len().to_string());
+        for (index, (key, value)) in config.iter().enumerate() {
             command
                 .env(format!("GIT_CONFIG_KEY_{index}"), key)
                 .env(format!("GIT_CONFIG_VALUE_{index}"), value);
@@ -809,7 +820,7 @@ impl GitProbe {
     }
 
     fn output(&self, args: &[&str]) -> Option<String> {
-        bounded(self.command(args))
+        bounded(Self::command_at(&self.cwd, &self.config, args))
     }
 
     fn run(&self, args: &[&str]) -> String {

@@ -116,9 +116,13 @@ class CronWriteTest(CronCliTest):
     def test_pause_updates_only_the_lifecycle_fields(self):
         self.seed()
         _, before = self.jobs()
+        before.update({"schema_version": 2, "metadata": {"source": "fixture"}})
+        self.write_jobs(before)
         result = self.read_json("pause", "привет", "--reason", "maintenance", timezone="UTC")
         self.assertEqual((result["id"], result["state"], result["enabled"]), ("daily", "paused", False))
         raw, after = self.jobs()
+        self.assertEqual(after.get("metadata"), before["metadata"])
+        self.assertEqual(after.get("schema_version"), before["schema_version"])
         job = after["jobs"][0]
         self.assertEqual((job["enabled"], job["state"], job["paused_reason"]), (False, "paused", "maintenance"))
         self.assertTrue(job["paused_at"].endswith("+00:00"))

@@ -143,14 +143,22 @@ struct Grants {
 }
 
 static GLOBAL: std::sync::OnceLock<ApprovalPolicy> = std::sync::OnceLock::new();
+static WARM_UP: std::sync::Once = std::sync::Once::new();
 
-/// Set the rules this process applies to every approval, subagents included. The first call wins.
-pub fn install(settings: ApprovalSettings) {
-    if GLOBAL.set(ApprovalPolicy::new(settings)).is_ok() {
+/// Warm up the dangerous-command detector tables once in a background thread.
+pub fn warm_up() {
+    WARM_UP.call_once(|| {
         // Build the detector's pattern tables while the first model request is in flight.
         let _ = std::thread::Builder::new()
             .name("approval-warm-up".into())
             .spawn(crate::approval_detect::warm_up);
+    });
+}
+
+/// Set the rules this process applies to every approval, subagents included. The first call wins.
+pub fn install(settings: ApprovalSettings) {
+    if GLOBAL.set(ApprovalPolicy::new(settings)).is_ok() {
+        warm_up();
     }
 }
 

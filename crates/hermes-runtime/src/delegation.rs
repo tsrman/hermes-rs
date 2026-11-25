@@ -629,11 +629,19 @@ struct ChildRun {
 }
 
 /// What a child does when something needs approval and nobody can be asked.
-fn answer_for_child(request: &ApprovalRequest, auto_approve: bool) -> ApprovalDecision {
+fn answer_for_child(
+    request: &ApprovalRequest,
+    policy: Option<&approval_policy::ApprovalPolicy>,
+    auto_approve: bool,
+) -> ApprovalDecision {
     if matches!(request.action, ApprovalAction::Clarify) {
         return ApprovalDecision::Unavailable;
     }
-    match approval_policy::installed().map(|policy| policy.decide(request)) {
+    let effective = match policy {
+        Some(policy) => Some(policy),
+        None => approval_policy::installed(),
+    };
+    match effective.map(|policy| policy.decide(request)) {
         Some(Verdict::Allow) => ApprovalDecision::Approved,
         Some(Verdict::Deny) => ApprovalDecision::Denied,
         _ if auto_approve => ApprovalDecision::Approved,
@@ -775,7 +783,7 @@ async fn run_child_inner(
                 _ => {}
             },
             move |request| {
-                let decision = answer_for_child(&request, auto);
+                let decision = answer_for_child(&request, parent.approval_policy, auto);
                 async move { decision }
             },
         )
@@ -1276,16 +1284,16 @@ mod tests {
         };
         let ask = request(ApprovalAction::RunCommand, "make");
         assert!(matches!(
-            answer_for_child(&ask, false),
+            answer_for_child(&ask, None, false),
             ApprovalDecision::Denied
         ));
         assert!(matches!(
-            answer_for_child(&ask, true),
+            answer_for_child(&ask, None, true),
             ApprovalDecision::Approved
         ));
         let clarify = request(ApprovalAction::Clarify, "[]");
         assert!(matches!(
-            answer_for_child(&clarify, true),
+            answer_for_child(&clarify, None, true),
             ApprovalDecision::Unavailable
         ));
     }

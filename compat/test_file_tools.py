@@ -845,6 +845,21 @@ class ExecuteCodeTest(ToolTestCase):
         self.assertEqual(results[2]["status"], "error")
         self.assertIn("NameError", results[2]["error"])
 
+    def test_embedded_timeout_stops_the_running_interpreter(self):
+        results, _ = self.cells(
+            "import os\nfrom hermes_tools import write_file\n"
+            "write_file('worker-pid', str(os.getpid()))",
+            "while True: pass",
+            "import os\nfrom hermes_tools import read_file\n"
+            "pid = read_file('worker-pid')['content'].split('|', 1)[1].strip()\n"
+            "try:\n os.stat('/proc/' + pid)\nexcept OSError:\n print('stopped')\n"
+            "else:\n print('still running')",
+            config="code_execution:\n  timeout: 3\n",
+            extra_env={"HERMES_PYTHON_ENGINE": "embedded"},
+        )
+        self.assertEqual([r["status"] for r in results], ["success", "timeout", "success"])
+        self.assertEqual(results[2]["output"], "stopped\n")
+
     def test_code_needs_approval_even_when_commands_are_allowed(self):
         results, requests = self.cells("print(1)", flags=(), config="  allow: ['*']\n")
         self.assertEqual(results[0]["status"], "approval_unavailable")

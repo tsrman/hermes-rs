@@ -157,6 +157,7 @@ fn base_options<'a>(
         steer_queue: None,
         prefill: None,
         state_scope: None,
+        approval_policy: None,
     }
 }
 

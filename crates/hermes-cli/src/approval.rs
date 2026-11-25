@@ -97,9 +97,14 @@ pub async fn prompt(request: ApprovalRequest) -> ApprovalDecision {
 async fn ask_person(request: &ApprovalRequest) -> (ApprovalDecision, Grant) {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
+        use std::io::IsTerminal;
         use std::time::Duration;
 
         use hermes_runtime::turn::ApprovalAction;
+
+        if !std::io::stdin().is_terminal() {
+            return (ApprovalDecision::Unavailable, Grant::Once);
+        }
 
         if matches!(request.action, ApprovalAction::Clarify) {
             // A limit of 0 waits for as long as the person takes.

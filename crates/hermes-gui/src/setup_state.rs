@@ -248,24 +248,6 @@ impl SetupDraft {
         }
     }
 
-    /// Mask secret input while still showing a visible caret when focused.
-    pub fn masked_display(buf: &TextBuffer, focused: bool, placeholder: &str) -> String {
-        if buf.is_empty() {
-            return if focused {
-                format!("▏ {placeholder}")
-            } else {
-                placeholder.to_owned()
-            };
-        }
-        let len = buf.as_str().chars().count();
-        let masked = "•".repeat(len);
-        if focused {
-            format!("{masked}▏")
-        } else {
-            masked
-        }
-    }
-
     /// Initialize all 16 profile directories, starter files, `state.db`, `config.yaml`, and `.env`.
     pub fn save(&mut self, profile: &Path) -> Result<String, String> {
         let model = self.model.as_str().trim().to_owned();

@@ -1452,10 +1452,8 @@ fn search_roots(
     if settings.project_discovery {
         if let Ok(cwd) = cwd.canonicalize() {
             let home = std::env::home_dir().and_then(|path| path.canonicalize().ok());
-            if let Some(root) = cwd
-                .ancestors()
-                .take(64)
-                .find(|dir| dir.join(".git").exists())
+            if let Some(root) = crate::system_prompt::git_root(&cwd)
+                .as_deref()
                 .filter(|root| home.as_deref() != Some(*root))
                 .filter(|root| {
                     settings

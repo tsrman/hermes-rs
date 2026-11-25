@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
 # The checks a change must pass before it goes to main. Run from the repository root:
 #   compat/gate.sh [--quick]     (--quick skips the slow Python suites)
-# Needs rustup with the CI toolchain (1.95.0). The Windows check needs `ziglang` in a Python venv
+# Needs rustup with the CI toolchain (1.100.0). The Windows check needs `ziglang` in a Python venv
 # (pip install ziglang) and the target x86_64-pc-windows-gnu; it is skipped with a note when absent.
 set -euo pipefail
 export PATH="$HOME/.cargo/bin:$PATH"
-TOOLCHAIN="${RUST_VERSION:-1.95.0}"
+TOOLCHAIN="${RUST_VERSION:-1.100.0}"
+cargo_ci() {
+  if [[ "$(rustc --version)" == "rustc $TOOLCHAIN "* ]]; then
+    cargo "$@"
+  else
+    cargo "+$TOOLCHAIN" "$@"
+  fi
+}
 step() { printf '\n== %s\n' "$*"; }
 
 step "fmt"
-cargo "+$TOOLCHAIN" fmt --all -- --check
+cargo_ci fmt --all -- --check
 step "clippy"
-cargo "+$TOOLCHAIN" clippy --workspace --all-targets --locked -- -D warnings
+cargo_ci clippy --workspace --all-targets --locked -- -D warnings
 step "cargo test"
-cargo "+$TOOLCHAIN" test --workspace --locked
+cargo_ci test --workspace --locked
 step "build hermes-cli (debug) for the Python suites"
-cargo build --locked -p hermes-cli
+cargo_ci build --locked -p hermes-cli
 if [[ "${1:-}" != "--quick" ]]; then
   step "python compat suites"
   python3 -m unittest discover -s compat -p 'test_*.py'
@@ -31,7 +38,7 @@ if [[ -x "$ZIG_PY" ]] && "$ZIG_PY" -m ziglang version >/dev/null 2>&1 \
   chmod +x "$W/zigcc" "$W/zigar"
   CC_x86_64_pc_windows_gnu="$W/zigcc" AR_x86_64_pc_windows_gnu="$W/zigar" \
     CARGO_TARGET_DIR="${WIN_TARGET_DIR:-$W/target}" \
-    cargo check -p hermes-cli --target x86_64-pc-windows-gnu --locked
+    cargo_ci check -p hermes-cli --target x86_64-pc-windows-gnu --locked
 else
   echo "skipped: needs ziglang in $ZIG_PY and the x86_64-pc-windows-gnu target"
 fi

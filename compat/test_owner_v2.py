@@ -95,6 +95,24 @@ def _send_sse_done(wfile) -> None:
     wfile.flush()
 
 
+def _tool_scenario(tool_for_query):
+    def respond(wfile, call_idx, body):
+        message = body["messages"][-1]
+        if message["role"] == "tool":
+            _send_sse_chunk(wfile, {"content": message["content"]}, finish_reason="stop")
+        else:
+            name, args = tool_for_query(message["content"])
+            call = {
+                "index": 0,
+                "id": f"tool-{call_idx}",
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(args)},
+            }
+            _send_sse_chunk(wfile, {"tool_calls": [call]}, finish_reason="tool_calls")
+        _send_sse_done(wfile)
+    return respond
+
+
 class OwnerV2ProtocolTest(unittest.TestCase):
     def setUp(self) -> None:
         self.assertTrue(BINARY.is_file(), f"Build hsr first: {BINARY}")
@@ -146,6 +164,59 @@ class OwnerV2ProtocolTest(unittest.TestCase):
         with self._connect(profile) as s:
             _write_frame(s, {"version": 2, "command": command})
             return _read_frame(s)
+
+    def _tool_turn(self, query, *, session_id=None, yolo=False, cwd=None):
+        command = {"type": "start_turn", "query": query, "model": "fixture",
+                   "cwd": str(cwd or self.profile), "session_id": session_id, "yolo": yolo}
+        turn_id = self._rpc(self.profile, command)["turn_id"]
+        events = []
+        with self._connect(self.profile) as sock:
+            _write_frame(sock, {"version": 2, "command": {
+                "type": "subscribe_turn", "turn_id": turn_id, "after_seq": 0}})
+            while True:
+                event = _read_frame(sock)["event"]
+                events.append(event)
+                if event["kind"] == "approval_required":
+                    self._rpc(self.profile, {"type": "respond_approval", "turn_id": turn_id,
+                              "approval_id": event["approval_id"], "decision": "Denied"})
+                if event["kind"] == "done":
+                    self.assertEqual(event["exit_code"], 0, events)
+                    return events
+
+    @unittest.skipUnless(os.name == "posix", "uses Unix sockets and local file tools")
+    def test_yolo_only_approves_the_requesting_gui_turn(self):
+        work_dir = Path(self.tmp.name) / "work-yolo"
+        work_dir.mkdir()
+        llm = _ScriptedSseServer(_tool_scenario(
+            lambda name: ("write_file", {"path": name, "content": "fixture"})))
+        llm.start()
+        self.addCleanup(llm.stop)
+        owner = self._start_owner(self.profile, llm.base_url)
+        self.addCleanup(self._stop_owner, owner)
+
+        for name, yolo in [("first.txt", True), ("manual.txt", False), ("last.txt", True)]:
+            events = self._tool_turn(name, yolo=yolo, cwd=work_dir)
+            prompts = [e for e in events if e["kind"] == "approval_required"]
+            self.assertEqual(len(prompts), 0 if yolo else 1, events)
+            self.assertEqual((work_dir / name).exists(), yolo)
+
+    @unittest.skipUnless(os.name == "posix", "uses Unix sockets and local terminal tools")
+    def test_gui_first_turn_working_directory_is_private_and_survives_resume(self):
+        work_dir = Path(self.tmp.name) / "work-cwd"
+        (work_dir / "child").mkdir(parents=True)
+        llm = _ScriptedSseServer(_tool_scenario(
+            lambda command: ("terminal", {"command": command})))
+        llm.start()
+        self.addCleanup(llm.stop)
+        owner = self._start_owner(self.profile, llm.base_url)
+        self.addCleanup(self._stop_owner, owner)
+
+        first = self._tool_turn("cd child", yolo=True, cwd=work_dir)
+        session_id = next(e["session_id"] for e in first if e["kind"] == "session_assigned")
+        for session, expected in [(None, work_dir), (session_id, work_dir / "child")]:
+            events = self._tool_turn("pwd", session_id=session, yolo=True, cwd=work_dir)
+            result = "".join(e["text"] for e in events if e["kind"] == "text_delta")
+            self.assertEqual(json.loads(result)["output"].strip(), str(expected.resolve()))
 
     def test_v2_start_turn_disconnect_reconnect_replay_and_resume_in_cli(self) -> None:
         if os.name != "posix":
@@ -474,6 +545,216 @@ class OwnerV2ProtocolTest(unittest.TestCase):
         finally:
             self._stop_owner(owner_a)
             self._stop_owner(owner_b)
+            llm.stop()
+
+    def test_v2_approval_policy_is_scoped_per_turn(self) -> None:
+        if os.name != "posix":
+            self.skipTest("Unix socket helper test runs on POSIX")
+
+        work_dir = Path(self.tmp.name) / "work-yolo-toggle"
+        work_dir.mkdir()
+
+        def respond(wfile, _call_idx, body):
+            messages = body["messages"]
+            if messages[-1]["role"] == "tool":
+                _send_sse_chunk(wfile, {"content": f"tool_result={messages[-1]['content']}"})
+                _send_sse_chunk(wfile, {}, finish_reason="stop")
+                _send_sse_done(wfile)
+                return
+            user_text = str(messages[-1]["content"])
+            target = "first.txt" if "FIRST" in user_text else "second.txt"
+            _send_sse_chunk(
+                wfile,
+                {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": f"call_{target}",
+                            "type": "function",
+                            "function": {
+                                "name": "write_file",
+                                "arguments": json.dumps({"path": target, "content": target}),
+                            },
+                        }
+                    ]
+                },
+            )
+            _send_sse_chunk(wfile, {}, finish_reason="tool_calls")
+            _send_sse_done(wfile)
+
+        llm = _ScriptedSseServer(respond)
+        llm.start()
+        owner = self._start_owner(self.profile, llm.base_url)
+        try:
+            # Turn 1: yolo=True auto-approves write_file without asking.
+            t1 = self._rpc(
+                self.profile,
+                {
+                    "type": "start_turn",
+                    "session_id": None,
+                    "query": "Write FIRST",
+                    "model": "fixture",
+                    "cwd": str(work_dir),
+                    "yolo": True,
+                },
+            )["turn_id"]
+            saw_prompt_1 = False
+            with self._connect(self.profile) as s1:
+                _write_frame(
+                    s1,
+                    {
+                        "version": 2,
+                        "command": {"type": "subscribe_turn", "turn_id": t1, "after_seq": 0},
+                    },
+                )
+                while True:
+                    ev = _read_frame(s1)["event"]
+                    if ev["kind"] == "approval_required":
+                        saw_prompt_1 = True
+                    elif ev["kind"] == "done":
+                        self.assertEqual(ev["exit_code"], 0)
+                        break
+            self.assertFalse(saw_prompt_1)
+            self.assertEqual((work_dir / "first.txt").read_text(encoding="utf-8"), "first.txt")
+
+            # Turn 2 in the SAME owner with yolo=False MUST ask for approval again.
+            t2 = self._rpc(
+                self.profile,
+                {
+                    "type": "start_turn",
+                    "session_id": None,
+                    "query": "Write SECOND",
+                    "model": "fixture",
+                    "cwd": str(work_dir),
+                    "yolo": False,
+                },
+            )["turn_id"]
+            saw_prompt_2 = False
+            with self._connect(self.profile) as s2:
+                _write_frame(
+                    s2,
+                    {
+                        "version": 2,
+                        "command": {"type": "subscribe_turn", "turn_id": t2, "after_seq": 0},
+                    },
+                )
+                while True:
+                    ev = _read_frame(s2)["event"]
+                    if ev["kind"] == "approval_required":
+                        saw_prompt_2 = True
+                        ack = self._rpc(
+                            self.profile,
+                            {
+                                "type": "respond_approval",
+                                "turn_id": t2,
+                                "approval_id": ev["approval_id"],
+                                "decision": "Denied",
+                            },
+                        )
+                        self.assertEqual(ack["type"], "ack")
+                    elif ev["kind"] == "done":
+                        self.assertEqual(ev["exit_code"], 0)
+                        break
+            self.assertTrue(saw_prompt_2, "disabling yolo in a subsequent turn must restore approval prompts")
+            self.assertFalse((work_dir / "second.txt").exists())
+        finally:
+            self._stop_owner(owner)
+            llm.stop()
+
+    def test_v2_new_chats_isolate_state_and_resumed_turns_keep_state(self) -> None:
+        if os.name != "posix":
+            self.skipTest("Unix socket helper test runs on POSIX")
+
+        work_dir = Path(self.tmp.name) / "work-state-scope"
+        work_dir.mkdir()
+        observed_tool_outputs = []
+
+        def respond(wfile, _call_idx, body):
+            messages = body["messages"]
+            if messages[-1]["role"] == "tool":
+                observed_tool_outputs.append(json.loads(messages[-1]["content"]))
+                _send_sse_chunk(wfile, {"content": "ok"})
+                _send_sse_chunk(wfile, {}, finish_reason="stop")
+                _send_sse_done(wfile)
+                return
+            user_text = str(messages[-1]["content"])
+            if "CHAT1_SET" in user_text:
+                code = "chat_var = 'from_chat_1'\nprint('set:' + chat_var)"
+            elif "CHAT2_CHECK" in user_text:
+                code = "print('seen:' + str('chat_var' in globals()))"
+            else:
+                code = "print('persisted:' + globals().get('chat_var', 'MISSING'))"
+            _send_sse_chunk(
+                wfile,
+                {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": f"call_py_{len(observed_tool_outputs)}",
+                            "type": "function",
+                            "function": {
+                                "name": "execute_code",
+                                "arguments": json.dumps({"code": code}),
+                            },
+                        }
+                    ]
+                },
+            )
+            _send_sse_chunk(wfile, {}, finish_reason="tool_calls")
+            _send_sse_done(wfile)
+
+        llm = _ScriptedSseServer(respond)
+        llm.start()
+        owner = self._start_owner(self.profile, llm.base_url)
+        try:
+            def run_turn(session_id, query):
+                tid = self._rpc(
+                    self.profile,
+                    {
+                        "type": "start_turn",
+                        "session_id": session_id,
+                        "query": query,
+                        "model": "fixture",
+                        "cwd": str(work_dir),
+                        "yolo": True,
+                    },
+                )["turn_id"]
+                assigned = None
+                with self._connect(self.profile) as sock:
+                    _write_frame(
+                        sock,
+                        {
+                            "version": 2,
+                            "command": {"type": "subscribe_turn", "turn_id": tid, "after_seq": 0},
+                        },
+                    )
+                    while True:
+                        ev = _read_frame(sock)["event"]
+                        if ev["kind"] == "session_assigned":
+                            assigned = ev["session_id"]
+                        elif ev["kind"] == "done":
+                            self.assertEqual(ev["exit_code"], 0)
+                            break
+                return assigned
+
+            # New chat 1 sets a Python global.
+            chat1_session = run_turn(None, "CHAT1_SET")
+            self.assertIsNotNone(chat1_session)
+
+            # New chat 2 in the same profile must NOT see chat 1's Python global.
+            chat2_session = run_turn(None, "CHAT2_CHECK")
+            self.assertIsNotNone(chat2_session)
+            self.assertNotEqual(chat1_session, chat2_session)
+
+            # Turn 2 resuming chat 1 MUST still see chat 1's Python global.
+            run_turn(chat1_session, "CHAT1_RESUME")
+
+            self.assertEqual(len(observed_tool_outputs), 3)
+            self.assertIn("set:from_chat_1", observed_tool_outputs[0].get("output", ""))
+            self.assertIn("seen:False", observed_tool_outputs[1].get("output", ""))
+            self.assertIn("persisted:from_chat_1", observed_tool_outputs[2].get("output", ""))
+        finally:
+            self._stop_owner(owner)
             llm.stop()
 
 

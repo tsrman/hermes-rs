@@ -21,7 +21,25 @@ pub(super) const RANDOM_UID: &str = "SELECT lower(hex(randomblob(16)))";
 pub struct SessionWriter<'a> {
     profile: &'a Path,
     started_at: f64,
+    planned_id: Option<String>,
     resume: Option<ResumeState>,
+}
+
+fn generate_session_id(started_at: f64) -> String {
+    use ring::rand::{SecureRandom, SystemRandom};
+    use std::fmt::Write as _;
+
+    let secs = started_at.trunc() as i64;
+    let stamp = chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
+        .unwrap_or_default()
+        .format("%Y%m%d_%H%M%S");
+    let mut bytes = [0u8; 8];
+    let _ = SystemRandom::new().fill(&mut bytes);
+    let mut hex = String::with_capacity(16);
+    for b in bytes {
+        let _ = write!(&mut hex, "{b:02x}");
+    }
+    format!("{stamp}_{hex}")
 }
 
 impl<'a> SessionWriter<'a> {
@@ -31,9 +49,11 @@ impl<'a> SessionWriter<'a> {
             let connection = open_database(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             verify_write_schema(&connection)?;
         }
+        let started_at = timestamp();
         Ok(Self {
             profile,
-            started_at: timestamp(),
+            started_at,
+            planned_id: Some(generate_session_id(started_at)),
             resume: None,
         })
     }
@@ -82,6 +102,7 @@ impl<'a> SessionWriter<'a> {
 
     pub fn prepare_resume(profile: &'a Path, id: &str) -> Result<Self, StorageError> {
         let mut writer = Self::prepare(profile)?;
+        writer.planned_id = None;
         writer.resume = Some(ResumeState::acquire(&profile.join("state.db"), id)?);
         Ok(writer)
     }
@@ -129,9 +150,14 @@ impl<'a> SessionWriter<'a> {
         }
     }
 
-    /// The session being resumed; a new session has no id until its first turn is saved.
+    /// The session being resumed, or the unique session id pre-allocated for a new conversation
+    /// so tools (Python kernel, terminal cwd, background processes) isolate state from turn 1 and
+    /// keep the same key on subsequent resumed turns.
     pub fn session_id(&self) -> Option<&str> {
-        self.resume.as_ref().map(ResumeState::id)
+        self.resume
+            .as_ref()
+            .map(ResumeState::id)
+            .or(self.planned_id.as_deref())
     }
 
     pub fn saved_model(&self) -> Option<&str> {
@@ -204,11 +230,14 @@ impl<'a> SessionWriter<'a> {
             // Repeat the check under the write lock after the provider call.
             verify_write_schema(&transaction)?;
         }
-        let id: String = transaction.query_row(
-            "SELECT strftime('%Y%m%d_%H%M%S', ?1, 'unixepoch', 'localtime') || '_' || lower(hex(randomblob(8)))",
-            [self.started_at],
-            |row| row.get(0),
-        )?;
+        let id: String = match &self.planned_id {
+            Some(id) => id.clone(),
+            None => transaction.query_row(
+                "SELECT strftime('%Y%m%d_%H%M%S', ?1, 'unixepoch', 'localtime') || '_' || lower(hex(randomblob(8)))",
+                [self.started_at],
+                |row| row.get(0),
+            )?,
+        };
         let profile_name = self
             .profile
             .parent()
@@ -384,4 +413,22 @@ pub(super) fn timestamp() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0.0, |duration| duration.as_secs_f64())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_session_writers_preallocate_unique_ids_and_persist_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let w1 = SessionWriter::prepare(dir.path()).unwrap();
+        let w2 = SessionWriter::prepare(dir.path()).unwrap();
+        let id1 = w1.session_id().expect("preallocated session id 1");
+        let id2 = w2.session_id().expect("preallocated session id 2");
+        assert!(!id1.is_empty());
+        assert_ne!(id1, id2);
+        assert_ne!(id1, "default");
+        assert_ne!(id2, "default");
+    }
 }

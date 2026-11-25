@@ -161,7 +161,10 @@ fn edit_call<'a>(
 ) -> BoxFuture<'a, Value> {
     Box::pin(async move {
         let timeout = cx.options.approval_timeout_secs;
-        cx.files.edit(name, args, timeout, &mut cx.approve).await
+        let policy = cx.options.approval_policy;
+        cx.files
+            .edit(name, args, timeout, policy, &mut cx.approve)
+            .await
     })
 }
 
@@ -195,6 +198,7 @@ fn terminal_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFutur
             background,
             settings,
             session,
+            cx.options.approval_policy,
             &mut cx.approve,
         )
         .await
@@ -224,7 +228,14 @@ fn skill_manage_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxF
             settings: cx.skills.settings(),
         };
         let timeout = cx.options.approval_timeout_secs;
-        skill_manage::call(&skills, args, timeout, &mut cx.approve).await
+        skill_manage::call(
+            &skills,
+            args,
+            timeout,
+            cx.options.approval_policy,
+            &mut cx.approve,
+        )
+        .await
     })
 }
 

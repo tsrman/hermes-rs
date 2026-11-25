@@ -78,7 +78,7 @@ Expand-Archive -LiteralPath $Archive -DestinationPath $InstallDir
 
 ### Build from Source
 
-Requires Rust `1.95.0` (or compatible stable toolchain):
+The release build uses Rust `1.100.0`:
 
 ```bash
 cargo build --release --locked -p hermes-cli

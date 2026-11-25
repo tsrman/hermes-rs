@@ -760,6 +760,9 @@ pub struct TurnOptions<'a> {
     /// Keeps the working directory, background processes and Python kernel of an interactive
     /// conversation together across turns, whatever session id each turn is saved under.
     pub state_scope: Option<&'a str>,
+    /// Per-turn approval policy (used by multi-turn/multi-profile hosts such as `hsr owner`).
+    /// When `None`, falls back to the process-wide `approval_policy::installed()`.
+    pub approval_policy: Option<&'a crate::approval_policy::ApprovalPolicy>,
 }
 
 impl TurnOptions<'_> {

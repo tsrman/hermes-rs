@@ -408,6 +408,12 @@ impl Connection {
             }
         }
         let _ = self.child.start_kill();
+        for _ in 0..50 {
+            if matches!(self.child.try_wait(), Ok(Some(_)) | Err(_)) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 }
 

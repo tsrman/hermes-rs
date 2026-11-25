@@ -450,6 +450,7 @@ async fn ephemeral_prompt_applies_to_api_requests_and_failover_without_polluting
         steer_queue: None,
         prefill: None,
         state_scope: None,
+        approval_policy: None,
     };
 
     let mut reply = String::new();
@@ -654,6 +655,7 @@ async fn delegation_child_timeout_enforces_deadline_and_returns_timeout_result()
         steer_queue: None,
         prefill: None,
         state_scope: None,
+        approval_policy: None,
     };
 
     let started = Instant::now();

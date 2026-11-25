@@ -22,7 +22,7 @@ pub enum BackendUpdate {
     Connected {
         profile: PathBuf,
         profiles: Vec<ProfileEntry>,
-        sessions: Vec<SessionSummary>,
+        view_revision: u64,
         active_turns: Vec<ActiveTurnSummary>,
     },
     Reconnecting {
@@ -60,28 +60,142 @@ pub enum BackendUpdate {
         message: String,
         is_error: bool,
     },
+    ConversationError(String),
     Error(String),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Request {
+    Profile,
+    Connect(u64),
+    Search(u64),
+    Conversation(u64),
+    Subscription(u64, u64),
+}
+
+pub struct ScopedUpdate {
+    profile_revision: u64,
+    request: Request,
+    update: BackendUpdate,
+}
+
+#[derive(Clone)]
+struct UpdateSender {
+    tx: Sender<ScopedUpdate>,
+    profile_revision: u64,
+    request: Request,
+}
+
+impl UpdateSender {
+    fn send(&self, update: BackendUpdate) -> Result<(), ()> {
+        self.tx
+            .send(ScopedUpdate {
+                profile_revision: self.profile_revision,
+                request: self.request,
+                update,
+            })
+            .map_err(|_| ())
+    }
+}
+
+#[derive(Default)]
+struct Revisions {
+    profile: u64,
+    view: u64,
+    search: u64,
+    connect: u64,
+    subscription: u64,
+}
+
+impl Revisions {
+    fn accepts(&self, profile: u64, request: Request) -> bool {
+        profile == self.profile
+            && match request {
+                Request::Profile => true,
+                Request::Connect(id) => self.connect == id,
+                Request::Search(id) => self.search == id,
+                Request::Conversation(id) => self.view == id,
+                Request::Subscription(view, id) => self.view == view && self.subscription == id,
+            }
+    }
+}
+
 pub struct OwnerClient {
-    rt: Runtime,
-    tx: Sender<BackendUpdate>,
+    rt: Option<Runtime>,
+    tx: Sender<ScopedUpdate>,
+    revisions: Revisions,
+    stream: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for OwnerClient {
+    fn drop(&mut self) {
+        if let Some(stream) = self.stream.take() {
+            stream.abort();
+        }
+        if let Some(rt) = self.rt.take() {
+            rt.shutdown_background();
+        }
+    }
 }
 
 impl OwnerClient {
-    pub fn new() -> Result<(Self, Receiver<BackendUpdate>), String> {
+    pub fn new() -> Result<(Self, Receiver<ScopedUpdate>), String> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
             .build()
             .map_err(|e| format!("Failed creating Tokio runtime: {e}"))?;
         let (tx, rx) = mpsc::channel();
-        Ok((Self { rt, tx }, rx))
+        Ok((
+            Self {
+                rt: Some(rt),
+                tx,
+                revisions: Revisions::default(),
+                stream: None,
+            },
+            rx,
+        ))
     }
 
-    pub fn connect_and_sync(&self, profile: PathBuf, query: String) {
-        let tx = self.tx.clone();
-        self.rt.spawn(async move {
+    fn runtime(&self) -> &Runtime {
+        self.rt.as_ref().expect("OwnerClient runtime active")
+    }
+
+    fn sender(&self, request: Request) -> UpdateSender {
+        UpdateSender {
+            tx: self.tx.clone(),
+            profile_revision: self.revisions.profile,
+            request,
+        }
+    }
+
+    pub fn current_update(&self, reply: ScopedUpdate) -> Option<BackendUpdate> {
+        self.revisions
+            .accepts(reply.profile_revision, reply.request)
+            .then_some(reply.update)
+    }
+
+    pub fn view_revision(&self) -> u64 {
+        self.revisions.view
+    }
+
+    pub fn change_view(&mut self) {
+        self.revisions.view += 1;
+        if let Some(stream) = self.stream.take() {
+            stream.abort();
+        }
+    }
+
+    pub fn change_profile(&mut self) {
+        self.revisions.profile += 1;
+        self.change_view();
+    }
+
+    pub fn connect_and_sync(&mut self, profile: PathBuf) {
+        self.revisions.connect += 1;
+        let tx = self.sender(Request::Connect(self.revisions.connect));
+        let view_revision = self.revisions.view;
+        self.runtime().spawn(async move {
             if let Err(err) = ensure_owner_running(&profile).await {
                 let _ = tx.send(BackendUpdate::Error(err));
                 return;
@@ -90,18 +204,6 @@ impl OwnerClient {
                 Ok(GuiReply::Profiles { profiles }) => profiles,
                 _ => local_owner::discover_profiles(&profile),
             };
-            let sessions = match send_v2_command(
-                &profile,
-                GuiCommand::ListSessions {
-                    limit: 50,
-                    query: (!query.trim().is_empty()).then_some(query),
-                },
-            )
-            .await
-            {
-                Ok(GuiReply::Sessions { sessions }) => sessions,
-                _ => Vec::new(),
-            };
             let active_turns = match send_v2_command(&profile, GuiCommand::ActiveTurns).await {
                 Ok(GuiReply::ActiveTurns { turns }) => turns,
                 _ => Vec::new(),
@@ -109,15 +211,16 @@ impl OwnerClient {
             let _ = tx.send(BackendUpdate::Connected {
                 profile,
                 profiles,
-                sessions,
+                view_revision,
                 active_turns,
             });
         });
     }
 
-    pub fn list_sessions(&self, profile: PathBuf, query: String) {
-        let tx = self.tx.clone();
-        self.rt.spawn(async move {
+    pub fn list_sessions(&mut self, profile: PathBuf, query: String) {
+        self.revisions.search += 1;
+        let tx = self.sender(Request::Search(self.revisions.search));
+        self.runtime().spawn(async move {
             let cmd = GuiCommand::ListSessions {
                 limit: 50,
                 query: (!query.trim().is_empty()).then_some(query),
@@ -137,9 +240,10 @@ impl OwnerClient {
         });
     }
 
-    pub fn load_session(&self, profile: PathBuf, session_id: String) {
-        let tx = self.tx.clone();
-        self.rt.spawn(async move {
+    pub fn load_session(&mut self, profile: PathBuf, session_id: String) {
+        self.change_view();
+        let tx = self.sender(Request::Conversation(self.revisions.view));
+        self.runtime().spawn(async move {
             match send_v2_command(&profile, GuiCommand::LoadSession { session_id }).await {
                 Ok(GuiReply::Transcript {
                     session,
@@ -153,10 +257,10 @@ impl OwnerClient {
                     });
                 }
                 Ok(GuiReply::Error { message }) => {
-                    let _ = tx.send(BackendUpdate::Error(message));
+                    let _ = tx.send(BackendUpdate::ConversationError(message));
                 }
                 Err(err) => {
-                    let _ = tx.send(BackendUpdate::Error(err));
+                    let _ = tx.send(BackendUpdate::ConversationError(err));
                 }
                 _ => {}
             }
@@ -164,18 +268,19 @@ impl OwnerClient {
     }
 
     pub fn start_turn(
-        &self,
+        &mut self,
         profile: PathBuf,
         session_id: Option<String>,
         query: String,
         cwd: PathBuf,
         yolo: bool,
     ) {
-        let tx = self.tx.clone();
+        self.change_view();
+        let tx = self.sender(Request::Conversation(self.revisions.view));
         let cwd_str = Some(cwd.display().to_string());
-        self.rt.spawn(async move {
+        self.runtime().spawn(async move {
             if let Err(err) = ensure_owner_running(&profile).await {
-                let _ = tx.send(BackendUpdate::Error(err));
+                let _ = tx.send(BackendUpdate::ConversationError(err));
                 return;
             }
             let cmd = GuiCommand::StartTurn {
@@ -187,32 +292,37 @@ impl OwnerClient {
             };
             match send_v2_command(&profile, cmd).await {
                 Ok(GuiReply::TurnStarted { turn_id }) => {
-                    let _ = tx.send(BackendUpdate::TurnStarted {
-                        turn_id: turn_id.clone(),
-                    });
-                    stream_turn_events(profile, turn_id, 0, tx).await;
+                    let _ = tx.send(BackendUpdate::TurnStarted { turn_id });
                 }
                 Ok(GuiReply::Error { message }) => {
-                    let _ = tx.send(BackendUpdate::Error(message));
+                    let _ = tx.send(BackendUpdate::ConversationError(message));
                 }
                 Err(err) => {
-                    let _ = tx.send(BackendUpdate::Error(err));
+                    let _ = tx.send(BackendUpdate::ConversationError(err));
                 }
                 _ => {}
             }
         });
     }
 
-    pub fn subscribe_turn(&self, profile: PathBuf, turn_id: String, after_seq: u64) {
-        let tx = self.tx.clone();
-        self.rt.spawn(async move {
-            stream_turn_events(profile, turn_id, after_seq, tx).await;
-        });
+    pub fn subscribe_turn(&mut self, profile: PathBuf, turn_id: String, after_seq: u64) {
+        if let Some(stream) = self.stream.take() {
+            stream.abort();
+        }
+        self.revisions.subscription += 1;
+        let tx = self.sender(Request::Subscription(
+            self.revisions.view,
+            self.revisions.subscription,
+        ));
+        self.stream = Some(
+            self.runtime()
+                .spawn(stream_turn_events(profile, turn_id, after_seq, tx)),
+        );
     }
 
     pub fn cancel_turn(&self, profile: PathBuf, turn_id: String) {
-        let tx = self.tx.clone();
-        self.rt.spawn(async move {
+        let tx = self.sender(Request::Conversation(self.revisions.view));
+        self.runtime().spawn(async move {
             if let Err(err) = send_v2_command(&profile, GuiCommand::CancelTurn { turn_id }).await {
                 let _ = tx.send(BackendUpdate::Error(err));
             }
@@ -226,8 +336,8 @@ impl OwnerClient {
         approval_id: u64,
         decision: ApprovalDecision,
     ) {
-        let tx = self.tx.clone();
-        self.rt.spawn(async move {
+        let tx = self.sender(Request::Conversation(self.revisions.view));
+        self.runtime().spawn(async move {
             let cmd = GuiCommand::RespondApproval {
                 turn_id,
                 approval_id,
@@ -240,8 +350,8 @@ impl OwnerClient {
     }
 
     pub fn sync_bundled_skills(&self, profile: PathBuf) {
-        let tx = self.tx.clone();
-        self.rt.spawn(async move {
+        let tx = self.sender(Request::Profile);
+        self.runtime().spawn(async move {
             let _ = hermes_runtime::config::ensure_profile_scaffold(&profile);
             match hermes_runtime::skills_sync::sync_skills(
                 &profile,
@@ -281,8 +391,8 @@ impl OwnerClient {
     }
 
     pub fn run_oauth_login(&self, profile: PathBuf, provider: String) {
-        let tx = self.tx.clone();
-        self.rt.spawn(async move {
+        let tx = self.sender(Request::Profile);
+        self.runtime().spawn(async move {
             let tx_cb = tx.clone();
             let prof_cb = profile.clone();
             let opts = hermes_runtime::providers::oauth_login::LoginOptions {
@@ -338,7 +448,7 @@ async fn stream_turn_events(
     profile: PathBuf,
     turn_id: String,
     initial_after_seq: u64,
-    tx: Sender<BackendUpdate>,
+    tx: UpdateSender,
 ) {
     let mut last_seq = initial_after_seq;
     let backoff_ms = [200u64, 500, 1000, 1500];
@@ -349,7 +459,7 @@ async fn stream_turn_events(
             Ok(Some(s)) => s,
             Ok(None) | Err(_) => {
                 if attempt >= backoff_ms.len() {
-                    let _ = tx.send(BackendUpdate::Error(
+                    let _ = tx.send(BackendUpdate::ConversationError(
                         "Lost connection to local session owner.".into(),
                     ));
                     return;
@@ -378,7 +488,7 @@ async fn stream_turn_events(
         };
         if write_frame(&mut stream, &env).await.is_err() {
             if attempt >= backoff_ms.len() {
-                let _ = tx.send(BackendUpdate::Error(
+                let _ = tx.send(BackendUpdate::ConversationError(
                     "Failed subscribing to local owner turn stream.".into(),
                 ));
                 return;
@@ -413,7 +523,7 @@ async fn stream_turn_events(
                             profile: profile.clone(),
                         });
                     } else {
-                        let _ = tx.send(BackendUpdate::Error(message));
+                        let _ = tx.send(BackendUpdate::ConversationError(message));
                     }
                     return;
                 }
@@ -421,7 +531,7 @@ async fn stream_turn_events(
                 Err(_) => {
                     // Socket dropped mid-stream; retry outer loop with `after_seq = last_seq`.
                     if !received_any && attempt >= backoff_ms.len() {
-                        let _ = tx.send(BackendUpdate::Error(
+                        let _ = tx.send(BackendUpdate::ConversationError(
                             "Local owner stream closed unexpectedly.".into(),
                         ));
                         return;
@@ -496,4 +606,56 @@ async fn ensure_owner_running(profile: &Path) -> Result<(), String> {
         "Local session owner for {} did not start within 4s.",
         profile.display()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queued_start_stream_transcript_and_search_replies_obey_navigation() {
+        let (mut client, rx) = OwnerClient::new().unwrap();
+        let conversation = client.sender(Request::Conversation(client.view_revision()));
+        let stream = client.sender(Request::Subscription(client.view_revision(), 0));
+        let search = client.sender(Request::Search(0));
+        conversation
+            .send(BackendUpdate::TurnStarted {
+                turn_id: "turn-1".into(),
+            })
+            .unwrap();
+        stream
+            .send(BackendUpdate::OwnerRestarted {
+                profile: "/a".into(),
+            })
+            .unwrap();
+        client.change_view();
+        for _ in 0..2 {
+            assert!(client.current_update(rx.recv().unwrap()).is_none());
+        }
+        conversation
+            .send(BackendUpdate::ConversationError("late transcript".into()))
+            .unwrap();
+        assert!(client.current_update(rx.recv().unwrap()).is_none());
+        client.revisions.search += 1;
+        search.send(BackendUpdate::SessionsLoaded(vec![])).unwrap();
+        assert!(client.current_update(rx.recv().unwrap()).is_none());
+
+        let current = client.sender(Request::Conversation(client.view_revision()));
+        current
+            .send(BackendUpdate::TurnStarted {
+                turn_id: "turn-1".into(),
+            })
+            .unwrap();
+        assert!(matches!(
+            client.current_update(rx.recv().unwrap()),
+            Some(BackendUpdate::TurnStarted { .. })
+        ));
+        let profile = client.sender(Request::Profile);
+        client.change_profile();
+        client.change_profile();
+        profile
+            .send(BackendUpdate::Error("old profile".into()))
+            .unwrap();
+        assert!(client.current_update(rx.recv().unwrap()).is_none());
+    }
 }

@@ -413,7 +413,7 @@ async fn handle_v2(
                     return write_frame(&mut stream, &GuiReply::Error { message }).await;
                 }
             };
-            approval::install(request.approvals().clone());
+            hermes_runtime::approval_policy::warm_up();
             let handle = hub.create_turn(session_id, query);
             let turn_id = handle.turn_id();
             let home_bg = Arc::clone(&home);
@@ -423,39 +423,34 @@ async fn handle_v2(
             write_frame(&mut stream, &GuiReply::TurnStarted { turn_id }).await
         }
         GuiCommand::SubscribeTurn { turn_id, after_seq } => {
-            let (missed, mut rx, finished) = match hub.subscribe(&turn_id, after_seq) {
-                Ok(sub) => sub,
-                Err(message) => {
-                    return write_frame(&mut stream, &GuiReply::Error { message }).await;
+            let mut cursor = after_seq;
+            loop {
+                let (missed, mut rx, finished) = match hub.subscribe(&turn_id, cursor) {
+                    Ok(sub) => sub,
+                    Err(message) => {
+                        return write_frame(&mut stream, &GuiReply::Error { message }).await
+                    }
+                };
+                for event in missed {
+                    cursor = event.seq;
+                    write_frame(&mut stream, &GuiReply::TurnEvent(event)).await?;
                 }
-            };
-            let mut last_seq = after_seq;
-            for ev in missed {
-                let is_done = matches!(ev.event, TurnStreamEvent::Done { .. });
-                last_seq = ev.seq;
-                write_frame(&mut stream, &GuiReply::TurnEvent(ev)).await?;
-                if is_done {
+                if finished {
                     return Ok(());
                 }
-            }
-            if finished {
-                return Ok(());
-            }
-            loop {
-                match rx.recv().await {
-                    Ok(ev) => {
-                        if ev.seq <= last_seq {
-                            continue;
+                loop {
+                    match rx.recv().await {
+                        Ok(event) => {
+                            cursor = event.seq;
+                            let done = matches!(event.event, TurnStreamEvent::Done { .. });
+                            write_frame(&mut stream, &GuiReply::TurnEvent(event)).await?;
+                            if done {
+                                return Ok(());
+                            }
                         }
-                        last_seq = ev.seq;
-                        let is_done = matches!(ev.event, TurnStreamEvent::Done { .. });
-                        write_frame(&mut stream, &GuiReply::TurnEvent(ev)).await?;
-                        if is_done {
-                            return Ok(());
-                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return Ok(()),
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return Ok(()),
                 }
             }
         }
@@ -543,5 +538,46 @@ async fn run_managed_turn(home: Arc<Path>, request: ChatRequest, handle: TurnHan
                 cancelled: false,
             });
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use tokio::net::UnixStream;
+
+    #[tokio::test]
+    async fn lagged_subscriber_gets_contiguous_replay_through_done() {
+        let hub = TurnHub::new();
+        let turn = hub.create_turn(None, String::new());
+        let (server, mut client) = UnixStream::pair().unwrap();
+        let task = tokio::spawn(handle_v2(
+            OwnerStream::Unix(server),
+            Arc::from(Path::new(".")),
+            hub,
+            GuiCommand::SubscribeTurn {
+                turn_id: turn.turn_id(),
+                after_seq: 0,
+            },
+        ));
+        turn.emit(TurnStreamEvent::Status {
+            text: "ready".into(),
+        });
+        let first: GuiReply = read_frame(&mut client).await.unwrap();
+        assert!(matches!(first, GuiReply::TurnEvent(ev) if ev.seq == 1));
+
+        // The single-thread executor cannot poll the subscriber during this burst.
+        for _ in 0..300 {
+            turn.emit(TurnStreamEvent::TextDelta { text: "a".into() });
+        }
+        turn.emit(TurnStreamEvent::Done {
+            exit_code: 0,
+            cancelled: false,
+        });
+        for seq in 2..=302 {
+            let reply: GuiReply = read_frame(&mut client).await.unwrap();
+            assert!(matches!(reply, GuiReply::TurnEvent(ev) if ev.seq == seq));
+        }
+        task.await.unwrap().unwrap();
     }
 }

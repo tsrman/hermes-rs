@@ -73,8 +73,10 @@ class ReplBase(ToolTestCase):
                     self.transcript.extend(os.read(master, 16384))
                 except OSError:
                     break
-        self.assertIsNotNone(process.poll(), bytes(self.transcript))
-        return process.returncode
+        try:
+            return process.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            self.fail(f"process did not exit; output={bytes(self.transcript)!r}")
 
     def requests(self):
         with urlopen(self.url + "/requests", timeout=4) as response:

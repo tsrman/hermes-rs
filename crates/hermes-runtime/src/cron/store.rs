@@ -223,27 +223,20 @@ pub(super) fn with_jobs<T>(
     }
 
     let path = dir.join("jobs.json");
-    let mut jobs = match std::fs::read_to_string(&path) {
-        Ok(raw) => {
-            let data: Value = serde_json::from_str(raw.strip_prefix('\u{feff}').unwrap_or(&raw))
-                .map_err(|_| "cron jobs.json is not valid JSON")?;
-            match data.get("jobs") {
-                Some(Value::Array(jobs)) if jobs.iter().all(Value::is_object) => jobs.clone(),
-                _ => {
-                    return Err("cron jobs.json has a layout this version does not rewrite; run `hermes cron list` and repair it with the Python agent first".into())
-                }
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+    let mut document: Value = match std::fs::read_to_string(&path) {
+        Ok(raw) => serde_json::from_str(raw.strip_prefix('\u{feff}').unwrap_or(&raw))
+            .map_err(|_| "cron jobs.json is not valid JSON")?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({"jobs": []}),
         Err(error) => return Err(format!("cannot read cron jobs: {error}")),
     };
-    let (result, changed) = change(&mut jobs)?;
+    let jobs = document.get_mut("jobs")
+        .and_then(Value::as_array_mut)
+        .filter(|jobs| jobs.iter().all(Value::is_object))
+        .ok_or("cron jobs.json has a layout this version does not rewrite; run `hermes cron list` and repair it with the Python agent first")?;
+    let (result, changed) = change(jobs)?;
     if changed {
-        let payload = serde_json::to_string_pretty(&json!({
-            "jobs": jobs,
-            "updated_at": iso_instant(now),
-        }))
-        .map_err(|error| error.to_string())?;
+        document["updated_at"] = json!(iso_instant(now));
+        let payload = serde_json::to_string_pretty(&document).map_err(|error| error.to_string())?;
         let mut staged = tempfile::Builder::new()
             .prefix(".jobs_")
             .suffix(".tmp")

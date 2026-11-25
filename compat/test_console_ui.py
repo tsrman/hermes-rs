@@ -165,8 +165,8 @@ class ConsoleUiTest(unittest.TestCase):
                         buf.extend(data)
                 except OSError:
                     break
-        # Drain any trailing bytes
-        while True:
+        # Drain any trailing bytes within the same exit deadline.
+        while time.monotonic() < deadline:
             ready, _, _ = select.select([master], [], [], 0.05)
             if not ready:
                 break
@@ -177,8 +177,10 @@ class ConsoleUiTest(unittest.TestCase):
                 buf.extend(data)
             except OSError:
                 break
-        self.assertIsNotNone(proc.poll(), f"process did not exit; output={bytes(buf)!r}")
-        return proc.returncode
+        try:
+            return proc.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            self.fail(f"process did not exit; output={bytes(buf)!r}")
 
     def test_pipe_falls_back_to_plain_even_when_tui_or_inline_requested(self):
         server, base_url, _ = _start_mock_server(reply_text="Plain reply")

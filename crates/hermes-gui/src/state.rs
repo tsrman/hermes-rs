@@ -194,6 +194,9 @@ pub struct GuiState {
     pub active_turn_id: Option<String>,
     pub last_seq: u64,
     pub streaming: bool,
+    pub loading_session: bool,
+    pub reload_after_gap: bool,
+    resume_any_on_connect: bool,
     pub pending_approval: Option<PendingApproval>,
     pub pending_clarify: Option<PendingClarify>,
     pub composer_input: TextBuffer,
@@ -219,6 +222,9 @@ impl GuiState {
             active_turn_id: None,
             last_seq: 0,
             streaming: false,
+            loading_session: false,
+            reload_after_gap: false,
+            resume_any_on_connect: true,
             pending_approval: None,
             pending_clarify: None,
             composer_input: TextBuffer::new(),
@@ -337,20 +343,19 @@ impl GuiState {
     pub fn reset_for_profile(&mut self, profile: PathBuf) {
         self.active_profile = profile;
         self.sessions.clear();
-        self.selected_session_id = None;
-        self.selected_session_title = None;
-        self.feed.clear();
-        self.attachments.clear();
-        self.active_turn_id = None;
-        self.last_seq = 0;
-        self.streaming = false;
-        self.pending_approval = None;
-        self.pending_clarify = None;
+        self.start_new_chat();
+        self.resume_any_on_connect = true;
+        self.composer_input.clear();
+        self.search_input.clear();
+        self.yolo = false;
         self.owner_connected = false;
         self.status_message = "Switching profile...".into();
     }
 
     pub fn start_new_chat(&mut self) {
+        self.loading_session = false;
+        self.reload_after_gap = false;
+        self.resume_any_on_connect = false;
         self.selected_session_id = None;
         self.selected_session_title = None;
         self.feed.clear();
@@ -363,12 +368,22 @@ impl GuiState {
         self.status_message = "New conversation".into();
     }
 
+    pub fn select_session(&mut self, id: String) {
+        self.start_new_chat();
+        self.selected_session_id = Some(id);
+        self.loading_session = true;
+        self.status_message = "Loading session...".into();
+    }
+
     pub fn load_transcript(
         &mut self,
         session: SessionSummary,
         items: Vec<TranscriptItem>,
         active_turn_id: Option<String>,
     ) {
+        self.loading_session = false;
+        self.reload_after_gap = false;
+        self.resume_any_on_connect = false;
         self.selected_session_id = Some(session.id.clone());
         self.selected_session_title = session.title.clone();
         self.feed.clear();
@@ -378,12 +393,15 @@ impl GuiState {
                 "assistant" if !item.content.trim().is_empty() => {
                     self.feed.push(FeedRow::Assistant(item.content));
                 }
-                "tool" => self.feed.push(FeedRow::Tool {
-                    name: item.tool_name.unwrap_or_else(|| "tool".into()),
-                    detail: None,
-                    summary: Some(truncate_preview(&item.content, 120)),
-                    state: ToolCardState::Succeeded,
-                }),
+                "tool" => {
+                    let (state, summary) = summarize_tool_payload(&item.content);
+                    self.feed.push(FeedRow::Tool {
+                        name: item.tool_name.unwrap_or_else(|| "tool".into()),
+                        detail: None,
+                        summary: Some(summary),
+                        state,
+                    });
+                }
                 _ => {}
             }
         }
@@ -403,7 +421,20 @@ impl GuiState {
     }
 
     pub fn note_active_turns(&mut self, turns: &[ActiveTurnSummary]) -> Option<(String, u64)> {
-        let running = turns.iter().find(|t| !t.finished)?;
+        if self.loading_session || (self.streaming && self.active_turn_id.is_none()) {
+            return None;
+        }
+        let running = turns.iter().find(|t| {
+            !t.finished
+                && if let Some(turn_id) = &self.active_turn_id {
+                    &t.turn_id == turn_id
+                } else if self.selected_session_id.is_some() {
+                    t.session_id == self.selected_session_id
+                } else {
+                    self.resume_any_on_connect
+                }
+        })?;
+        self.resume_any_on_connect = false;
         if self.active_turn_id.as_deref() == Some(running.turn_id.as_str()) {
             return Some((running.turn_id.clone(), self.last_seq));
         }
@@ -418,12 +449,28 @@ impl GuiState {
     }
 
     /// Apply one sequenced event from the local owner, ignoring duplicates on reconnect.
-    pub fn apply_turn_event(&mut self, turn_id: &str, ev: SequencedTurnEvent) {
-        if ev.seq <= self.last_seq {
-            return;
+    pub fn apply_turn_event(&mut self, turn_id: &str, ev: SequencedTurnEvent) -> bool {
+        if self.active_turn_id.as_deref() != Some(turn_id) || ev.seq <= self.last_seq {
+            return false;
         }
         self.last_seq = ev.seq;
         match ev.event {
+            TurnStreamEvent::ReplayGap {
+                session_id,
+                pending_approval,
+            } => {
+                self.selected_session_id = session_id;
+                self.reload_after_gap = true;
+                self.pending_approval = None;
+                self.pending_clarify = None;
+                self.feed.push(FeedRow::Notice {
+                    is_error: false,
+                    text: "Some live output expired. The saved conversation will reload when the turn ends.".into(),
+                });
+                if let Some((id, request)) = pending_approval {
+                    self.show_approval(turn_id, id, request);
+                }
+            }
             TurnStreamEvent::TextDelta { text } => {
                 if let Some(FeedRow::Assistant(existing)) = self.feed.last_mut() {
                     existing.push_str(&text);
@@ -485,25 +532,7 @@ impl GuiState {
                 approval_id,
                 request,
             } => {
-                if request.action == ApprovalAction::Clarify {
-                    if let Some(clarify) = PendingClarify::from_request(
-                        turn_id.to_owned(),
-                        approval_id,
-                        &request.content,
-                    ) {
-                        self.pending_clarify = Some(clarify);
-                        self.pending_approval = None;
-                        self.status_message = "Hermes has a question for you...".into();
-                        return;
-                    }
-                }
-                self.pending_clarify = None;
-                self.pending_approval = Some(PendingApproval {
-                    turn_id: turn_id.to_owned(),
-                    approval_id,
-                    request,
-                });
-                self.status_message = "Waiting for your approval...".into();
+                self.show_approval(turn_id, approval_id, request);
             }
             TurnStreamEvent::ApprovalResolved { approval_id } => {
                 if self
@@ -547,6 +576,27 @@ impl GuiState {
                 };
             }
         }
+        true
+    }
+
+    fn show_approval(&mut self, turn_id: &str, approval_id: u64, request: ApprovalRequest) {
+        if request.action == ApprovalAction::Clarify {
+            if let Some(clarify) =
+                PendingClarify::from_request(turn_id.to_owned(), approval_id, &request.content)
+            {
+                self.pending_clarify = Some(clarify);
+                self.pending_approval = None;
+                self.status_message = "Hermes has a question for you...".into();
+                return;
+            }
+        }
+        self.pending_clarify = None;
+        self.pending_approval = Some(PendingApproval {
+            turn_id: turn_id.to_owned(),
+            approval_id,
+            request,
+        });
+        self.status_message = "Waiting for your approval...".into();
     }
 }
 
@@ -570,9 +620,93 @@ fn truncate_preview(text: &str, max_chars: usize) -> String {
     }
 }
 
+fn summarize_tool_payload(content: &str) -> (ToolCardState, String) {
+    if let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(content) {
+        let error_text = obj
+            .get("error")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let status = obj.get("status").and_then(Value::as_str).unwrap_or("");
+        let failed = error_text.is_some()
+            || obj.get("success") == Some(&Value::Bool(false))
+            || matches!(
+                status,
+                "error"
+                    | "timeout"
+                    | "approval_denied"
+                    | "approval_unavailable"
+                    | "approval_timeout"
+                    | "backend_unavailable"
+            )
+            || obj
+                .get("exit_code")
+                .and_then(Value::as_i64)
+                .is_some_and(|code| code != 0);
+
+        if failed {
+            let reason = error_text
+                .map(|e| truncate_preview(e, 140))
+                .or_else(|| (!status.is_empty()).then(|| status.replace('_', " ")))
+                .unwrap_or_else(|| truncate_preview(content, 120));
+            return (ToolCardState::Failed, reason);
+        }
+
+        if let Some(out) = obj
+            .get("output")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return (ToolCardState::Succeeded, truncate_preview(out, 120));
+        }
+        if let Some(n) = obj.get("total_available").and_then(Value::as_u64) {
+            return (ToolCardState::Succeeded, format!("{n} matching tool(s)"));
+        }
+        if !status.is_empty() {
+            return (ToolCardState::Succeeded, status.to_owned());
+        }
+    }
+    (ToolCardState::Succeeded, truncate_preview(content, 120))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn abandoned_turn_events_cannot_change_a_new_chat() {
+        let mut state = GuiState::new(PathBuf::from("/profile"));
+        state.active_turn_id = Some("old".into());
+        state.start_new_chat();
+        state.apply_turn_event(
+            "old",
+            SequencedTurnEvent {
+                seq: 1,
+                event: TurnStreamEvent::SessionAssigned {
+                    session_id: "old-session".into(),
+                },
+            },
+        );
+        assert_eq!(state.selected_session_id, None);
+        assert_eq!(state.last_seq, 0);
+    }
+
+    #[test]
+    fn reconnect_to_selected_session_ignores_unrelated_running_turns() {
+        let mut state = GuiState::new(PathBuf::from("/profile"));
+        state.selected_session_id = Some("mine".into());
+        let other = ActiveTurnSummary {
+            turn_id: "unrelated".into(),
+            session_id: Some("other".into()),
+            query: String::new(),
+            latest_seq: 10,
+            finished: false,
+            has_pending_approval: false,
+        };
+        assert_eq!(state.note_active_turns(&[other]), None);
+        assert!(state.active_turn_id.is_none());
+    }
 
     #[test]
     fn reconnect_deduplicates_sequence_and_restores_pending_approval() {
@@ -630,6 +764,7 @@ mod tests {
     #[test]
     fn clarify_approval_parses_questions_and_builds_submitted_json() {
         let mut st = GuiState::new(PathBuf::from("/tmp/p1"));
+        st.active_turn_id = Some("turn-9".into());
         let payload = json!([
             {
                 "qid": "q0",
@@ -809,5 +944,74 @@ mod tests {
         assert!(slash_items.iter().any(|i| i.replacement == "/audit"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_transcript_marks_failed_tool_results_and_summarizes_cleanly() {
+        let mut st = GuiState::new(PathBuf::from("/tmp/profile-a"));
+        let session = SessionSummary {
+            id: "sess-tools".into(),
+            title: Some("Tool failures".into()),
+            model: Some("test-model".into()),
+            started_at: 200.0,
+            message_count: 3,
+        };
+        let items = vec![
+            TranscriptItem {
+                role: "tool".into(),
+                content: json!({
+                    "error": "Code execution requires user approval, which is unavailable in this environment.",
+                    "status": "approval_unavailable"
+                })
+                .to_string(),
+                tool_name: Some("execute_code".into()),
+            },
+            TranscriptItem {
+                role: "tool".into(),
+                content: json!({
+                    "output": "hello world",
+                    "exit_code": 0
+                })
+                .to_string(),
+                tool_name: Some("terminal".into()),
+            },
+            TranscriptItem {
+                role: "tool".into(),
+                content: json!({
+                    "status": "ok",
+                    "total_available": 3
+                })
+                .to_string(),
+                tool_name: Some("search_tools".into()),
+            },
+        ];
+
+        st.load_transcript(session, items, None);
+        assert_eq!(
+            st.feed,
+            vec![
+                FeedRow::Tool {
+                    name: "execute_code".into(),
+                    detail: None,
+                    summary: Some(
+                        "Code execution requires user approval, which is unavailable in this environment."
+                            .into()
+                    ),
+                    state: ToolCardState::Failed,
+                },
+                FeedRow::Tool {
+                    name: "terminal".into(),
+                    detail: None,
+                    summary: Some("hello world".into()),
+                    state: ToolCardState::Succeeded,
+                },
+                FeedRow::Tool {
+                    name: "search_tools".into(),
+                    detail: None,
+                    summary: Some("3 matching tool(s)".into()),
+                    state: ToolCardState::Succeeded,
+                },
+            ]
+        );
     }
 }

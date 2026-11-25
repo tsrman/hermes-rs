@@ -11,14 +11,15 @@
 //! discovery, managed turns with monotonic event sequence replay, pending approval survival across
 //! disconnects, and `SubscribeTurn { after_seq }` reconnection.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
+use std::hash::BuildHasher;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
@@ -43,6 +44,8 @@ pub const CONTROL_APPROVAL_RESPONSE: u8 = 2;
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
 pub const IO_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_REPLAY_EVENTS: usize = 4096;
+const MAX_COMPLETED_TURNS: usize = 32;
+const COMPLETED_TURN_TTL: Duration = Duration::from_secs(5 * 60);
 
 // ── Cross-platform transport stream & listener ───────────────────────────────────────────────────
 
@@ -500,6 +503,12 @@ pub struct SequencedTurnEvent {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TurnStreamEvent {
+    /// The requested cursor predates retained events. Reload the persisted transcript on Done.
+    /// Includes the outstanding approval. A terminal event follows for completed turns.
+    ReplayGap {
+        session_id: Option<String>,
+        pending_approval: Option<(u64, ApprovalRequest)>,
+    },
     TextDelta {
         text: String,
     },
@@ -570,7 +579,7 @@ struct ManagedTurn {
     turn_id: String,
     session_id: Option<String>,
     query: String,
-    events: Vec<SequencedTurnEvent>,
+    events: VecDeque<SequencedTurnEvent>,
     next_seq: u64,
     finished: bool,
     pending_approval: Option<(u64, ApprovalRequest, oneshot::Sender<ApprovalDecision>)>,
@@ -579,12 +588,47 @@ struct ManagedTurn {
     tx: broadcast::Sender<SequencedTurnEvent>,
 }
 
+impl ManagedTurn {
+    fn publish(&mut self, event: TurnStreamEvent) {
+        self.next_seq += 1;
+        let event = SequencedTurnEvent {
+            seq: self.next_seq,
+            event,
+        };
+        if self.events.len() == MAX_REPLAY_EVENTS {
+            self.events.pop_front();
+        }
+        self.events.push_back(event.clone());
+        let _ = self.tx.send(event);
+    }
+}
+
+#[derive(Default)]
+struct TurnRegistry {
+    turns: HashMap<String, Arc<Mutex<ManagedTurn>>>,
+    completed: VecDeque<(Instant, String)>,
+    next_id: u64,
+}
+
+impl TurnRegistry {
+    fn prune(&mut self, now: Instant) {
+        while let Some((finished_at, _)) = self.completed.front() {
+            if self.completed.len() <= MAX_COMPLETED_TURNS
+                && now.duration_since(*finished_at) < COMPLETED_TURN_TTL
+            {
+                break;
+            }
+            let (_, id) = self.completed.pop_front().unwrap();
+            self.turns.remove(&id);
+        }
+    }
+}
+
 /// Multi-client turn hub held by the local owner process so GUI clients can disconnect and
 /// reconnect without losing streaming output, active turns, or pending approval prompts.
 #[derive(Clone, Default)]
 pub struct TurnHub {
-    turns: Arc<Mutex<HashMap<String, Arc<Mutex<ManagedTurn>>>>>,
-    counter: Arc<std::sync::atomic::AtomicU64>,
+    registry: Arc<Mutex<TurnRegistry>>,
 }
 
 pub struct TurnHandle {
@@ -594,6 +638,7 @@ pub struct TurnHandle {
 
 #[derive(Clone)]
 pub struct TurnEmitter {
+    hub: TurnHub,
     turn: Arc<Mutex<ManagedTurn>>,
 }
 
@@ -625,23 +670,27 @@ impl TurnEmitter {
 
     pub fn emit(&self, event: TurnStreamEvent) {
         let mut guard = self.turn.lock().unwrap();
+        if guard.finished {
+            return;
+        }
         if let TurnStreamEvent::SessionAssigned { ref session_id } = event {
             guard.session_id = Some(session_id.clone());
         }
-        if matches!(event, TurnStreamEvent::Done { .. }) {
+        let finished = matches!(event, TurnStreamEvent::Done { .. });
+        if finished {
             guard.finished = true;
             guard.cancel_tx = None;
+            guard.pending_approval = None;
         }
-        guard.next_seq += 1;
-        let seq_event = SequencedTurnEvent {
-            seq: guard.next_seq,
-            event,
-        };
-        if guard.events.len() >= MAX_REPLAY_EVENTS {
-            guard.events.remove(0);
+        guard.publish(event);
+        if finished {
+            let turn_id = guard.turn_id.clone();
+            drop(guard);
+            let mut registry = self.hub.registry.lock().unwrap();
+            let now = Instant::now();
+            registry.completed.push_back((now, turn_id));
+            registry.prune(now);
         }
-        guard.events.push(seq_event.clone());
-        let _ = guard.tx.send(seq_event);
     }
 
     pub fn request_approval(
@@ -650,19 +699,16 @@ impl TurnEmitter {
     ) -> oneshot::Receiver<ApprovalDecision> {
         let (tx, rx) = oneshot::channel();
         let mut guard = self.turn.lock().unwrap();
+        if guard.finished {
+            return rx;
+        }
         guard.next_approval_id += 1;
         let approval_id = guard.next_approval_id;
         guard.pending_approval = Some((approval_id, request.clone(), tx));
-        guard.next_seq += 1;
-        let seq_event = SequencedTurnEvent {
-            seq: guard.next_seq,
-            event: TurnStreamEvent::ApprovalRequired {
-                approval_id,
-                request,
-            },
-        };
-        guard.events.push(seq_event.clone());
-        let _ = guard.tx.send(seq_event);
+        guard.publish(TurnStreamEvent::ApprovalRequired {
+            approval_id,
+            request,
+        });
         rx
     }
 }
@@ -673,18 +719,22 @@ impl TurnHub {
     }
 
     pub fn create_turn(&self, session_id: Option<String>, query: String) -> TurnHandle {
-        let num = self
-            .counter
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            + 1;
-        let turn_id = format!("turn-{num}");
+        let mut registry = self.registry();
+        registry.next_id += 1;
+        // Each new owner has a different map hash seed, so stale subscriptions cannot
+        // attach to an unrelated turn after an owner restart.
+        let turn_id = format!(
+            "turn-{:016x}-{}",
+            registry.turns.hasher().hash_one(0u64),
+            registry.next_id
+        );
         let (tx, _) = broadcast::channel(256);
         let (cancel_tx, cancel_rx) = oneshot::channel();
         let turn = Arc::new(Mutex::new(ManagedTurn {
             turn_id: turn_id.clone(),
             session_id,
             query,
-            events: Vec::new(),
+            events: VecDeque::new(),
             next_seq: 0,
             finished: false,
             pending_approval: None,
@@ -692,18 +742,25 @@ impl TurnHub {
             cancel_tx: Some(cancel_tx),
             tx,
         }));
-        self.turns
-            .lock()
-            .unwrap()
-            .insert(turn_id, Arc::clone(&turn));
+        registry.turns.insert(turn_id, Arc::clone(&turn));
         TurnHandle {
-            emitter: TurnEmitter { turn },
+            emitter: TurnEmitter {
+                turn,
+                hub: self.clone(),
+            },
             cancel_rx,
         }
     }
 
+    fn registry(&self) -> std::sync::MutexGuard<'_, TurnRegistry> {
+        let mut registry = self.registry.lock().unwrap();
+        registry.prune(Instant::now());
+        registry
+    }
+
     pub fn active_turns(&self) -> Vec<ActiveTurnSummary> {
-        let guard = self.turns.lock().unwrap();
+        let registry = self.registry();
+        let guard = &registry.turns;
         let mut out: Vec<ActiveTurnSummary> = guard
             .values()
             .map(|t| {
@@ -723,7 +780,8 @@ impl TurnHub {
     }
 
     pub fn active_turn_for_session(&self, session_id: &str) -> Option<String> {
-        let guard = self.turns.lock().unwrap();
+        let registry = self.registry();
+        let guard = &registry.turns;
         guard.values().find_map(|t| {
             let st = t.lock().unwrap();
             (!st.finished && st.session_id.as_deref() == Some(session_id))
@@ -745,19 +803,46 @@ impl TurnHub {
         String,
     > {
         let turn = self
+            .registry()
             .turns
-            .lock()
-            .unwrap()
             .get(turn_id)
             .cloned()
             .ok_or_else(|| format!("Unknown turn_id '{turn_id}'"))?;
         let st = turn.lock().unwrap();
-        let missed: Vec<SequencedTurnEvent> = st
+        if after_seq > st.next_seq {
+            return Err(format!("Invalid cursor {after_seq} for turn '{turn_id}'"));
+        }
+        let missed = if st
             .events
-            .iter()
-            .filter(|ev| ev.seq > after_seq)
-            .cloned()
-            .collect();
+            .front()
+            .is_some_and(|first| first.seq.saturating_sub(1) > after_seq)
+        {
+            let mut events = vec![SequencedTurnEvent {
+                seq: st.next_seq - u64::from(st.finished),
+                event: TurnStreamEvent::ReplayGap {
+                    session_id: st.session_id.clone(),
+                    pending_approval: st
+                        .pending_approval
+                        .as_ref()
+                        .map(|(id, req, _)| (*id, req.clone())),
+                },
+            }];
+            if st.finished {
+                events.push(
+                    st.events
+                        .back()
+                        .expect("completed turn has a Done event")
+                        .clone(),
+                );
+            }
+            events
+        } else {
+            st.events
+                .iter()
+                .filter(|ev| ev.seq > after_seq)
+                .cloned()
+                .collect()
+        };
         let rx = st.tx.subscribe();
         let finished = st.finished;
         Ok((missed, rx, finished))
@@ -765,9 +850,8 @@ impl TurnHub {
 
     pub fn cancel(&self, turn_id: &str) -> Result<(), String> {
         let turn = self
+            .registry()
             .turns
-            .lock()
-            .unwrap()
             .get(turn_id)
             .cloned()
             .ok_or_else(|| format!("Unknown turn_id '{turn_id}'"))?;
@@ -785,9 +869,8 @@ impl TurnHub {
         decision: ApprovalDecision,
     ) -> Result<(), String> {
         let turn = self
+            .registry()
             .turns
-            .lock()
-            .unwrap()
             .get(turn_id)
             .cloned()
             .ok_or_else(|| format!("Unknown turn_id '{turn_id}'"))?;
@@ -804,13 +887,7 @@ impl TurnHub {
         if let Some((_, _, sender)) = st.pending_approval.take() {
             let _ = sender.send(decision);
         }
-        st.next_seq += 1;
-        let ev = SequencedTurnEvent {
-            seq: st.next_seq,
-            event: TurnStreamEvent::ApprovalResolved { approval_id },
-        };
-        st.events.push(ev.clone());
-        let _ = st.tx.send(ev);
+        st.publish(TurnStreamEvent::ApprovalResolved { approval_id });
         Ok(())
     }
 }
@@ -989,6 +1066,85 @@ pub async fn send_v2_command(home: &Path, command: GuiCommand) -> Result<GuiRepl
 mod tests {
     use super::*;
     use crate::file_tools::ApprovalAction;
+
+    #[test]
+    fn completed_history_is_bounded_and_keeps_running_turns() {
+        let hub = TurnHub::new();
+        let active = hub.create_turn(None, "active".into());
+        let first = hub.create_turn(None, "first".into());
+        let finish = |h: &TurnHandle| {
+            h.emit(TurnStreamEvent::Done {
+                exit_code: 0,
+                cancelled: false,
+            })
+        };
+        finish(&first);
+        for _ in 0..MAX_COMPLETED_TURNS {
+            finish(&hub.create_turn(None, String::new()));
+        }
+        assert!(hub.subscribe(&first.turn_id(), 0).is_err());
+        assert!(hub.subscribe(&active.turn_id(), 0).is_ok());
+    }
+
+    #[test]
+    fn completed_turn_expires_at_the_reconnect_deadline() {
+        let hub = TurnHub::new();
+        let turn = hub.create_turn(None, String::new());
+        turn.emit(TurnStreamEvent::Done {
+            exit_code: 0,
+            cancelled: false,
+        });
+        assert!(hub.subscribe(&turn.turn_id(), 0).is_ok());
+        hub.registry
+            .lock()
+            .unwrap()
+            .completed
+            .front_mut()
+            .unwrap()
+            .0 -= COMPLETED_TURN_TTL;
+        assert!(hub.subscribe(&turn.turn_id(), 0).is_err());
+    }
+
+    #[test]
+    fn truncated_replay_returns_session_and_pending_approval_then_terminal_event() {
+        let hub = TurnHub::new();
+        let turn = hub.create_turn(Some("saved".into()), String::new());
+        let _decision = turn.request_approval(ApprovalRequest {
+            target: "file".into(),
+            content: "diff".into(),
+            action: ApprovalAction::ReplaceFile,
+            timeout_secs: 30,
+        });
+        for _ in 0..MAX_REPLAY_EVENTS {
+            turn.emit(TurnStreamEvent::TextDelta { text: "x".into() });
+        }
+        let (events, _, finished) = hub.subscribe(&turn.turn_id(), 0).unwrap();
+        assert!(!finished);
+        assert!(
+            matches!(events.as_slice(), [SequencedTurnEvent { event: TurnStreamEvent::ReplayGap {
+            session_id: Some(id), pending_approval: Some((1, _)) }, .. }] if id == "saved")
+        );
+        let checkpoint = events[0].seq;
+        turn.emit(TurnStreamEvent::Done {
+            exit_code: 0,
+            cancelled: false,
+        });
+        let (events, _, finished) = hub.subscribe(&turn.turn_id(), 0).unwrap();
+        assert!(finished);
+        assert!(matches!(
+            events[0].event,
+            TurnStreamEvent::ReplayGap {
+                pending_approval: None,
+                ..
+            }
+        ));
+        assert_eq!(events[0].seq, checkpoint);
+        assert!(matches!(events[1].event, TurnStreamEvent::Done { .. }));
+        assert_eq!(
+            hub.subscribe(&turn.turn_id(), checkpoint).unwrap().0.len(),
+            1
+        );
+    }
 
     #[tokio::test]
     async fn turn_hub_replays_events_and_resolves_approval_after_reconnect() {

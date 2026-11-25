@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::Duration;
 
 use ring::digest::{digest, SHA256};
@@ -477,6 +476,7 @@ impl<'a> FileWorkspace<'a> {
         tool: &str,
         arguments: &str,
         timeout_secs: Option<u32>,
+        policy: Option<&crate::approval_policy::ApprovalPolicy>,
         approve: &mut A,
     ) -> Value
     where
@@ -520,7 +520,7 @@ impl<'a> FileWorkspace<'a> {
                 },
                 timeout_secs: seconds,
             };
-            let decision = request_approval(request, approve).await;
+            let decision = request_approval(request, policy, approve).await;
             if !matches!(decision, ApprovalDecision::Approved) {
                 return approval_error(decision);
             }
@@ -560,7 +560,7 @@ impl<'a> FileWorkspace<'a> {
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
-            let _ = (tool, arguments, seconds, approve);
+            let _ = (tool, arguments, seconds, policy, approve);
             approval_error(ApprovalDecision::Unavailable)
         }
     }
@@ -920,9 +920,9 @@ pub(crate) fn approval_error(decision: ApprovalDecision) -> Value {
     json!({"status": status, "error": error})
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) async fn request_approval<A, F>(
     request: ApprovalRequest,
+    policy: Option<&crate::approval_policy::ApprovalPolicy>,
     approve: &mut A,
 ) -> ApprovalDecision
 where
@@ -931,7 +931,11 @@ where
 {
     // What the rules already decide costs the person nothing, so it is settled before the clock
     // for their answer starts (the first check of a command can take a moment).
-    if let Some(policy) = crate::approval_policy::installed() {
+    let effective = match policy {
+        Some(policy) => Some(policy),
+        None => crate::approval_policy::installed(),
+    };
+    if let Some(policy) = effective {
         match policy.decide(&request) {
             crate::approval_policy::Verdict::Allow => return ApprovalDecision::Approved,
             crate::approval_policy::Verdict::Deny => return ApprovalDecision::Denied,
@@ -944,20 +948,6 @@ where
     )
     .await
     .unwrap_or(ApprovalDecision::TimedOut)
-}
-
-/// Where commands and file changes cannot be approved (no terminal support), nothing is asked.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(crate) async fn request_approval<A, F>(
-    request: ApprovalRequest,
-    approve: &mut A,
-) -> ApprovalDecision
-where
-    A: FnMut(ApprovalRequest) -> F,
-    F: Future<Output = ApprovalDecision>,
-{
-    let _ = (request, approve);
-    ApprovalDecision::Unavailable
 }
 
 pub(crate) fn write_schema() -> Value {
@@ -1003,7 +993,7 @@ mod tests {
         let (arguments, ()) =
             patch(json!({"path": "a.json", "old_string": "\"a\": 1,", "new_string": "\"a\": 10,"}));
         let result = workspace
-            .edit(PATCH, &arguments, Some(5), &mut approve)
+            .edit(PATCH, &arguments, Some(5), None, &mut approve)
             .await;
         assert_eq!(result["success"], true, "{result}");
         assert!(result["diff"]
@@ -1015,7 +1005,7 @@ mod tests {
         let (arguments, ()) =
             patch(json!({"path": "a.json", "old_string": "\"b\": 2", "new_string": "\"b\": ,"}));
         let broken = workspace
-            .edit(PATCH, &arguments, Some(5), &mut approve)
+            .edit(PATCH, &arguments, Some(5), None, &mut approve)
             .await;
         assert_eq!(broken["lint"]["status"], "error");
         // A re-sent edit is a no-op, and a miss gets the reference's hint.
@@ -1024,13 +1014,13 @@ mod tests {
             json!({"path": "b.txt", "old_string": "completely different words", "new_string": "beta gamma"}),
         );
         let again = workspace
-            .edit(PATCH, &arguments, Some(5), &mut approve)
+            .edit(PATCH, &arguments, Some(5), None, &mut approve)
             .await;
         assert_eq!(again["no_change"], true, "{again}");
         let (arguments, ()) =
             patch(json!({"path": "a.json", "old_string": "zzz not here", "new_string": "q"}));
         let miss = workspace
-            .edit(PATCH, &arguments, Some(5), &mut approve)
+            .edit(PATCH, &arguments, Some(5), None, &mut approve)
             .await;
         assert!(miss["error"]
             .as_str()
@@ -1095,7 +1085,7 @@ mod tests {
         let big = "x".repeat(300_000);
         let arguments = json!({"path": "new/deep/file.json", "content": "{\"a\": 1}"}).to_string();
         let result = workspace
-            .edit(WRITE_FILE, &arguments, Some(5), &mut approve)
+            .edit(WRITE_FILE, &arguments, Some(5), None, &mut approve)
             .await;
         assert_eq!(result["dirs_created"], true, "{result}");
         assert_eq!(result["verified"], true);
@@ -1106,7 +1096,7 @@ mod tests {
         );
         let arguments = json!({"path": "new/big.txt", "content": big}).to_string();
         let result = workspace
-            .edit(WRITE_FILE, &arguments, Some(5), &mut approve)
+            .edit(WRITE_FILE, &arguments, Some(5), None, &mut approve)
             .await;
         assert_eq!(result["bytes_written"], 300_000, "{result}");
         assert_eq!(result["dirs_created"], false);
@@ -1119,13 +1109,13 @@ mod tests {
         let mut approve = |_: ApprovalRequest| async { ApprovalDecision::Approved };
         let arguments = json!({"path": "bad.json", "content": "{oops"}).to_string();
         let result = workspace
-            .edit(WRITE_FILE, &arguments, Some(5), &mut approve)
+            .edit(WRITE_FILE, &arguments, Some(5), None, &mut approve)
             .await;
         assert_eq!(result["lint"]["status"], "error");
         // The workspace stays the limit: a path that climbs out is still refused.
         let arguments = json!({"path": "../escape.txt", "content": "x"}).to_string();
         let result = workspace
-            .edit(WRITE_FILE, &arguments, Some(5), &mut approve)
+            .edit(WRITE_FILE, &arguments, Some(5), None, &mut approve)
             .await;
         assert!(result["error"].is_string(), "{result}");
         assert!(!directory
@@ -1234,6 +1224,7 @@ mod limit_tests {
                 WRITE_FILE,
                 &json!({"path": spill_file.display().to_string(), "content": "hijack"}).to_string(),
                 Some(5),
+                None,
                 &mut approve,
             )
             .await;
@@ -1304,6 +1295,7 @@ mod limit_tests {
                 WRITE_FILE,
                 &json!({"path": "sample.db", "content": "corrupt"}).to_string(),
                 Some(5),
+                None,
                 &mut approve,
             )
             .await;
@@ -1320,6 +1312,7 @@ mod limit_tests {
                 WRITE_FILE,
                 &json!({"path": "sample.db-wal", "content": "corrupt"}).to_string(),
                 Some(5),
+                None,
                 &mut approve,
             )
             .await;
@@ -1344,5 +1337,42 @@ mod limit_tests {
                 .contains("document extraction failed"),
             "{err_magic}"
         );
+    }
+
+    #[tokio::test]
+    async fn request_approval_honors_per_turn_policy_and_prompts_cross_platform() {
+        use crate::approval_policy::{ApprovalPolicy, ApprovalSettings};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let req = || ApprovalRequest {
+            target: "/workspace".into(),
+            content: "print(1)".into(),
+            action: ApprovalAction::RunCode,
+            timeout_secs: 5,
+        };
+
+        let yolo = ApprovalPolicy::new(ApprovalSettings {
+            approve_all: true,
+            ..ApprovalSettings::default()
+        });
+        let strict = ApprovalPolicy::new(ApprovalSettings::default());
+
+        let prompts = Arc::new(AtomicUsize::new(0));
+        let p_clone = Arc::clone(&prompts);
+        let mut ask = move |_request: ApprovalRequest| {
+            p_clone.fetch_add(1, Ordering::SeqCst);
+            async { ApprovalDecision::Denied }
+        };
+
+        // Turn 1 with yolo auto-approves without prompting.
+        let d1 = request_approval(req(), Some(&yolo), &mut ask).await;
+        assert_eq!(d1, ApprovalDecision::Approved);
+        assert_eq!(prompts.load(Ordering::SeqCst), 0);
+
+        // Turn 2 with strict policy in the same process restores prompting.
+        let d2 = request_approval(req(), Some(&strict), &mut ask).await;
+        assert_eq!(d2, ApprovalDecision::Denied);
+        assert_eq!(prompts.load(Ordering::SeqCst), 1);
     }
 }

@@ -1774,6 +1774,7 @@ pub(crate) async fn call<A, F>(
     skills: &Skills<'_>,
     arguments: &str,
     approval_timeout: Option<u32>,
+    policy: Option<&crate::approval_policy::ApprovalPolicy>,
     approve: &mut A,
 ) -> Value
 where
@@ -1804,6 +1805,7 @@ where
             action: ApprovalAction::ManageSkills,
             timeout_secs: timeout,
         },
+        policy,
         approve,
     )
     .await;
@@ -1913,6 +1915,7 @@ mod tests {
                     &skills,
                     &step["arguments"].to_string(),
                     Some(5),
+                    None,
                     &mut approve,
                 )
                 .await;
@@ -1967,6 +1970,7 @@ mod tests {
             })
             .to_string(),
             Some(5),
+            None,
             &mut approve,
         )
         .await;
@@ -1993,6 +1997,7 @@ mod tests {
             })
             .to_string(),
             Some(5),
+            None,
             &mut approve,
         )
         .await;
@@ -2023,6 +2028,7 @@ mod tests {
             })
             .to_string(),
             Some(5),
+            None,
             &mut approve,
         )
         .await;

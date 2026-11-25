@@ -331,6 +331,7 @@ fn track_directory(session: &str, path: Option<PathBuf>) {
 }
 pub(crate) const SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos"));
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute<A, F>(
     workspace: &FileWorkspace<'_>,
     arguments: &str,
@@ -338,6 +339,7 @@ pub(crate) async fn execute<A, F>(
     background: Option<&str>,
     settings: &TerminalSettings,
     session: &str,
+    policy: Option<&crate::approval_policy::ApprovalPolicy>,
     approve: &mut A,
 ) -> Value
 where
@@ -356,6 +358,7 @@ where
             background,
             settings,
             session,
+            policy,
             approve,
         )
         .await
@@ -370,6 +373,7 @@ where
             background,
             settings,
             session,
+            policy,
             approve,
         );
         approval_error(ApprovalDecision::Unavailable)
@@ -446,6 +450,7 @@ mod shell {
     }
 
     /// `background` is the owner of processes started here, when `process_manage` is available.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn execute<A, F>(
         workspace: &FileWorkspace<'_>,
         arguments: &str,
@@ -453,6 +458,7 @@ mod shell {
         background: Option<&str>,
         settings: &TerminalSettings,
         session: &str,
+        policy: Option<&crate::approval_policy::ApprovalPolicy>,
         approve: &mut A,
     ) -> Result<Value, String>
     where
@@ -521,6 +527,7 @@ mod shell {
                 action: ApprovalAction::RunCommand,
                 timeout_secs: approval_timeout,
             },
+            policy,
             approve,
         )
         .await;
@@ -1100,6 +1107,7 @@ mod tests {
             // One conversation per test directory, so tests running together do not share a
             // remembered working directory.
             &format!("terminal-test-{}", root.display()),
+            None,
             &mut approve,
         )
         .await
@@ -1365,6 +1373,7 @@ mod tests {
             background,
             settings,
             session,
+            None,
             &mut approve,
         )
         .await
