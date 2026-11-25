@@ -272,7 +272,7 @@ async fn handle_v1(mut stream: OwnerStream, home: &Path, request: ChatRequest) -
                 Event::Exit(_) => 64,
             };
             if queued
-                .fetch_update(Relaxed, Relaxed, |total| {
+                .try_update(Relaxed, Relaxed, |total| {
                     total
                         .checked_add(bytes)
                         .filter(|total| *total <= MAX_OUTPUT_BUFFER)

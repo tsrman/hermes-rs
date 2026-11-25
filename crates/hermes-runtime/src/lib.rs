@@ -17,10 +17,8 @@ pub mod cronjob_tool;
 pub mod delegation;
 mod difflib;
 mod doc_extract;
-#[cfg(unix)]
-pub mod execute_code;
-#[cfg(not(unix))]
-#[path = "execute_code_stub.rs"]
+mod embedded_python;
+mod excel_tools;
 pub mod execute_code;
 mod file_tools;
 mod fuzzy;

@@ -51,6 +51,7 @@ pub(crate) const READ_FILE: &str = "read_file";
 pub(crate) struct ToolEnv {
     pub write_files: bool,
     pub terminal: bool,
+    pub code_execution: bool,
     /// Nobody can approve a run of code (`execute_code` asks every time), so it is not offered.
     pub no_code_approval: bool,
     /// The most subagents one call may start, when this turn may delegate.
@@ -76,6 +77,7 @@ impl ToolEnv {
         Self {
             write_files: options.can_write_files(),
             terminal: options.can_run_terminal(),
+            code_execution: options.can_execute_code(),
             no_code_approval: options.approval_timeout_secs.is_none(),
             delegation: options
                 .delegation
@@ -502,7 +504,7 @@ static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: EXECUTE_CODE,
         offered: |env| {
-            (env.terminal && !env.no_code_approval)
+            ((env.terminal || env.code_execution) && !env.no_code_approval)
                 .then(|| execute_code::schema(&execute_code::sandbox_tools(env)))
         },
         call: execute_code::call,
@@ -716,6 +718,7 @@ mod tests {
         let env = ToolEnv {
             write_files: true,
             terminal: true,
+            code_execution: true,
             no_code_approval: false,
             delegation: Some(10),
             has_profile: true,

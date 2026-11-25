@@ -277,7 +277,7 @@ fn aes128_cbc_encrypt(key: &[u8; 16], iv: &[u8; 16], plaintext: &[u8]) -> Vec<u8
 
     let mut out = Vec::with_capacity(padded.len());
     let mut prev = *iv;
-    for chunk in padded.chunks_exact(16) {
+    for chunk in padded.as_chunks::<16>().0 {
         let mut block = [0u8; 16];
         for i in 0..16 {
             block[i] = chunk[i] ^ prev[i];
@@ -296,8 +296,7 @@ fn aes128_cbc_decrypt(key: &[u8; 16], iv: &[u8; 16], ciphertext: &[u8]) -> Resul
     let rk = aes128_expand_key(key);
     let mut out = Vec::with_capacity(ciphertext.len());
     let mut prev = *iv;
-    for chunk in ciphertext.chunks_exact(16) {
-        let block: [u8; 16] = chunk.try_into().expect("16-byte chunk");
+    for &block in ciphertext.as_chunks::<16>().0 {
         let mut dec = aes128_decrypt_block(&rk, &block);
         for i in 0..16 {
             dec[i] ^= prev[i];

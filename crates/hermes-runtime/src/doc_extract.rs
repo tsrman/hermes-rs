@@ -1666,8 +1666,10 @@ fn find_subslice(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 fn decode_pdf_bytes_text(raw: &[u8]) -> String {
     if raw.len() >= 2 && raw[0] == 0xfe && raw[1] == 0xff {
         let utf16: Vec<u16> = raw[2..]
-            .chunks_exact(2)
-            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| u16::from_be_bytes(c))
             .collect();
         return String::from_utf16_lossy(&utf16);
     }
@@ -1718,7 +1720,8 @@ fn parse_pdf_literal_string(data: &[u8], start_paren: usize) -> Option<(String, 
                     b'0'..=b'7' => {
                         let mut val = u32::from(esc - b'0');
                         for _ in 0..2 {
-                            if let Some(&d) = data.get(idx).filter(|b| (b'0'..=b'7').contains(b)) {
+                            if let Some(&d) = data.get(idx).filter(|&&b| (b'0'..=b'7').contains(&b))
+                            {
                                 val = val * 8 + u32::from(d - b'0');
                                 idx += 1;
                             } else {
@@ -1747,8 +1750,10 @@ fn parse_pdf_hex_string(data: &[u8], start_lt: usize) -> Option<(String, usize)>
                 nibbles.push(0);
             }
             let raw: Vec<u8> = nibbles
-                .chunks_exact(2)
-                .map(|c| (c[0] << 4) | c[1])
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&c| (c[0] << 4) | c[1])
                 .collect();
             return Some((decode_pdf_bytes_text(&raw), idx));
         }

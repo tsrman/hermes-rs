@@ -769,11 +769,19 @@ impl TurnOptions<'_> {
     }
 
     pub(crate) fn can_write_files(&self) -> bool {
-        self.approval_timeout_secs.is_some() && cfg!(any(target_os = "linux", target_os = "macos"))
+        self.approval_timeout_secs.is_some()
     }
 
     pub(crate) fn can_run_terminal(&self) -> bool {
         self.terminal_approval_timeout_secs.is_some() && self.terminal_local && terminal::SUPPORTED
+    }
+
+    pub(crate) fn can_execute_code(&self) -> bool {
+        if cfg!(unix) {
+            self.can_run_terminal() && self.approval_timeout_secs.is_some()
+        } else {
+            self.approval_timeout_secs.is_some()
+        }
     }
 }
 

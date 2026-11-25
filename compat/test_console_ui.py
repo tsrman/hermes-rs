@@ -238,7 +238,7 @@ class ConsoleUiTest(unittest.TestCase):
         self.assertIn("✓".encode(), out)
         self.assertIn(b"read_file", out)
         self.assertIn(b"Summary", out)
-        self.assertIn("╭─ ".encode(), out)
+        self.assertIn("┌─ ".encode(), out)
         self.assertIn(b"rust", out)
 
     @unittest.skipUnless(sys.platform == "linux", "requires Linux PTY")

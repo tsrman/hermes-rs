@@ -1,29 +1,43 @@
 //! `execute_code`: Python that calls tools programmatically, in a kernel that keeps its state.
 //!
-//! One `python3` process lives per conversation. Code arrives over a socket pair (the kernel's
-//! file descriptor 3) as one cell at a time and runs in persistent globals; the `hermes_tools`
-//! module it imports sends each tool call back over the same socket, and this side runs it through
-//! the ordinary tool table, so approvals, the deny list, redaction and read-before-write apply to
-//! every inner call. A cell that times out, or ends the interpreter, loses the kernel and its state.
+//! Two backends share the exact same cell protocol, persistent session globals, approvals,
+//! redaction, output limits, and `hermes_tools` API:
+//! - On Unix when a system `python3` (or `VIRTUAL_ENV` / `CONDA_PREFIX`) is available: one
+//!   `python3` subprocess lives per conversation over a socket pair (fd 3).
+//! - On Windows, on Unix hosts without `python3`, or when `HERMES_PYTHON_ENGINE=embedded`: an
+//!   in-process embedded **RustPython** interpreter with frozen stdlib runs on a dedicated session
+//!   thread with zero external dependencies.
 //!
-//! This is a security envelope, not an isolation jail: the script is ordinary Python running as
-//! the user, in the conversation's working directory, with the same environment commands get
-//! (never the model credentials). Its own `subprocess` or `os.system` calls do not pass through
-//! the `terminal` rules, which is why every cell needs approval of its code.
+//! Both backends also expose native pure-Rust Excel helpers (`xlsx_read`, `xlsx_write`) via
+//! `from hermes_tools import xlsx_read, xlsx_write`.
 
-use std::collections::{HashMap, HashSet};
-use std::os::fd::{AsRawFd, OwnedFd};
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::sync::{Arc, LazyLock, Mutex as StdMutex};
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use std::collections::HashSet;
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, OwnedFd};
+#[cfg(unix)]
+use std::path::PathBuf;
+#[cfg(unix)]
+use std::process::Stdio;
+#[cfg(unix)]
+use std::sync::{Arc, Mutex as StdMutex};
+
 use serde_json::{json, Map, Value};
+#[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+#[cfg(unix)]
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+#[cfg(unix)]
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+use crate::embedded_python::{EmbeddedEvent, EmbeddedKernel};
+use crate::excel_tools;
 use crate::file_tools::{
     approval_error, request_approval, ApprovalAction, ApprovalDecision, ApprovalRequest,
 };
@@ -35,6 +49,7 @@ pub(crate) const EXECUTE_CODE: &str = "execute_code";
 const MAX_STDOUT_BYTES: usize = 50_000;
 const MAX_STDERR_BYTES: usize = 10_000;
 /// What a cell may capture in memory before further output is dropped.
+#[cfg(unix)]
 const CAPTURE_LIMIT: usize = 5_000_000;
 pub(crate) const DEFAULT_TIMEOUT: u64 = 300;
 pub(crate) const DEFAULT_MAX_TOOL_CALLS: usize = 50;
@@ -89,15 +104,20 @@ pub(crate) fn schema(tools: &[&str]) -> Value {
                 text = text.replacen(&format!("{line}\n"), "", 1);
             }
         }
+        #[cfg(not(unix))]
+        text.push_str(
+            "\n\nBuilt-in RustPython + Excel helpers (no system Python required): `from hermes_tools import xlsx_read, xlsx_write`. xlsx_read(path, sheet=None, max_rows=5000) reads .xlsx/.xls/.xlsb/.ods sheets into lists of rows; xlsx_write(path, sheets) writes .xlsx workbooks (with formulas like '=SUM(B2:B10)', bold headers, and autofit).",
+        );
         function["description"] = Value::String(text);
     }
     json!({"type": "function", "function": function})
 }
 
-/// The Python the kernel runs: the cell loop, and the `hermes_tools` module with the helpers and
-/// one function per tool the script may call.
+/// The Python the Unix subprocess kernel runs: the cell loop, and the `hermes_tools` module with
+/// helpers and one function per tool the script may call.
+#[cfg(unix)]
 fn kernel_source(tools: &[&str]) -> String {
-    const STUBS: [(&str, &str); 7] = [
+    const STUBS: [(&str, &str); 9] = [
         ("web_search", "def web_search(query, limit=5):\n    return _call('web_search', {'query': query, 'limit': limit})\n"),
         ("web_extract", "def web_extract(urls, char_limit=None):\n    return _call('web_extract', {'urls': urls, 'char_limit': char_limit})\n"),
         ("read_file", "def read_file(path, offset=1, limit=2000):\n    return _call('read_file', {'path': path, 'offset': offset, 'limit': limit})\n"),
@@ -105,21 +125,30 @@ fn kernel_source(tools: &[&str]) -> String {
         ("search_files", "def search_files(pattern, target='content', path='.', file_glob=None, limit=50, offset=0, output_mode='content', context=0, order='discovery'):\n    return _call('search_files', {'pattern': pattern, 'target': target, 'path': path, 'file_glob': file_glob, 'limit': limit, 'offset': offset, 'output_mode': output_mode, 'context': context, 'order': order})\n"),
         ("patch", "def patch(path=None, old_string=None, new_string=None, replace_all=False, mode='replace'):\n    return _call('patch', {'path': path, 'old_string': old_string, 'new_string': new_string, 'replace_all': replace_all, 'mode': mode})\n"),
         ("terminal", "def terminal(command, timeout=None, workdir=None):\n    return _call('terminal', {'command': command, 'timeout': timeout, 'workdir': workdir})\n"),
+        ("xlsx_read", "def xlsx_read(path, sheet=None, max_rows=5000):\n    return _call('xlsx_read', {'path': path, 'sheet': sheet, 'max_rows': max_rows})\n"),
+        ("xlsx_write", "def xlsx_write(path, sheets):\n    return _call('xlsx_write', {'path': path, 'sheets': sheets})\n"),
     ];
     let stubs: String = STUBS
         .iter()
-        .filter(|(name, _)| tools.contains(name))
+        .filter(|(name, _)| *name == "xlsx_read" || *name == "xlsx_write" || tools.contains(name))
         .map(|(_, source)| *source)
         .collect();
-    let exports = ["json_parse", "shell_quote", "retry"]
-        .iter()
-        .chain(tools.iter())
-        .map(|name| format!("{name:?}"))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let exports = [
+        "json_parse",
+        "shell_quote",
+        "retry",
+        "xlsx_read",
+        "xlsx_write",
+    ]
+    .iter()
+    .chain(tools.iter())
+    .map(|name| format!("{name:?}"))
+    .collect::<Vec<_>>()
+    .join(", ");
     format!("{KERNEL_HEAD}\n{stubs}\n_EXPORTS = [{exports}]\n{KERNEL_TAIL}")
 }
 
+#[cfg(unix)]
 const KERNEL_HEAD: &str = r#"
 import contextlib, io, json, os, shlex, socket, sys, time, traceback, types
 
@@ -173,6 +202,7 @@ def retry(fn, max_attempts=3, delay=2):
 
 "#;
 
+#[cfg(unix)]
 const KERNEL_TAIL: &str = r#"
 _module = types.ModuleType("hermes_tools")
 for _name in _EXPORTS:
@@ -207,7 +237,8 @@ for _line in _reader:
            "stderr": _err.getvalue(), "traceback": _trace})
 "#;
 
-struct Kernel {
+#[cfg(unix)]
+struct UnixKernel {
     child: Child,
     pgid: i32,
     reader: BufReader<OwnedReadHalf>,
@@ -218,10 +249,65 @@ struct Kernel {
     cells: u64,
 }
 
-static KERNELS: LazyLock<Mutex<HashMap<String, Kernel>>> =
+enum SessionKernel {
+    #[cfg(unix)]
+    Unix(Box<UnixKernel>),
+    Embedded(EmbeddedKernel),
+}
+
+impl SessionKernel {
+    fn tools(&self) -> &[&'static str] {
+        match self {
+            #[cfg(unix)]
+            Self::Unix(k) => &k.tools,
+            Self::Embedded(k) => &k.tools,
+        }
+    }
+
+    fn increment_cells(&mut self) -> u64 {
+        match self {
+            #[cfg(unix)]
+            Self::Unix(k) => {
+                k.cells += 1;
+                k.cells
+            }
+            Self::Embedded(k) => {
+                k.cells += 1;
+                k.cells
+            }
+        }
+    }
+
+    fn clear_raw(&self) {
+        #[cfg(unix)]
+        if let Self::Unix(k) = self {
+            if let Ok(mut raw) = k.raw.lock() {
+                raw.clear();
+            }
+        }
+    }
+
+    async fn take_raw_text(&self) -> String {
+        #[cfg(unix)]
+        if let Self::Unix(k) = self {
+            // Let the reader catch up with what the processes wrote last.
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            return k
+                .raw
+                .lock()
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_default();
+        }
+        String::new()
+    }
+}
+
+static KERNELS: LazyLock<Mutex<HashMap<String, SessionKernel>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+#[cfg(unix)]
 static GROUPS: LazyLock<StdMutex<HashSet<i32>>> = LazyLock::new(|| StdMutex::new(HashSet::new()));
 
+#[cfg(unix)]
 fn kill_group(pgid: i32) {
     if let Some(pid) = rustix::process::Pid::from_raw(pgid) {
         let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
@@ -230,6 +316,7 @@ fn kill_group(pgid: i32) {
 
 /// Stop every kernel this process started. Called when the process exits.
 pub fn kill_all_kernels() {
+    #[cfg(unix)]
     if let Ok(groups) = GROUPS.lock() {
         for pgid in groups.iter() {
             kill_group(*pgid);
@@ -244,16 +331,31 @@ pub(crate) async fn end_session(session: &str) {
     }
 }
 
-fn discard(mut kernel: Kernel) {
-    kill_group(kernel.pgid);
-    if let Ok(mut groups) = GROUPS.lock() {
-        groups.remove(&kernel.pgid);
+fn discard(kernel: SessionKernel) {
+    match kernel {
+        #[cfg(unix)]
+        SessionKernel::Unix(mut k) => {
+            kill_group(k.pgid);
+            if let Ok(mut groups) = GROUPS.lock() {
+                groups.remove(&k.pgid);
+            }
+            let _ = k.child.start_kill();
+        }
+        SessionKernel::Embedded(k) => {
+            k.shutdown();
+        }
     }
-    let _ = kernel.child.start_kill();
 }
 
 /// The interpreter: the active virtual environment's, else `python3` on the command PATH.
+#[cfg(unix)]
 fn interpreter(env: &[(String, String)]) -> Option<PathBuf> {
+    if std::env::var("HERMES_PYTHON_ENGINE")
+        .ok()
+        .is_some_and(|v| v.eq_ignore_ascii_case("embedded") || v.eq_ignore_ascii_case("rustpython"))
+    {
+        return None;
+    }
     let var = |name: &str| {
         env.iter()
             .find(|(key, _)| key == name)
@@ -273,12 +375,13 @@ fn interpreter(env: &[(String, String)]) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-async fn spawn(
+#[cfg(unix)]
+async fn spawn_unix(
     python: &Path,
     tools: &[&'static str],
     directory: &Path,
     env: Vec<(String, String)>,
-) -> Result<Kernel, String> {
+) -> Result<UnixKernel, String> {
     let error = |e: std::io::Error| e.to_string();
     let (host, child_end) = std::os::unix::net::UnixStream::pair().map_err(error)?;
     let (reader, writer) = std::io::pipe().map_err(error)?;
@@ -345,7 +448,7 @@ async fn spawn(
             }
         }
     });
-    Ok(Kernel {
+    Ok(UnixKernel {
         child,
         pgid,
         reader: BufReader::new(read_half),
@@ -362,9 +465,81 @@ enum Cell {
     Died,
 }
 
-/// Run one cell: feed it to the kernel and serve its tool calls until it reports back.
-async fn run_cell(
-    kernel: &mut Kernel,
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_sandbox_tool(
+    name: &str,
+    raw_args: &Value,
+    allowed_tools: &[&'static str],
+    workspace_root: &Path,
+    cx: &mut ToolContext<'_, '_>,
+    deadline: Instant,
+    max_calls: usize,
+    calls: &mut usize,
+) -> Result<Value, ()> {
+    if *calls >= max_calls {
+        return Ok(
+            json!({"error": format!("Tool call limit reached ({max_calls}). No more tool calls allowed in this execution.")}),
+        );
+    }
+
+    // Native pure-Rust Excel helpers available in every execute_code session.
+    if name == "xlsx_read" {
+        *calls += 1;
+        return Ok(excel_tools::xlsx_read(workspace_root, raw_args));
+    }
+    if name == "xlsx_write" {
+        *calls += 1;
+        if !cx.options.can_write_files() {
+            return Ok(approval_error(ApprovalDecision::Unavailable));
+        }
+        return Ok(excel_tools::xlsx_write(workspace_root, raw_args));
+    }
+
+    if !allowed_tools.contains(&name) {
+        let mut names = allowed_tools.to_vec();
+        names.extend(["xlsx_read", "xlsx_write"]);
+        names.sort_unstable();
+        return Ok(json!({"error": format!(
+            "Tool '{name}' is not available in execute_code. Available: {}",
+            names.join(", ")
+        )}));
+    }
+
+    // Parameters the sandbox does not take, and unset ones, are dropped.
+    let mut args = match raw_args {
+        Value::Object(map) => map.clone(),
+        _ => Map::new(),
+    };
+    args.retain(|_, value| !value.is_null());
+    if name == "terminal" {
+        for blocked in [
+            "background",
+            "pty",
+            "notify",
+            "notify_on_complete",
+            "watch_patterns",
+            "heartbeat",
+            "persist_on_release",
+        ] {
+            args.remove(blocked);
+        }
+    }
+    let text = Value::Object(args).to_string();
+    let outcome = match crate::tools::find(name, cx.options.tools) {
+        Some(tool) => tokio::time::timeout_at(deadline.into(), tool.call(cx, &text)).await,
+        None => Ok(json!({"error": format!("Unknown tool: {name}")})),
+    };
+    *calls += 1;
+    match outcome {
+        Ok(value) => Ok(value),
+        Err(_) => Err(()),
+    }
+}
+
+/// Run one cell on a Unix subprocess kernel.
+#[cfg(unix)]
+async fn run_unix_cell(
+    kernel: &mut UnixKernel,
     code: &str,
     directory: &Path,
     cx: &mut ToolContext<'_, '_>,
@@ -397,45 +572,20 @@ async fn run_cell(
             Some("done") => return Cell::Done(message),
             Some("call") => {
                 let name = message["tool"].as_str().unwrap_or("").to_owned();
-                let value = if !kernel.tools.contains(&name.as_str()) {
-                    json!({"error": format!(
-                        "Tool '{name}' is not available in execute_code. Available: {}",
-                        { let mut names = kernel.tools.clone(); names.sort_unstable(); names.join(", ") }
-                    )})
-                } else if *calls >= max_calls {
-                    json!({"error": format!("Tool call limit reached ({max_calls}). No more tool calls allowed in this execution.")})
-                } else {
-                    // Parameters the sandbox does not take, and unset ones, are dropped.
-                    let mut args = match &message["args"] {
-                        Value::Object(map) => map.clone(),
-                        _ => Map::new(),
-                    };
-                    args.retain(|_, value| !value.is_null());
-                    if name == "terminal" {
-                        for blocked in [
-                            "background",
-                            "pty",
-                            "notify",
-                            "notify_on_complete",
-                            "watch_patterns",
-                            "heartbeat",
-                            "persist_on_release",
-                        ] {
-                            args.remove(blocked);
-                        }
-                    }
-                    let text = Value::Object(args).to_string();
-                    let outcome = match crate::tools::find(&name, cx.options.tools) {
-                        Some(tool) => {
-                            tokio::time::timeout_at(deadline.into(), tool.call(cx, &text)).await
-                        }
-                        None => Ok(json!({"error": format!("Unknown tool: {name}")})),
-                    };
-                    *calls += 1;
-                    match outcome {
-                        Ok(value) => value,
-                        Err(_) => return Cell::TimedOut,
-                    }
+                let value = match dispatch_sandbox_tool(
+                    &name,
+                    &message["args"],
+                    &kernel.tools,
+                    directory,
+                    cx,
+                    deadline,
+                    max_calls,
+                    calls,
+                )
+                .await
+                {
+                    Ok(v) => v,
+                    Err(()) => return Cell::TimedOut,
                 };
                 let reply = json!({"value": value});
                 if kernel
@@ -448,6 +598,42 @@ async fn run_cell(
                 }
             }
             _ => return Cell::Died,
+        }
+    }
+}
+
+/// Run one cell on the embedded RustPython kernel.
+async fn run_embedded_cell(
+    kernel: &mut EmbeddedKernel,
+    code: &str,
+    directory: &Path,
+    cx: &mut ToolContext<'_, '_>,
+    deadline: Instant,
+    max_calls: usize,
+    calls: &mut usize,
+) -> Cell {
+    if !kernel.start_cell(code, directory) {
+        return Cell::Died;
+    }
+    let allowed = kernel.tools.clone();
+    loop {
+        match kernel.next_event(deadline).await {
+            EmbeddedEvent::Done(payload) => return Cell::Done(payload),
+            EmbeddedEvent::TimedOut => return Cell::TimedOut,
+            EmbeddedEvent::Died => return Cell::Died,
+            EmbeddedEvent::ToolCall { tool, args } => {
+                let value = match dispatch_sandbox_tool(
+                    &tool, &args, &allowed, directory, cx, deadline, max_calls, calls,
+                )
+                .await
+                {
+                    Ok(v) => v,
+                    Err(()) => return Cell::TimedOut,
+                };
+                if !kernel.send_tool_reply(value) {
+                    return Cell::Died;
+                }
+            }
         }
     }
 }
@@ -533,7 +719,7 @@ pub(crate) fn call<'a>(
         let Some(approval_timeout) = cx
             .options
             .approval_timeout_secs
-            .filter(|_| cx.options.can_run_terminal())
+            .filter(|_| cx.options.can_execute_code())
         else {
             return approval_error(ApprovalDecision::Unavailable);
         };
@@ -561,16 +747,12 @@ pub(crate) fn call<'a>(
             return approval_error(decision);
         }
         let tools = sandbox_tools(&ToolEnv::from_options(cx.options));
-        let env = settings.environment();
-        let Some(python) = interpreter(&env) else {
-            return json!({"status": "error", "error": "No python3 was found on PATH (or in the active VIRTUAL_ENV / CONDA_PREFIX).", "tool_calls_made": 0, "duration_seconds": 0});
-        };
         let started = Instant::now();
         let mut state_reset = args.reset;
         let existing = {
             let mut kernels = KERNELS.lock().await;
             match kernels.remove(&session) {
-                Some(kernel) if args.reset || kernel.tools != tools => {
+                Some(kernel) if args.reset || kernel.tools() != tools.as_slice() => {
                     state_reset = true;
                     discard(kernel);
                     None
@@ -581,40 +763,72 @@ pub(crate) fn call<'a>(
         let reused = existing.is_some();
         let mut kernel = match existing {
             Some(kernel) => kernel,
-            None => match spawn(&python, &tools, &directory, env).await {
-                Ok(kernel) => kernel,
-                Err(message) => {
-                    return json!({"status": "error", "error": format!("The kernel could not start: {message}"), "tool_calls_made": 0, "duration_seconds": 0});
+            None => {
+                let env = settings.environment();
+                #[cfg(unix)]
+                {
+                    if let Some(python) = interpreter(&env) {
+                        match spawn_unix(&python, &tools, &directory, env).await {
+                            Ok(k) => SessionKernel::Unix(Box::new(k)),
+                            Err(message) => {
+                                return json!({"status": "error", "error": format!("The kernel could not start: {message}"), "tool_calls_made": 0, "duration_seconds": 0});
+                            }
+                        }
+                    } else {
+                        match EmbeddedKernel::spawn(&tools, env) {
+                            Ok(k) => SessionKernel::Embedded(k),
+                            Err(message) => {
+                                return json!({"status": "error", "error": format!("The embedded Python kernel could not start: {message}"), "tool_calls_made": 0, "duration_seconds": 0});
+                            }
+                        }
+                    }
                 }
-            },
+                #[cfg(not(unix))]
+                {
+                    match EmbeddedKernel::spawn(&tools, env) {
+                        Ok(k) => SessionKernel::Embedded(k),
+                        Err(message) => {
+                            return json!({"status": "error", "error": format!("The embedded Python kernel could not start: {message}"), "tool_calls_made": 0, "duration_seconds": 0});
+                        }
+                    }
+                }
+            }
         };
-        if let Ok(mut raw) = kernel.raw.lock() {
-            raw.clear();
-        }
+        kernel.clear_raw();
         let timeout = Duration::from_secs(settings.code_timeout.unwrap_or(DEFAULT_TIMEOUT));
         let max_calls = settings
             .code_max_tool_calls
             .unwrap_or(DEFAULT_MAX_TOOL_CALLS);
         let mut calls = 0usize;
-        let outcome = run_cell(
-            &mut kernel,
-            &code,
-            &directory,
-            cx,
-            started + timeout,
-            max_calls,
-            &mut calls,
-        )
-        .await;
-        // Let the reader catch up with what the processes wrote last.
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        let raw_text = kernel
-            .raw
-            .lock()
-            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-            .unwrap_or_default();
-        kernel.cells += 1;
-        let cells = kernel.cells;
+        let outcome = match &mut kernel {
+            #[cfg(unix)]
+            SessionKernel::Unix(k) => {
+                run_unix_cell(
+                    k,
+                    &code,
+                    &directory,
+                    cx,
+                    started + timeout,
+                    max_calls,
+                    &mut calls,
+                )
+                .await
+            }
+            SessionKernel::Embedded(k) => {
+                run_embedded_cell(
+                    k,
+                    &code,
+                    &directory,
+                    cx,
+                    started + timeout,
+                    max_calls,
+                    &mut calls,
+                )
+                .await
+            }
+        };
+        let raw_text = kernel.take_raw_text().await;
+        let cells = kernel.increment_cells();
         let duration = (started.elapsed().as_secs_f64() * 100.0).round() / 100.0;
         let mut result = Map::new();
         let info = |ended: bool| {
