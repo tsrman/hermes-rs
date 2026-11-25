@@ -403,10 +403,10 @@ pub fn format_banner(
         );
     }
     format!(
-        "{FG_GRAY}╭─ {BOLD}{FG_BRIGHT_CYAN}Hermes{RESET}{FG_GRAY} ─────────────────────────────────────────────╮{RESET}\n\
+        "{FG_GRAY}┌─ {BOLD}{FG_BRIGHT_CYAN}Hermes{RESET}{FG_GRAY} ─────────────────────────────────────────────┐{RESET}\n\
          {FG_GRAY}│{RESET} {BOLD}{model}{RESET} {DIM}({provider}){RESET}  {FG_GRAY}·{RESET}  profile {FG_CYAN}{profile}{RESET}  {FG_GRAY}·{RESET}  {DIM}{sess}{RESET}{FG_YELLOW}{yolo_tag}{RESET}\n\
          {FG_GRAY}│{RESET} {DIM}/help commands · /ui tui fullscreen · Ctrl-C stop · Ctrl-D exit{RESET}\n\
-         {FG_GRAY}╰───────────────────────────────────────────────────────╯{RESET}"
+         {FG_GRAY}└───────────────────────────────────────────────────────┘{RESET}"
     )
 }
 
@@ -752,6 +752,20 @@ pub async fn run(
                 |event| {
                     match event {
                         Event::Stdout(chunk) => {
+                            if styled && !has_printed_text {
+                                let trimmed = chunk.trim_start_matches(['\r', '\n']);
+                                if trimmed.is_empty() {
+                                    return output_open;
+                                }
+                                sp_for_events.pause_and_clear();
+                                has_printed_text = true;
+                                assistant_buf.push_str(trimmed);
+                                let rendered = md.push(trimmed);
+                                if !rendered.is_empty() {
+                                    output_open = write_stdout(&rendered).is_ok();
+                                }
+                                return output_open;
+                            }
                             sp_for_events.pause_and_clear();
                             if chunk == "\n" && has_printed_text {
                                 let tail = md.finish();

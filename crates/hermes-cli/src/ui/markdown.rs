@@ -147,7 +147,7 @@ impl StreamMarkdown {
             if self.in_code_fence {
                 self.in_code_fence = false;
                 self.code_lang.clear();
-                return format!("{FG_GRAY}╰────────────────────────────────────────{RESET}");
+                return format!("{FG_GRAY}└────────────────────────────────────────{RESET}");
             } else {
                 self.in_code_fence = true;
                 self.code_lang = rest.trim().to_ascii_lowercase();
@@ -157,7 +157,7 @@ impl StreamMarkdown {
                     self.code_lang.clone()
                 };
                 return format!(
-                    "{FG_GRAY}╭─ {FG_CYAN}{label}{FG_GRAY} ─────────────────────────────{RESET}"
+                    "{FG_GRAY}┌─ {FG_CYAN}{label}{FG_GRAY} ─────────────────────────────{RESET}"
                 );
             }
         }
@@ -389,7 +389,7 @@ pub fn render_markdown_lines(text: &str, color: bool) -> Vec<Line<'static>> {
                 in_code = false;
                 lang.clear();
                 out.push(Line::from(Span::styled(
-                    "╰────────────────────────────────────────",
+                    "└────────────────────────────────────────",
                     Style::default().fg(Color::DarkGray),
                 )));
             } else {
@@ -401,7 +401,7 @@ pub fn render_markdown_lines(text: &str, color: bool) -> Vec<Line<'static>> {
                     lang.clone()
                 };
                 out.push(Line::from(vec![
-                    Span::styled("╭─ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("┌─ ", Style::default().fg(Color::DarkGray)),
                     Span::styled(
                         label,
                         Style::default()
@@ -954,12 +954,12 @@ mod tests {
         assert!(!out.contains("# Title"));
         assert!(out.contains(BOLD));
         assert!(out.contains("cargo test"));
-        assert!(out.contains("╭─ "));
+        assert!(out.contains("┌─ "));
         assert!(out.contains("rust"));
         assert!(out.contains(&format!("{BOLD}{FG_MAGENTA}fn{RESET}")));
         assert!(out.contains(&format!("{FG_YELLOW}42{RESET}")));
         assert!(out.contains(&format!("{FG_GRAY}{ITALIC}// hi{RESET}")));
-        assert!(out.contains("╰──"));
+        assert!(out.contains("└──"));
     }
 
     #[test]
