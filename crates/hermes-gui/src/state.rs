@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::editor::TextBuffer;
+use crate::workspace::AttachedFile;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolCardState {
@@ -166,6 +167,11 @@ pub struct CompletionItem {
 
 const GUI_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/help", "show commands & @ / ! shortcuts"),
+    (
+        "/cd",
+        "switch project working directory (or open folder picker)",
+    ),
+    ("/attach", "attach file(s) to message / copy into workspace"),
     ("/setup", "open profile setup & provider settings"),
     ("/new", "start a new conversation"),
     ("/reset", "alias for /new"),
@@ -180,6 +186,7 @@ pub struct GuiState {
     pub active_profile: PathBuf,
     pub profiles: Vec<ProfileEntry>,
     pub sessions: Vec<SessionSummary>,
+    pub workspace_path_input: TextBuffer,
     pub search_input: TextBuffer,
     pub selected_session_id: Option<String>,
     pub selected_session_title: Option<String>,
@@ -190,6 +197,7 @@ pub struct GuiState {
     pub pending_approval: Option<PendingApproval>,
     pub pending_clarify: Option<PendingClarify>,
     pub composer_input: TextBuffer,
+    pub attachments: Vec<AttachedFile>,
     pub palette_index: usize,
     pub palette_dismissed: bool,
     pub yolo: bool,
@@ -203,6 +211,7 @@ impl GuiState {
             active_profile,
             profiles: Vec::new(),
             sessions: Vec::new(),
+            workspace_path_input: TextBuffer::new(),
             search_input: TextBuffer::new(),
             selected_session_id: None,
             selected_session_title: None,
@@ -213,11 +222,32 @@ impl GuiState {
             pending_approval: None,
             pending_clarify: None,
             composer_input: TextBuffer::new(),
+            attachments: Vec::new(),
             palette_index: 0,
             palette_dismissed: false,
             yolo: false,
             owner_connected: false,
             status_message: "Connecting to local session owner...".into(),
+        }
+    }
+
+    pub fn set_workspace_path_text(&mut self, path: &Path) {
+        self.workspace_path_input.clear();
+        self.workspace_path_input
+            .insert_str(&path.display().to_string());
+    }
+
+    pub fn add_attachment(&mut self, att: AttachedFile) -> bool {
+        if self.attachments.iter().any(|a| a.rel_path == att.rel_path) {
+            return false;
+        }
+        self.attachments.push(att);
+        true
+    }
+
+    pub fn remove_attachment(&mut self, index: usize) {
+        if index < self.attachments.len() {
+            self.attachments.remove(index);
         }
     }
 
@@ -293,7 +323,9 @@ impl GuiState {
         } else {
             self.composer_input.clear();
             let mut text = item.replacement.clone();
-            if text == "/skills" || item.detail.starts_with("[skill]") {
+            if matches!(text.as_str(), "/skills" | "/cd" | "/attach")
+                || item.detail.starts_with("[skill]")
+            {
                 text.push(' ');
             }
             self.composer_input.insert_str(&text);
@@ -308,6 +340,7 @@ impl GuiState {
         self.selected_session_id = None;
         self.selected_session_title = None;
         self.feed.clear();
+        self.attachments.clear();
         self.active_turn_id = None;
         self.last_seq = 0;
         self.streaming = false;
@@ -321,6 +354,7 @@ impl GuiState {
         self.selected_session_id = None;
         self.selected_session_title = None;
         self.feed.clear();
+        self.attachments.clear();
         self.active_turn_id = None;
         self.last_seq = 0;
         self.streaming = false;

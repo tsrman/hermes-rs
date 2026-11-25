@@ -6,14 +6,16 @@ mod markdown;
 mod owner_client;
 mod setup_state;
 mod state;
+mod workspace;
 
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, ClipboardItem, Context, FocusHandle,
-    KeyDownEvent, MouseButton, SharedString, Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, rgb, size, App, Application, Bounds, ClipboardItem, Context,
+    ExternalPaths, FocusHandle, KeyDownEvent, MouseButton, PathPromptOptions, SharedString, Window,
+    WindowBounds, WindowOptions,
 };
 use hermes_runtime::config::profile_home;
 use hermes_runtime::turn::{ApprovalAction, ApprovalDecision};
@@ -23,11 +25,16 @@ use crate::markdown::{parse_blocks, MdBlock};
 use crate::owner_client::{BackendUpdate, OwnerClient};
 use crate::setup_state::{SetupDraft, SetupField, GUI_PROVIDER_PRESETS, GUI_WEB_BACKENDS};
 use crate::state::{FeedRow, GuiState, PendingClarify, ToolCardState};
+use crate::workspace::{
+    attach_path_to_workspace, format_prompt_with_attachments, format_size, resolve_workspace_dir,
+    short_folder_label, WorkspacePrefs,
+};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum InputTarget {
     Composer,
     Search,
+    WorkspacePath,
     Clarify,
     Setup(SetupField),
 }
@@ -35,6 +42,7 @@ enum InputTarget {
 struct HermesAppView {
     state: GuiState,
     setup: SetupDraft,
+    workspace_prefs: WorkspacePrefs,
     workspace_root: PathBuf,
     client: OwnerClient,
     rx: Receiver<BackendUpdate>,
@@ -71,16 +79,20 @@ impl HermesAppView {
         })
         .detach();
 
-        let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let workspace_prefs = WorkspacePrefs::load(&home);
+        let workspace_root = workspace_prefs.resolve_initial();
         let setup = SetupDraft::load_from_profile(&home);
         let initial_target = if setup.open {
             InputTarget::Setup(SetupField::Model)
         } else {
             InputTarget::Composer
         };
+        let mut state = GuiState::new(home);
+        state.set_workspace_path_text(&workspace_root);
         Self {
-            state: GuiState::new(home),
+            state,
             setup,
+            workspace_prefs,
             workspace_root,
             client,
             rx,
@@ -227,6 +239,7 @@ impl HermesAppView {
         match self.input_target {
             InputTarget::Composer => Some(&mut self.state.composer_input),
             InputTarget::Search => Some(&mut self.state.search_input),
+            InputTarget::WorkspacePath => Some(&mut self.state.workspace_path_input),
             InputTarget::Clarify => self
                 .state
                 .pending_clarify
@@ -234,6 +247,139 @@ impl HermesAppView {
                 .and_then(PendingClarify::active_buffer_mut),
             InputTarget::Setup(field) => Some(self.setup.buffer_mut(field)),
         }
+    }
+
+    fn set_workspace_root(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
+        let canonical = dir.canonicalize().unwrap_or(dir);
+        self.workspace_root = canonical.clone();
+        self.workspace_prefs
+            .record_and_save(&self.state.active_profile, &canonical);
+        self.state.set_workspace_path_text(&canonical);
+        self.state.attachments.clear();
+        self.state.status_message = format!("Project folder: {}", canonical.display());
+        cx.notify();
+    }
+
+    fn apply_workspace_path_input(&mut self, cx: &mut Context<Self>) {
+        let raw = self.state.workspace_path_input.as_str().to_owned();
+        match resolve_workspace_dir(&raw, &self.workspace_root) {
+            Ok(dir) => {
+                self.input_target = InputTarget::Composer;
+                self.set_workspace_root(dir, cx);
+            }
+            Err(err) => {
+                self.state.feed.push(FeedRow::Notice {
+                    is_error: true,
+                    text: err.clone(),
+                });
+                self.state.status_message = err;
+                cx.notify();
+            }
+        }
+    }
+
+    fn pick_workspace_folder(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Select project working directory".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let result = rx.await;
+            let _ = this.update(cx, |view, cx| match result {
+                Ok(Ok(Some(paths))) => {
+                    if let Some(dir) = paths.into_iter().next() {
+                        view.set_workspace_root(dir, cx);
+                    }
+                }
+                Ok(Ok(None)) => {}
+                Ok(Err(err)) => {
+                    let msg = format!(
+                        "Folder picker unavailable ({err}); edit the Project Folder path or run /cd <path>."
+                    );
+                    view.state.feed.push(FeedRow::Notice {
+                        is_error: true,
+                        text: msg.clone(),
+                    });
+                    view.state.status_message = msg;
+                    cx.notify();
+                }
+                Err(_) => {}
+            });
+        })
+        .detach();
+    }
+
+    fn pick_attach_files(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Attach files to project & message".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let result = rx.await;
+            let _ = this.update(cx, |view, cx| match result {
+                Ok(Ok(Some(paths))) => {
+                    view.attach_paths(&paths, cx);
+                }
+                Ok(Ok(None)) => {}
+                Ok(Err(err)) => {
+                    let msg = format!(
+                        "File picker unavailable ({err}); drag & drop files onto the window or run /attach <path>."
+                    );
+                    view.state.feed.push(FeedRow::Notice {
+                        is_error: true,
+                        text: msg.clone(),
+                    });
+                    view.state.status_message = msg;
+                    cx.notify();
+                }
+                Err(_) => {}
+            });
+        })
+        .detach();
+    }
+
+    fn attach_paths(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        if paths.is_empty() {
+            return;
+        }
+        // Dropping a single folder switches the active project workspace.
+        if paths.len() == 1 && paths[0].is_dir() {
+            self.set_workspace_root(paths[0].clone(), cx);
+            return;
+        }
+        let mut added = 0usize;
+        let mut copied = 0usize;
+        for path in paths {
+            match attach_path_to_workspace(path, &self.workspace_root) {
+                Ok(att) => {
+                    if att.imported {
+                        copied += 1;
+                    }
+                    if self.state.add_attachment(att) {
+                        added += 1;
+                    }
+                }
+                Err(err) => {
+                    self.state.feed.push(FeedRow::Notice {
+                        is_error: true,
+                        text: err.clone(),
+                    });
+                    self.state.status_message = err;
+                }
+            }
+        }
+        if added > 0 {
+            self.state.status_message = if copied > 0 {
+                format!("Attached {added} file(s) ({copied} copied into .hermes-attachments/)")
+            } else {
+                format!("Attached {added} workspace file(s)")
+            };
+        }
+        cx.notify();
     }
 
     fn save_setup(&mut self, cx: &mut Context<Self>) {
@@ -255,7 +401,7 @@ impl HermesAppView {
 
     fn send_composer(&mut self, cx: &mut Context<Self>) {
         let text = self.state.composer_input.as_str().trim().to_owned();
-        if text.is_empty() || self.state.streaming {
+        if (text.is_empty() && self.state.attachments.is_empty()) || self.state.streaming {
             return;
         }
         self.state.composer_input.clear();
@@ -307,9 +453,50 @@ impl HermesAppView {
                 "help" => {
                     self.state.feed.push(FeedRow::Notice {
                         is_error: false,
-                        text: "Commands: /setup, /new (/reset), /clear, /undo, /skills [search], /yolo, /<skill-name> [args]\nShortcuts: @file:path[:a-b], @folder:dir, @diff, @staged, @git:N, @url:https://..., !<shell cmd>, Ctrl+P palette".into(),
+                        text: "Commands: /cd [dir], /attach [file], /setup, /new (/reset), /clear, /undo, /skills [search], /yolo, /<skill-name> [args]\nShortcuts: @file:path[:a-b], @folder:dir, @diff, @staged, @git:N, @url:https://..., !<shell cmd>, Ctrl+P palette, drag & drop files/folders".into(),
                     });
                     cx.notify();
+                    return;
+                }
+                "cd" => {
+                    if arg.is_empty() {
+                        self.pick_workspace_folder(cx);
+                    } else {
+                        match resolve_workspace_dir(arg, &self.workspace_root) {
+                            Ok(dir) => self.set_workspace_root(dir, cx),
+                            Err(err) => {
+                                self.state.feed.push(FeedRow::Notice {
+                                    is_error: true,
+                                    text: err.clone(),
+                                });
+                                self.state.status_message = err;
+                                cx.notify();
+                            }
+                        }
+                    }
+                    return;
+                }
+                "attach" => {
+                    if arg.is_empty() {
+                        self.pick_attach_files(cx);
+                    } else {
+                        let expanded = if let Some(rest) =
+                            arg.strip_prefix("~/").or_else(|| arg.strip_prefix("~\\"))
+                        {
+                            std::env::var_os("HOME")
+                                .or_else(|| std::env::var_os("USERPROFILE"))
+                                .map(|h| PathBuf::from(h).join(rest))
+                                .unwrap_or_else(|| PathBuf::from(arg))
+                        } else {
+                            PathBuf::from(arg)
+                        };
+                        let path = if expanded.is_absolute() {
+                            expanded
+                        } else {
+                            self.workspace_root.join(expanded)
+                        };
+                        self.attach_paths(&[path], cx);
+                    }
                     return;
                 }
                 "setup" => {
@@ -387,7 +574,7 @@ impl HermesAppView {
                         })
                         .collect();
                     let body = if matched.is_empty() {
-                        "No installed skills found. Run `hsr skills sync` to download bundled skills.".into()
+                        "No installed skills found. Open ⚙ Setup to download bundled skills.".into()
                     } else {
                         let mut lines = vec![format!(
                             "Installed skills ({}) — invoke with /<name> [prompt]:",
@@ -424,13 +611,43 @@ impl HermesAppView {
             }
         }
 
-        self.state.feed.push(FeedRow::User(text));
+        let attachments = std::mem::take(&mut self.state.attachments);
+        let display_user = if text.is_empty() {
+            format!(
+                "[Attached: {}]",
+                attachments
+                    .iter()
+                    .map(|a| a.rel_path.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else if attachments.is_empty() {
+            text
+        } else {
+            format!(
+                "{text}\n\n[Attached: {}]",
+                attachments
+                    .iter()
+                    .map(|a| a.rel_path.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let base_query = if effective_query.is_empty() {
+            "Please inspect the attached files.".to_owned()
+        } else {
+            effective_query
+        };
+        let final_query = format_prompt_with_attachments(&base_query, &attachments);
+
+        self.state.feed.push(FeedRow::User(display_user));
         self.state.streaming = true;
         self.state.status_message = "Starting turn...".into();
         self.client.start_turn(
             self.state.active_profile.clone(),
             self.state.selected_session_id.clone(),
-            effective_query,
+            final_query,
+            self.workspace_root.clone(),
             self.state.yolo,
         );
         cx.notify();
@@ -635,6 +852,9 @@ impl HermesAppView {
                         self.state.search_input.as_str().to_owned(),
                     );
                 }
+                InputTarget::WorkspacePath => {
+                    self.apply_workspace_path_input(cx);
+                }
                 InputTarget::Clarify => {
                     self.submit_clarify(cx);
                 }
@@ -645,6 +865,10 @@ impl HermesAppView {
             "escape" => {
                 if self.setup.open {
                     self.setup.open = false;
+                    self.input_target = InputTarget::Composer;
+                    cx.notify();
+                } else if self.input_target == InputTarget::WorkspacePath {
+                    self.state.set_workspace_path_text(&self.workspace_root);
                     self.input_target = InputTarget::Composer;
                     cx.notify();
                 } else if self.state.pending_clarify.is_some() {
@@ -816,6 +1040,9 @@ impl Render for HermesAppView {
                         cx.listener(move |view, _, _, cx| {
                             view.state.reset_for_profile(path.clone());
                             view.setup = SetupDraft::load_from_profile(&path);
+                            view.workspace_prefs = WorkspacePrefs::load(&path);
+                            view.workspace_root = view.workspace_prefs.resolve_initial();
+                            view.state.set_workspace_path_text(&view.workspace_root);
                             view.input_target = if view.setup.open {
                                 InputTarget::Setup(SetupField::Model)
                             } else {
@@ -1905,13 +2132,113 @@ impl Render for HermesAppView {
                 .into_any_element()
         };
 
+        let workspace_label = short_folder_label(&self.workspace_root);
+        let workspace_path_display = self.state.workspace_path_input.display(
+            self.input_target == InputTarget::WorkspacePath,
+            "Project path (Enter to switch)...",
+        );
+        let current_ws_str = self.workspace_root.display().to_string();
+        let recent_workspaces_ui: Vec<_> = self
+            .workspace_prefs
+            .recent
+            .iter()
+            .filter(|p| *p != &current_ws_str)
+            .take(4)
+            .map(|p| {
+                let dir = PathBuf::from(p);
+                let label = short_folder_label(&dir);
+                div()
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .bg(bg_card)
+                    .border_1()
+                    .border_color(border)
+                    .text_xs()
+                    .text_color(text_dim)
+                    .child(SharedString::from(format!("📁 {label}")))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _, _, cx| {
+                            view.set_workspace_root(dir.clone(), cx);
+                        }),
+                    )
+            })
+            .collect();
+
+        let attachments_panel = (!self.state.attachments.is_empty()).then(|| {
+            let chips: Vec<_> = self
+                .state
+                .attachments
+                .iter()
+                .enumerate()
+                .map(|(idx, att)| {
+                    let icon = if att.is_media_or_doc { "🖼" } else { "📄" };
+                    let suffix = if att.imported { " · copied" } else { "" };
+                    let label = format!(
+                        "{icon} {} ({}{suffix})",
+                        att.display_name,
+                        format_size(att.size_bytes)
+                    );
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(bg_user)
+                        .border_1()
+                        .border_color(accent)
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(text_main)
+                                .child(SharedString::from(label)),
+                        )
+                        .child(
+                            div()
+                                .px_1()
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(text_dim)
+                                .child("×")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |view, _, _, cx| {
+                                        view.state.remove_attachment(idx);
+                                        cx.notify();
+                                    }),
+                                ),
+                        )
+                })
+                .collect();
+
+            div()
+                .mx_4()
+                .mb_2()
+                .p_2()
+                .rounded_md()
+                .bg(bg_sidebar)
+                .border_1()
+                .border_color(border)
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap_2()
+                .children(chips)
+        });
+
         let search_display = self.state.search_input.display(
             self.input_target == InputTarget::Search,
             "Search sessions...",
         );
         let composer_display = self.state.composer_input.display(
             self.input_target == InputTarget::Composer,
-            "Message Hermes... (@file/@diff, /help, !<cmd>, Shift+Enter newline)",
+            "Message Hermes... (@file/@diff, /help, !<cmd>, or drop/attach 📎 files)",
         );
         let header_session = self
             .state
@@ -1924,6 +2251,9 @@ impl Render for HermesAppView {
             .id("hermes-gui-root")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_drop(cx.listener(|view, paths: &ExternalPaths, _, cx| {
+                view.attach_paths(paths.paths(), cx);
+            }))
             .size_full()
             .flex()
             .flex_row()
@@ -1982,6 +2312,80 @@ impl Render for HermesAppView {
                                     .gap_1()
                                     .children(profiles_ui),
                             ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .justify_between()
+                                    .items_center()
+                                    .child(div().text_xs().text_color(text_dim).child(
+                                        SharedString::from(format!(
+                                            "Project: 📁 {workspace_label}"
+                                        )),
+                                    ))
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .py_1()
+                                            .rounded_sm()
+                                            .cursor_pointer()
+                                            .bg(bg_card)
+                                            .border_1()
+                                            .border_color(border)
+                                            .text_xs()
+                                            .text_color(accent)
+                                            .child("Open...")
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|view, _, _, cx| {
+                                                    view.pick_workspace_folder(cx);
+                                                }),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .cursor_text()
+                                    .bg(bg_card)
+                                    .border_1()
+                                    .border_color(
+                                        if self.input_target == InputTarget::WorkspacePath {
+                                            accent
+                                        } else {
+                                            border
+                                        },
+                                    )
+                                    .text_xs()
+                                    .text_color(text_main)
+                                    .child(SharedString::from(workspace_path_display))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|view, _, window, cx| {
+                                            view.input_target = InputTarget::WorkspacePath;
+                                            window.focus(&view.focus_handle);
+                                            cx.notify();
+                                        }),
+                                    ),
+                            )
+                            .when(!recent_workspaces_ui.is_empty(), |el| {
+                                el.child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .flex_wrap()
+                                        .gap_1()
+                                        .children(recent_workspaces_ui),
+                                )
+                            }),
                     )
                     .child(
                         div()
@@ -2154,10 +2558,11 @@ impl Render for HermesAppView {
                     )
                     // Scrollable feed or in-app Setup screen
                     .child(main_body)
-                    // Pending approval, clarify modal, or `@` / `/` completion popup
+                    // Pending approval, clarify modal, `@` / `/` completion popup, or attached files bar
                     .children(approval_panel)
                     .children(clarify_panel)
                     .children(completion_panel)
+                    .children(attachments_panel)
                     // Composer bar
                     .child(
                         div()
@@ -2169,6 +2574,25 @@ impl Render for HermesAppView {
                             .flex_row()
                             .gap_2()
                             .items_center()
+                            .child(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .bg(bg_card)
+                                    .border_1()
+                                    .border_color(border)
+                                    .text_sm()
+                                    .text_color(accent)
+                                    .child("📎")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|view, _, _, cx| {
+                                            view.pick_attach_files(cx);
+                                        }),
+                                    ),
+                            )
                             .child(
                                 div()
                                     .flex_1()

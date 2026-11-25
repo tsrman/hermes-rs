@@ -168,12 +168,11 @@ impl OwnerClient {
         profile: PathBuf,
         session_id: Option<String>,
         query: String,
+        cwd: PathBuf,
         yolo: bool,
     ) {
         let tx = self.tx.clone();
-        let cwd = std::env::current_dir()
-            .ok()
-            .map(|p| p.display().to_string());
+        let cwd_str = Some(cwd.display().to_string());
         self.rt.spawn(async move {
             if let Err(err) = ensure_owner_running(&profile).await {
                 let _ = tx.send(BackendUpdate::Error(err));
@@ -183,7 +182,7 @@ impl OwnerClient {
                 session_id,
                 query,
                 model: None,
-                cwd,
+                cwd: cwd_str,
                 yolo,
             };
             match send_v2_command(&profile, cmd).await {
