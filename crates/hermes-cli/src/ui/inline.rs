@@ -949,10 +949,11 @@ pub async fn run(
             Some(Ok(status)) => {
                 state.exit_code = status;
                 state.unsaved = None;
-                if !assistant_buf.trim().is_empty() {
+                let cleaned = assistant_buf.trim_start_matches(['\r', '\n']).trim_end();
+                if !cleaned.is_empty() {
                     state
                         .feed_entries
-                        .push(FeedEntry::Assistant(assistant_buf.trim_end().to_owned()));
+                        .push(FeedEntry::Assistant(cleaned.to_owned()));
                 }
                 let seconds = started.elapsed().as_secs_f64();
                 if let Some((input, output)) = usage {

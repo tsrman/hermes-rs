@@ -580,10 +580,15 @@ fn parse_clarify_questions(content: &str) -> Vec<ClarifyQuestion> {
 fn handle_turn_event(app: &mut TuiApp, state: &mut ReplState, ev: ChatEvent) {
     match ev {
         ChatEvent::Stdout(chunk) => {
-            if chunk == "\n" && app.streaming_assistant.is_empty() {
-                return;
+            if app.streaming_assistant.is_empty() {
+                let trimmed = chunk.trim_start_matches(['\r', '\n']);
+                if trimmed.is_empty() {
+                    return;
+                }
+                app.streaming_assistant.push_str(trimmed);
+            } else {
+                app.streaming_assistant.push_str(&chunk);
             }
-            app.streaming_assistant.push_str(&chunk);
         }
         ChatEvent::Stderr(text) => match parse_stderr_event(&text) {
             ParsedStderr::Session(id) => app.turn_saved_session = Some(id),
@@ -592,13 +597,12 @@ fn handle_turn_event(app: &mut TuiApp, state: &mut ReplState, ev: ChatEvent) {
                 state.record_context(tokens, estimated);
             }
             ParsedStderr::ToolStarted { name, detail } => {
-                if !app.streaming_assistant.trim().is_empty() {
-                    let flushed = std::mem::take(&mut app.streaming_assistant);
+                let flushed = std::mem::take(&mut app.streaming_assistant);
+                let cleaned = flushed.trim_start_matches(['\r', '\n']).trim_end();
+                if !cleaned.is_empty() {
                     state
                         .feed_entries
-                        .push(FeedEntry::Assistant(flushed.trim_end().to_owned()));
-                } else {
-                    app.streaming_assistant.clear();
+                        .push(FeedEntry::Assistant(cleaned.to_owned()));
                 }
                 app.active_tools.insert(name.clone(), Instant::now());
                 state.feed_entries.push(FeedEntry::Tool {
@@ -680,10 +684,11 @@ fn finish_turn(app: &mut TuiApp, state: &mut ReplState, result: Result<u8, Strin
         .unwrap_or(0.0);
     app.active_tools.clear();
     let final_text = std::mem::take(&mut app.streaming_assistant);
-    if !final_text.trim().is_empty() {
+    let cleaned = final_text.trim_start_matches(['\r', '\n']).trim_end();
+    if !cleaned.is_empty() {
         state
             .feed_entries
-            .push(FeedEntry::Assistant(final_text.trim_end().to_owned()));
+            .push(FeedEntry::Assistant(cleaned.to_owned()));
     }
     match result {
         Ok(status) => {
@@ -798,10 +803,11 @@ async fn handle_key_event(
             app.turn_started = None;
             app.active_tools.clear();
             let partial = std::mem::take(&mut app.streaming_assistant);
-            if !partial.trim().is_empty() {
+            let cleaned = partial.trim_start_matches(['\r', '\n']).trim_end();
+            if !cleaned.is_empty() {
                 state
                     .feed_entries
-                    .push(FeedEntry::Assistant(partial.trim_end().to_owned()));
+                    .push(FeedEntry::Assistant(cleaned.to_owned()));
             }
             if let Some(q) = app.turn_query.take() {
                 state.unsaved = Some(q);
@@ -1924,13 +1930,17 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
                 lines.push(Line::from(""));
             }
             FeedEntry::Assistant(text) => {
+                if lines.last().is_some_and(|l| !l.spans.is_empty()) {
+                    lines.push(Line::from(""));
+                }
                 lines.push(Line::from(Span::styled(
                     "Hermes",
                     Style::default()
                         .fg(Color::LightMagenta)
                         .add_modifier(Modifier::BOLD),
                 )));
-                lines.extend(render_markdown_lines(text, state.color));
+                let cleaned = text.trim_start_matches(['\r', '\n']);
+                lines.extend(render_markdown_lines(cleaned, state.color));
                 lines.push(Line::from(""));
             }
             FeedEntry::Tool {
@@ -1978,7 +1988,7 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
                     (None, None) => "ok".to_owned(),
                 };
                 let mut card_spans = vec![
-                    Span::styled("  ╭─ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
                     Span::styled(
                         icon,
                         Style::default().fg(icon_color).add_modifier(Modifier::BOLD),
@@ -2003,11 +2013,10 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
                         Color::DarkGray
                     }),
                 ));
-                card_spans.push(Span::styled(" ─╮", Style::default().fg(Color::DarkGray)));
                 lines.push(Line::from(card_spans));
                 if let Some(note) = sub_note {
                     lines.push(Line::from(vec![
-                        Span::styled("     ↳ ", Style::default().fg(Color::DarkGray)),
+                        Span::styled("  │   ↳ ", Style::default().fg(Color::DarkGray)),
                         Span::styled(note, Style::default().fg(Color::Red)),
                     ]));
                 }
@@ -2029,6 +2038,9 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
     }
 
     if !app.streaming_assistant.is_empty() {
+        if lines.last().is_some_and(|l| !l.spans.is_empty()) {
+            lines.push(Line::from(""));
+        }
         lines.push(Line::from(vec![
             Span::styled(
                 "Hermes ",
@@ -2038,8 +2050,12 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
             ),
             Span::styled(spinner_glyph, Style::default().fg(Color::Cyan)),
         ]));
-        lines.extend(render_markdown_lines(&app.streaming_assistant, state.color));
+        let cleaned = app.streaming_assistant.trim_start_matches(['\r', '\n']);
+        lines.extend(render_markdown_lines(cleaned, state.color));
     } else if app.is_busy() && app.active_tools.is_empty() {
+        if lines.last().is_some_and(|l| !l.spans.is_empty()) {
+            lines.push(Line::from(""));
+        }
         lines.push(Line::from(vec![
             Span::styled(spinner_glyph, Style::default().fg(Color::Cyan)),
             Span::styled(" Thinking…", Style::default().fg(Color::DarkGray)),
@@ -2048,14 +2064,7 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
 
     let inner_height = area.height.saturating_sub(2) as usize;
     let inner_width = area.width.saturating_sub(2).max(1) as usize;
-    // Estimate wrapped line count so scroll-to-bottom stays accurate on long lines.
-    let total_visual_lines: usize = lines
-        .iter()
-        .map(|l| {
-            let w: usize = l.spans.iter().map(|s| s.content.chars().count()).sum();
-            w.max(1).div_ceil(inner_width)
-        })
-        .sum();
+    let total_visual_lines = count_wrapped_visual_lines(&lines, inner_width);
     let max_scroll = total_visual_lines.saturating_sub(inner_height);
     app.last_max_scroll.set(max_scroll);
     let clamped_from_bottom = app.scroll_from_bottom.min(max_scroll);
@@ -2077,6 +2086,54 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
         .wrap(Wrap { trim: false })
         .scroll((scroll_y, 0));
     frame.render_widget(feed, area);
+}
+
+fn count_wrapped_visual_lines(lines: &[Line<'_>], width: usize) -> usize {
+    let max_w = width.max(1);
+    lines
+        .iter()
+        .map(|line| {
+            let full: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            if full.is_empty() {
+                return 1;
+            }
+            let mut rows = 1usize;
+            let mut col = 0usize;
+            let mut chars = full.chars().peekable();
+            while let Some(&ch) = chars.peek() {
+                if ch.is_whitespace() {
+                    chars.next();
+                    if col < max_w {
+                        col += 1;
+                    } else {
+                        rows += 1;
+                        col = 1;
+                    }
+                } else {
+                    let mut word_len = 0usize;
+                    while let Some(&c) = chars.peek() {
+                        if c.is_whitespace() {
+                            break;
+                        }
+                        chars.next();
+                        word_len += 1;
+                    }
+                    if col > 0 && col + word_len > max_w {
+                        rows += 1;
+                        col = 0;
+                    }
+                    if word_len > max_w {
+                        let extra = (word_len - 1) / max_w;
+                        rows += extra;
+                        col = word_len - extra * max_w;
+                    } else {
+                        col += word_len;
+                    }
+                }
+            }
+            rows
+        })
+        .sum()
 }
 
 fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, layout: ComposerLayout) {
@@ -3132,6 +3189,31 @@ mod tests {
         assert!(
             rendered.contains("↳ 1 failed"),
             "missing indented failure detail line:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("╭─") && !rendered.contains("─╮"),
+            "tool line should not render half-box corners:\n{rendered}"
+        );
+
+        // Leading newlines from model responses after a tool call must not create blank gaps under `Hermes`.
+        handle_turn_event(&mut app, &mut state, ChatEvent::Stdout("\n\n".into()));
+        handle_turn_event(
+            &mut app,
+            &mut state,
+            ChatEvent::Stdout("\nDirectory listing ready.".into()),
+        );
+        finish_turn(&mut app, &mut state, Ok(0));
+        let mut terminal = Terminal::new(TestBackend::new(96, 20)).unwrap();
+        terminal.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let rendered2 = buffer_text(&terminal);
+        let lines: Vec<&str> = rendered2.lines().collect();
+        let hermes_row = lines
+            .iter()
+            .position(|l| l.contains("Hermes") && !l.contains("HERMES"))
+            .expect("Hermes label present");
+        assert!(
+            lines[hermes_row + 1].contains("Directory listing ready."),
+            "response text should start directly under Hermes without blank lines:\n{rendered2}"
         );
     }
 
