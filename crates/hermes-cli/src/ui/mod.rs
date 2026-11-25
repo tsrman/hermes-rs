@@ -141,6 +141,11 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "alias for /compress",
     },
     SlashCommand {
+        name: "/copy",
+        usage: "/copy [last|code|all]",
+        description: "copy the last reply, last code block, or full conversation to clipboard",
+    },
+    SlashCommand {
         name: "/yolo",
         usage: "/yolo",
         description: "toggle approving file changes and commands without asking",
@@ -188,6 +193,7 @@ Commands:
   /resume [id|num]       pick or continue a saved session
   /model [name]          show or change the model for the next turns
   /compress [topic]      compress the current session history now
+  /copy [last|code|all]  copy last reply, code block, or transcript to clipboard
   /yolo                  toggle approving file changes and commands without asking
   /retry                 send the last turn again when it was interrupted or failed
   /ui [inline|tui|plain] show or switch the console interface mode
@@ -200,6 +206,85 @@ Context references & shortcuts:
   /<skill-name> [args]   run an installed skill directly from <profile>/skills/
   !<command>             run a local shell command immediately without calling the model
 A line ending in \\ continues on the next line. Ctrl-C stops a running turn.";
+
+/// Extract text from conversation feed entries for `/copy [last|code|all]`.
+pub fn extract_copy_payload(
+    entries: &[FeedEntry],
+    arg: &str,
+) -> Result<(String, &'static str), String> {
+    match arg.trim().to_ascii_lowercase().as_str() {
+        "" | "last" => entries
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                FeedEntry::Assistant(text) => {
+                    let trimmed = text.trim();
+                    (!trimmed.is_empty()).then(|| (trimmed.to_owned(), "last reply"))
+                }
+                _ => None,
+            })
+            .ok_or_else(|| "Nothing to copy yet: no assistant reply in this conversation.".into()),
+        "code" => entries
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                FeedEntry::Assistant(text) => {
+                    extract_last_fenced_code_block(text).map(|code| (code, "last code block"))
+                }
+                _ => None,
+            })
+            .ok_or_else(|| "No fenced code block found in assistant replies.".into()),
+        "all" => {
+            let mut blocks = Vec::new();
+            for entry in entries {
+                match entry {
+                    FeedEntry::User(text) if !text.trim().is_empty() => {
+                        blocks.push(format!("You:\n{}", text.trim()));
+                    }
+                    FeedEntry::Assistant(text) if !text.trim().is_empty() => {
+                        blocks.push(format!("Hermes:\n{}", text.trim()));
+                    }
+                    _ => {}
+                }
+            }
+            if blocks.is_empty() {
+                Err("Nothing to copy yet: conversation is empty.".into())
+            } else {
+                Ok((blocks.join("\n\n"), "conversation"))
+            }
+        }
+        other => Err(format!(
+            "Unknown /copy target '{other}'. Expected: /copy, /copy last, /copy code, or /copy all."
+        )),
+    }
+}
+
+fn extract_last_fenced_code_block(markdown: &str) -> Option<String> {
+    let mut in_code = false;
+    let mut current: Vec<&str> = Vec::new();
+    let mut last: Option<String> = None;
+    for line in markdown.lines() {
+        if line.trim_start().starts_with("```") {
+            if in_code {
+                in_code = false;
+                let block = current.join("\n");
+                if !block.is_empty() {
+                    last = Some(block);
+                }
+                current.clear();
+            } else {
+                in_code = true;
+                current.clear();
+            }
+        } else if in_code {
+            current.push(line);
+        }
+    }
+    if in_code && !current.is_empty() {
+        last = Some(current.join("\n"));
+    }
+    last
+}
 
 /// Find the active `@...` token ending at `cursor` (ignoring emails like `user@host`).
 pub fn active_at_token(input: &str, cursor: usize) -> Option<(usize, &str)> {
@@ -1187,7 +1272,7 @@ mod tests {
     fn matches_slash_commands_by_prefix() {
         let m = match_slash_commands("/co");
         let names: Vec<&str> = m.iter().map(|c| c.name).collect();
-        assert_eq!(names, vec!["/compress", "/compact"]);
+        assert_eq!(names, vec!["/compress", "/compact", "/copy"]);
         assert!(match_slash_commands("hello").is_empty());
         assert_eq!(match_slash_commands("/ui").len(), 1);
     }

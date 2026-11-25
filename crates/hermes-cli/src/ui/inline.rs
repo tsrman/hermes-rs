@@ -549,6 +549,16 @@ pub async fn run(
                 "skills" => {
                     println!("{}", format_skills_list(home, argument));
                 }
+                "copy" => match crate::ui::extract_copy_payload(&state.feed_entries, argument) {
+                    Ok((text, label)) => match crate::ui::clipboard::write_text(&text) {
+                        Ok(()) => println!(
+                            "Copied {label} ({} chars) to clipboard.",
+                            text.chars().count()
+                        ),
+                        Err(err) => eprintln!("Copy failed: {err}"),
+                    },
+                    Err(err) => eprintln!("{err}"),
+                },
                 "ui" if argument.is_empty() => {
                     println!(
                         "Current UI mode: {} (options: inline, tui, plain)",

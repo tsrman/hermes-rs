@@ -7,7 +7,7 @@
 //! - Multiline input composer with cursor, history, Alt+Enter/Shift+Enter newlines, live spinner
 //! - Centered interactive modals for `approval` and `clarify`
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
     Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
-    MouseEvent, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    MouseButton, MouseEvent, MouseEventKind, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -134,6 +135,49 @@ struct PaletteEntry {
     at_start: Option<usize>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
+struct FeedPos {
+    /// 0-based visual line index into `FeedSnapshot::lines`.
+    line: usize,
+    /// 0-based column inside the feed inner rect.
+    col: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FeedSelection {
+    anchor: FeedPos,
+    focus: FeedPos,
+    dragging: bool,
+}
+
+impl FeedSelection {
+    fn ordered(self) -> (FeedPos, FeedPos) {
+        if self.anchor <= self.focus {
+            (self.anchor, self.focus)
+        } else {
+            (self.focus, self.anchor)
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct WrappedFeedLine {
+    line: Line<'static>,
+    plain: String,
+    /// True when this visual row is a soft word-wrap continuation of the previous row.
+    soft_wrapped: bool,
+}
+
+#[derive(Default)]
+struct FeedSnapshot {
+    inner_area: Rect,
+    scroll_y: usize,
+    lines: Vec<WrappedFeedLine>,
+}
+
+const COPY_STATUS_TTL: Duration = Duration::from_secs(4);
+const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(450);
+
 pub struct TuiApp {
     input: String,
     /// Byte index of cursor in `input` (always on a UTF-8 char boundary).
@@ -147,6 +191,14 @@ pub struct TuiApp {
     /// Last rendered maximum scroll offset (updated in `render_feed`) so scrolling up clamps
     /// cleanly at the top and never builds up dead scroll debt when scrolling back down.
     last_max_scroll: Cell<usize>,
+    /// Last rendered wrapped feed geometry and text for exact mouse selection & copying.
+    feed_snapshot: RefCell<FeedSnapshot>,
+    selection: Option<FeedSelection>,
+    last_click: Option<(Instant, FeedPos, u8)>,
+    /// Transient footer notification `(created_at, is_error, message)` for copy/mouse actions.
+    copy_status: Option<(Instant, bool, String)>,
+    /// Whether mouse capture is currently enabled (toggleable via `Alt+M` or `/mouse`).
+    mouse_capture: bool,
     spinner_tick: usize,
     streaming_assistant: String,
     active_tools: HashMap<String, Instant>,
@@ -170,6 +222,11 @@ impl TuiApp {
             palette_index: 0,
             scroll_from_bottom: 0,
             last_max_scroll: Cell::new(0),
+            feed_snapshot: RefCell::new(FeedSnapshot::default()),
+            selection: None,
+            last_click: None,
+            copy_status: None,
+            mouse_capture: true,
             spinner_tick: 0,
             streaming_assistant: String::new(),
             active_tools: HashMap::new(),
@@ -180,6 +237,14 @@ impl TuiApp {
             modal: None,
             should_exit: None,
         }
+    }
+
+    fn set_copy_status(&mut self, is_err: bool, message: impl Into<String>) {
+        self.copy_status = Some((Instant::now(), is_err, message.into()));
+    }
+
+    fn clear_selection(&mut self) {
+        self.selection = None;
     }
 
     pub fn is_busy(&self) -> bool {
@@ -428,8 +493,18 @@ pub async fn run(home: Option<&Path>, state: &mut ReplState) -> Result<UiOutcome
         );
     }
 
+    let mut applied_mouse_capture = app.mouse_capture;
     let mut dirty = true;
     let outcome = loop {
+        if app.mouse_capture != applied_mouse_capture {
+            let mut stdout = io::stdout();
+            if app.mouse_capture {
+                let _ = execute!(stdout, EnableMouseCapture);
+            } else {
+                let _ = execute!(stdout, DisableMouseCapture);
+            }
+            applied_mouse_capture = app.mouse_capture;
+        }
         if dirty {
             terminal
                 .draw(|frame| render_frame(frame, &app, state))
@@ -503,6 +578,7 @@ pub async fn run(home: Option<&Path>, state: &mut ReplState) -> Result<UiOutcome
                         }
                     }
                     Some(TermEvent::Resize(_, _)) => {
+                        app.clear_selection();
                         dirty = true;
                     }
                     None => break UiOutcome::Exit,
@@ -794,6 +870,28 @@ async fn handle_key_event(
         return None;
     }
 
+    // 0. If feed text is selected, Ctrl+C / Ctrl+Shift+C / Cmd+C / Ctrl+Insert copies it
+    // instead of cancelling the active turn or wiping the composer, and Esc clears it.
+    if app.modal.is_none() && app.selection.is_some() {
+        if is_copy_selection_key(key) {
+            copy_active_selection(app, true);
+            return None;
+        }
+        if key.code == KeyCode::Esc {
+            app.clear_selection();
+            return None;
+        }
+    }
+
+    // Toggle mouse capture (Alt+M) for users who prefer native terminal mouse selection.
+    if app.modal.is_none()
+        && key.modifiers.contains(KeyModifiers::ALT)
+        && matches!(key.code, KeyCode::Char('m' | 'M' | 'ь' | 'Ь'))
+    {
+        toggle_mouse_capture(app);
+        return None;
+    }
+
     // 1. Active modal consumes keys first (except Ctrl-C which cancels the turn).
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         if let Some(handle) = active_handle.take() {
@@ -1082,11 +1180,325 @@ fn is_paste_key(key: KeyEvent) -> bool {
     }
 }
 
-/// Handle mouse wheel scrolling in the conversation feed and scrollable modals.
+/// True for key combinations that copy an active TUI text selection (`Ctrl+C`, `Ctrl+Shift+C`,
+/// Russian `Ctrl+С`, macOS `Cmd+C`, or `Ctrl+Insert`).
+fn is_copy_selection_key(key: KeyEvent) -> bool {
+    let m = key.modifiers;
+    if m.contains(KeyModifiers::ALT) {
+        return false;
+    }
+    match key.code {
+        KeyCode::Char('c' | 'C' | 'с' | 'С') => {
+            m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::SUPER)
+        }
+        KeyCode::Insert => m.contains(KeyModifiers::CONTROL),
+        _ => false,
+    }
+}
+
+fn toggle_mouse_capture(app: &mut TuiApp) {
+    app.mouse_capture = !app.mouse_capture;
+    app.clear_selection();
+    if app.mouse_capture {
+        app.set_copy_status(
+            false,
+            "TUI mouse enabled (drag to select & copy, wheel to scroll · Alt+M toggle)",
+        );
+    } else {
+        app.set_copy_status(
+            false,
+            "Native terminal mouse enabled (PgUp/PgDn to scroll · Alt+M restore wheel)",
+        );
+    }
+}
+
+fn copy_active_selection(app: &mut TuiApp, clear_after: bool) -> bool {
+    let Some(sel) = app.selection else {
+        return false;
+    };
+    let text = {
+        let snap = app.feed_snapshot.borrow();
+        extract_selected_text(&snap, sel)
+    };
+    if clear_after {
+        app.clear_selection();
+    }
+    if text.is_empty() {
+        return false;
+    }
+    let chars = text.chars().count();
+    match clipboard::write_text(&text) {
+        Ok(()) => {
+            app.set_copy_status(
+                false,
+                if clear_after {
+                    format!("✓ Copied {chars} chars to clipboard")
+                } else {
+                    format!("✓ Copied {chars} chars to clipboard · Esc/click clears")
+                },
+            );
+            true
+        }
+        Err(err) => {
+            app.set_copy_status(true, format!("Copy failed: {err}"));
+            true
+        }
+    }
+}
+
+fn screen_to_feed_pos(snap: &FeedSnapshot, column: u16, row: u16) -> Option<FeedPos> {
+    let inner = snap.inner_area;
+    if inner.width == 0 || inner.height == 0 || snap.lines.is_empty() {
+        return None;
+    }
+    let clamped_row = row.clamp(inner.y, inner.y + inner.height - 1);
+    let clamped_col = column.clamp(inner.x, inner.x + inner.width - 1);
+    let rel_row = (clamped_row - inner.y) as usize;
+    let rel_col = (clamped_col - inner.x) as usize;
+    let line = (snap.scroll_y + rel_row).min(snap.lines.len() - 1);
+    Some(FeedPos { line, col: rel_col })
+}
+
+fn point_in_rect(rect: Rect, column: u16, row: u16) -> bool {
+    rect.width > 0
+        && rect.height > 0
+        && column >= rect.x
+        && column < rect.x + rect.width
+        && row >= rect.y
+        && row < rect.y + rect.height
+}
+
+fn select_word_at(snap: &FeedSnapshot, pos: FeedPos) -> Option<FeedSelection> {
+    let line = snap.lines.get(pos.line)?;
+    let chars: Vec<char> = line.plain.chars().collect();
+    if chars.is_empty() {
+        return None;
+    }
+    let idx = pos.col.min(chars.len() - 1);
+    let target_ws = chars[idx].is_whitespace();
+    let mut start = idx;
+    while start > 0 && chars[start - 1].is_whitespace() == target_ws {
+        start -= 1;
+    }
+    let mut end = idx;
+    while end + 1 < chars.len() && chars[end + 1].is_whitespace() == target_ws {
+        end += 1;
+    }
+    Some(FeedSelection {
+        anchor: FeedPos {
+            line: pos.line,
+            col: start,
+        },
+        focus: FeedPos {
+            line: pos.line,
+            col: end,
+        },
+        dragging: false,
+    })
+}
+
+fn select_logical_line_at(snap: &FeedSnapshot, pos: FeedPos) -> Option<FeedSelection> {
+    if pos.line >= snap.lines.len() {
+        return None;
+    }
+    let mut first = pos.line;
+    while first > 0 && snap.lines[first].soft_wrapped {
+        first -= 1;
+    }
+    let mut last = pos.line;
+    while last + 1 < snap.lines.len() && snap.lines[last + 1].soft_wrapped {
+        last += 1;
+    }
+    let end_col = snap.lines[last]
+        .plain
+        .trim_end_matches(' ')
+        .chars()
+        .count()
+        .saturating_sub(1);
+    Some(FeedSelection {
+        anchor: FeedPos {
+            line: first,
+            col: 0,
+        },
+        focus: FeedPos {
+            line: last,
+            col: end_col,
+        },
+        dragging: false,
+    })
+}
+
+fn extract_selected_text(snap: &FeedSnapshot, sel: FeedSelection) -> String {
+    if snap.lines.is_empty() {
+        return String::new();
+    }
+    let (start, end) = sel.ordered();
+    let last_idx = end.line.min(snap.lines.len() - 1);
+    if start.line > last_idx {
+        return String::new();
+    }
+    let mut out = String::new();
+    for line_idx in start.line..=last_idx {
+        let row = &snap.lines[line_idx];
+        if line_idx > start.line && !row.soft_wrapped {
+            out.push('\n');
+        }
+        let chars: Vec<char> = row.plain.chars().collect();
+        if chars.is_empty() {
+            continue;
+        }
+        let c_start = if line_idx == start.line { start.col } else { 0 };
+        if c_start >= chars.len() {
+            continue;
+        }
+        let c_end = if line_idx == last_idx {
+            end.col.min(chars.len() - 1)
+        } else {
+            chars.len() - 1
+        };
+        if c_start > c_end {
+            continue;
+        }
+        let mut piece: String = chars[c_start..=c_end].iter().collect();
+        let next_is_soft =
+            line_idx < last_idx && snap.lines.get(line_idx + 1).is_some_and(|l| l.soft_wrapped);
+        let reached_line_end = line_idx < last_idx || end.col >= chars.len() - 1;
+        if !next_is_soft && reached_line_end {
+            while piece.ends_with(' ') {
+                piece.pop();
+            }
+        }
+        out.push_str(&piece);
+    }
+    out
+}
+
+/// Handle mouse wheel scrolling and drag-to-select/copy in the conversation feed and modals.
 /// Returns `true` when state changed and the frame should be redrawn.
 fn handle_mouse_event(app: &mut TuiApp, mouse: MouseEvent) -> bool {
     const WHEEL_LINES: usize = 3;
     match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) if app.modal.is_none() => {
+            let (in_feed, pos, snap_word, snap_line) = {
+                let snap = app.feed_snapshot.borrow();
+                let in_feed = point_in_rect(snap.inner_area, mouse.column, mouse.row);
+                let pos = in_feed
+                    .then(|| screen_to_feed_pos(&snap, mouse.column, mouse.row))
+                    .flatten();
+                let word = pos.and_then(|p| select_word_at(&snap, p));
+                let full_line = pos.and_then(|p| select_logical_line_at(&snap, p));
+                (in_feed, pos, word, full_line)
+            };
+            if !in_feed {
+                app.last_click = None;
+                let had = app.selection.take().is_some();
+                return had;
+            }
+            let Some(pos) = pos else {
+                app.last_click = None;
+                return app.selection.take().is_some();
+            };
+            let now = Instant::now();
+            let click_count = match app.last_click {
+                Some((prev_t, prev_pos, prev_count))
+                    if now.duration_since(prev_t) <= DOUBLE_CLICK_WINDOW && prev_pos == pos =>
+                {
+                    (prev_count % 3) + 1
+                }
+                _ => 1,
+            };
+            app.last_click = Some((now, pos, click_count));
+            if click_count == 2 {
+                app.selection = snap_word;
+                copy_active_selection(app, false);
+                return true;
+            }
+            if click_count == 3 {
+                app.selection = snap_line;
+                copy_active_selection(app, false);
+                return true;
+            }
+            app.selection = Some(FeedSelection {
+                anchor: pos,
+                focus: pos,
+                dragging: true,
+            });
+            true
+        }
+        MouseEventKind::Drag(MouseButton::Left) if app.modal.is_none() => {
+            let Some(mut sel) = app.selection else {
+                return false;
+            };
+            if !sel.dragging {
+                return false;
+            }
+            let inner = app.feed_snapshot.borrow().inner_area;
+            if inner.height > 0 {
+                if mouse.row < inner.y {
+                    app.scroll_feed_up(1);
+                } else if mouse.row >= inner.y + inner.height {
+                    app.scroll_feed_down(1);
+                }
+            }
+            let new_pos = {
+                let snap = app.feed_snapshot.borrow();
+                let max_scroll = app.last_max_scroll.get();
+                let scroll_y = max_scroll.saturating_sub(app.scroll_from_bottom.min(max_scroll));
+                if snap.inner_area.width == 0
+                    || snap.inner_area.height == 0
+                    || snap.lines.is_empty()
+                {
+                    None
+                } else {
+                    let clamped_row = mouse.row.clamp(
+                        snap.inner_area.y,
+                        snap.inner_area.y + snap.inner_area.height - 1,
+                    );
+                    let clamped_col = mouse.column.clamp(
+                        snap.inner_area.x,
+                        snap.inner_area.x + snap.inner_area.width - 1,
+                    );
+                    let rel_row = (clamped_row - snap.inner_area.y) as usize;
+                    let rel_col = (clamped_col - snap.inner_area.x) as usize;
+                    let line = (scroll_y + rel_row).min(snap.lines.len() - 1);
+                    Some(FeedPos { line, col: rel_col })
+                }
+            };
+            let Some(new_pos) = new_pos else {
+                return false;
+            };
+            let changed = sel.focus != new_pos;
+            if new_pos != sel.anchor {
+                app.last_click = None;
+            }
+            sel.focus = new_pos;
+            app.selection = Some(sel);
+            changed
+        }
+        MouseEventKind::Up(MouseButton::Left) if app.modal.is_none() => {
+            let Some(mut sel) = app.selection else {
+                return false;
+            };
+            if !sel.dragging {
+                return false;
+            }
+            sel.dragging = false;
+            if sel.anchor == sel.focus {
+                app.selection = None;
+                return true;
+            }
+            app.selection = Some(sel);
+            copy_active_selection(app, false);
+            true
+        }
+        MouseEventKind::Down(MouseButton::Right) if app.modal.is_none() => {
+            if app.selection.is_some() {
+                copy_active_selection(app, true);
+                true
+            } else {
+                false
+            }
+        }
         MouseEventKind::ScrollUp => match &mut app.modal {
             Some(ActiveModal::Approval { scroll, .. }) => {
                 let before = *scroll;
@@ -1430,6 +1842,7 @@ fn resume_tui_target(app: &mut TuiApp, state: &mut ReplState, home: Option<&Path
     match load_resumed_session(home, state, &resolved_query) {
         Ok(_) => {
             app.scroll_from_bottom = 0;
+            app.clear_selection();
         }
         Err(err) => {
             TuiApp::push_notice(
@@ -1461,6 +1874,27 @@ async fn handle_slash_command(
         "clear" => {
             state.feed_entries.clear();
             app.scroll_from_bottom = 0;
+            app.clear_selection();
+        }
+        "copy" => match crate::ui::extract_copy_payload(&state.feed_entries, argument) {
+            Ok((text, label)) => match clipboard::write_text(&text) {
+                Ok(()) => {
+                    let msg = format!(
+                        "Copied {label} ({} chars) to clipboard.",
+                        text.chars().count()
+                    );
+                    app.set_copy_status(false, format!("✓ {msg}"));
+                    TuiApp::push_notice(state, NoticeKind::Info, msg);
+                }
+                Err(err) => {
+                    app.set_copy_status(true, format!("Copy failed: {err}"));
+                    TuiApp::push_notice(state, NoticeKind::Warn, format!("Copy failed: {err}"));
+                }
+            },
+            Err(err) => TuiApp::push_notice(state, NoticeKind::Warn, err),
+        },
+        "mouse" => {
+            toggle_mouse_capture(app);
         }
         "undo" => {
             let Some(home) = home else {
@@ -1540,6 +1974,7 @@ async fn handle_slash_command(
                 state.request.set_primary_model(state.default_model.clone());
             }
             app.scroll_from_bottom = 0;
+            app.clear_selection();
             TuiApp::push_notice(state, NoticeKind::Info, "Started a new conversation.");
         }
         "model" if argument.is_empty() => {
@@ -2062,13 +2497,20 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
         ]));
     }
 
-    let inner_height = area.height.saturating_sub(2) as usize;
-    let inner_width = area.width.saturating_sub(2).max(1) as usize;
-    let total_visual_lines = count_wrapped_visual_lines(&lines, inner_width);
+    let inner = Rect {
+        x: area.x.saturating_add(1),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+    let inner_height = inner.height as usize;
+    let inner_width = inner.width.max(1) as usize;
+    let wrapped = wrap_styled_lines(&lines, inner_width);
+    let total_visual_lines = wrapped.len();
     let max_scroll = total_visual_lines.saturating_sub(inner_height);
     app.last_max_scroll.set(max_scroll);
     let clamped_from_bottom = app.scroll_from_bottom.min(max_scroll);
-    let scroll_y = max_scroll.saturating_sub(clamped_from_bottom) as u16;
+    let scroll_y = max_scroll.saturating_sub(clamped_from_bottom);
 
     let title = if clamped_from_bottom > 0 {
         " Conversation [scrolled · Wheel/PgDn or Ctrl+End ↓] "
@@ -2076,64 +2518,155 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
         " Conversation "
     };
 
-    let feed = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
-                .title(Span::styled(title, Style::default().fg(Color::Cyan))),
-        )
-        .wrap(Wrap { trim: false })
-        .scroll((scroll_y, 0));
-    frame.render_widget(feed, area);
-}
-
-fn count_wrapped_visual_lines(lines: &[Line<'_>], width: usize) -> usize {
-    let max_w = width.max(1);
-    lines
+    let visible_end = (scroll_y + inner_height).min(wrapped.len());
+    let visible_lines: Vec<Line<'static>> = wrapped[scroll_y..visible_end]
         .iter()
-        .map(|line| {
-            let full: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-            if full.is_empty() {
-                return 1;
-            }
-            let mut rows = 1usize;
-            let mut col = 0usize;
-            let mut chars = full.chars().peekable();
-            while let Some(&ch) = chars.peek() {
-                if ch.is_whitespace() {
-                    chars.next();
-                    if col < max_w {
-                        col += 1;
-                    } else {
-                        rows += 1;
-                        col = 1;
-                    }
+        .map(|row| row.line.clone())
+        .collect();
+
+    let feed = Paragraph::new(visible_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(Span::styled(title, Style::default().fg(Color::Cyan))),
+    );
+    frame.render_widget(feed, area);
+
+    if let Some(sel) = app.selection {
+        if !(sel.dragging && sel.anchor == sel.focus) && inner.width > 0 && inner.height > 0 {
+            let (start, end) = sel.ordered();
+            let buf = frame.buffer_mut();
+            let sel_style = if state.color {
+                Style::default().bg(Color::Blue).fg(Color::White)
+            } else {
+                Style::default().add_modifier(Modifier::REVERSED)
+            };
+            for vis_row in 0..inner.height as usize {
+                let abs_line = scroll_y + vis_row;
+                if abs_line < start.line || abs_line > end.line || abs_line >= wrapped.len() {
+                    continue;
+                }
+                let line_len = wrapped[abs_line].plain.chars().count();
+                let max_col = (inner.width as usize).saturating_sub(1);
+                let c_start = if abs_line == start.line {
+                    start.col.min(max_col)
                 } else {
-                    let mut word_len = 0usize;
-                    while let Some(&c) = chars.peek() {
-                        if c.is_whitespace() {
-                            break;
-                        }
-                        chars.next();
-                        word_len += 1;
-                    }
-                    if col > 0 && col + word_len > max_w {
-                        rows += 1;
-                        col = 0;
-                    }
-                    if word_len > max_w {
-                        let extra = (word_len - 1) / max_w;
-                        rows += extra;
-                        col = word_len - extra * max_w;
-                    } else {
-                        col += word_len;
+                    0
+                };
+                let c_end = if abs_line == end.line {
+                    end.col.min(max_col)
+                } else {
+                    line_len.max(1).saturating_sub(1).min(max_col)
+                };
+                if c_start > c_end {
+                    continue;
+                }
+                let y = inner.y + vis_row as u16;
+                for c in c_start..=c_end {
+                    let x = inner.x + c as u16;
+                    if let Some(cell) = buf.cell_mut((x, y)) {
+                        cell.set_style(sel_style);
                     }
                 }
             }
-            rows
-        })
-        .sum()
+        }
+    }
+
+    *app.feed_snapshot.borrow_mut() = FeedSnapshot {
+        inner_area: inner,
+        scroll_y,
+        lines: wrapped,
+    };
+}
+
+fn build_wrapped_row(chars: &[(char, Style)], soft_wrapped: bool) -> WrappedFeedLine {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut plain = String::with_capacity(chars.len());
+    let mut cur_style: Option<Style> = None;
+    let mut buf = String::new();
+    for &(ch, style) in chars {
+        plain.push(ch);
+        if cur_style == Some(style) {
+            buf.push(ch);
+        } else {
+            if !buf.is_empty() {
+                spans.push(Span::styled(
+                    std::mem::take(&mut buf),
+                    cur_style.unwrap_or_default(),
+                ));
+            }
+            cur_style = Some(style);
+            buf.push(ch);
+        }
+    }
+    if !buf.is_empty() {
+        spans.push(Span::styled(buf, cur_style.unwrap_or_default()));
+    }
+    WrappedFeedLine {
+        line: Line::from(spans),
+        plain,
+        soft_wrapped,
+    }
+}
+
+fn wrap_styled_lines(lines: &[Line<'static>], width: usize) -> Vec<WrappedFeedLine> {
+    let max_w = width.max(1);
+    let mut out = Vec::with_capacity(lines.len());
+    for line in lines {
+        let mut flat: Vec<(char, Style)> = Vec::new();
+        for span in &line.spans {
+            let style = span.style;
+            for ch in span.content.chars() {
+                flat.push((ch, style));
+            }
+        }
+        if flat.is_empty() {
+            out.push(WrappedFeedLine {
+                line: Line::from(""),
+                plain: String::new(),
+                soft_wrapped: false,
+            });
+            continue;
+        }
+        let mut row: Vec<(char, Style)> = Vec::new();
+        let mut soft = false;
+        let mut i = 0usize;
+        while i < flat.len() {
+            if flat[i].0.is_whitespace() {
+                let item = flat[i];
+                i += 1;
+                if row.len() >= max_w {
+                    out.push(build_wrapped_row(&row, soft));
+                    row.clear();
+                    soft = true;
+                }
+                row.push(item);
+            } else {
+                let start = i;
+                while i < flat.len() && !flat[i].0.is_whitespace() {
+                    i += 1;
+                }
+                let word = &flat[start..i];
+                if !row.is_empty() && row.len() + word.len() > max_w {
+                    out.push(build_wrapped_row(&row, soft));
+                    row.clear();
+                    soft = true;
+                }
+                for &item in word {
+                    if row.len() >= max_w {
+                        out.push(build_wrapped_row(&row, soft));
+                        row.clear();
+                        soft = true;
+                    }
+                    row.push(item);
+                }
+            }
+        }
+        if !row.is_empty() {
+            out.push(build_wrapped_row(&row, soft));
+        }
+    }
+    out
 }
 
 fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, layout: ComposerLayout) {
@@ -2192,14 +2725,32 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, layout: Comp
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    if let Some((when, is_err, msg)) = &app.copy_status {
+        if when.elapsed() < COPY_STATUS_TTL {
+            let style = if *is_err {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Green)
+            };
+            let footer = Paragraph::new(Span::styled(format!(" {msg}"), style));
+            frame.render_widget(footer, area);
+            return;
+        }
+    }
     let text = match &app.modal {
         Some(ActiveModal::SessionPicker { .. }) => {
             " ↑/↓ select session · Enter resume · Esc cancel"
         }
         Some(_) => " Modal active · follow on-screen keys · Ctrl-C cancel turn",
-        None if app.is_busy() => " Ctrl-C stop turn · PgUp/PgDn scroll conversation",
+        None if app.selection.is_some() => {
+            " Selection active (copied) · Ctrl-C / Right-click copy · Esc or click clears"
+        }
+        None if !app.mouse_capture => {
+            " Native terminal mouse active · PgUp/PgDn scroll · Alt+M restore wheel · /copy"
+        }
+        None if app.is_busy() => " Ctrl-C stop turn · Drag select & copy · PgUp/PgDn scroll",
         None => {
-            " Enter send · Shift+Enter newline · ↑/↓ history · Tab complete / · Wheel/PgUp scroll · Ctrl-D quit"
+            " Enter send · Shift+Enter newline · Drag copy · /copy · Wheel/PgUp scroll · Alt+M mouse · Ctrl-D quit"
         }
     };
     let footer = Paragraph::new(Span::styled(text, Style::default().fg(Color::DarkGray)));
@@ -3327,5 +3878,179 @@ mod tests {
                 _ => panic!("expected Clarify modal to stay open"),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn mouse_drag_selection_copies_soft_wrapped_text_survives_move_and_handles_copy_commands()
+    {
+        let mut state = sample_state();
+        state.feed_entries.push(FeedEntry::User("Question".into()));
+        state.feed_entries.push(FeedEntry::Assistant(
+            "Hello world from Hermes TUI selection\n```rust\nlet answer = 42;\n```".into(),
+        ));
+        let mut app = TuiApp::new();
+        // Narrow 28-col viewport forces soft wrapping of "Hello world from Hermes TUI selection".
+        let mut terminal = Terminal::new(TestBackend::new(28, 20)).unwrap();
+        terminal.draw(|f| render_frame(f, &app, &state)).unwrap();
+
+        let (inner, screen_y_start, screen_y_next) = {
+            let snap = app.feed_snapshot.borrow();
+            let inner = snap.inner_area;
+            let hello_row_idx = snap
+                .lines
+                .iter()
+                .position(|l| l.plain.starts_with("Hello world"))
+                .expect("rendered assistant line");
+            assert!(
+                snap.lines[hello_row_idx + 1].soft_wrapped,
+                "expected continuation row to be soft-wrapped: {:?}",
+                snap.lines.iter().map(|l| &l.plain).collect::<Vec<_>>()
+            );
+            let screen_y_start = inner.y + (hello_row_idx - snap.scroll_y) as u16;
+            (inner, screen_y_start, screen_y_start + 1)
+        };
+
+        let clip = clipboard::capture_writes_for_test();
+        let mouse = |kind, col, row| MouseEvent {
+            kind,
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        // 1. Left drag across the soft-wrapped sentence auto-copies cleanly without fake `\n`.
+        assert!(handle_mouse_event(
+            &mut app,
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                inner.x,
+                screen_y_start
+            ),
+        ));
+        assert!(handle_mouse_event(
+            &mut app,
+            mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                inner.x + 25,
+                screen_y_next,
+            ),
+        ));
+        assert!(handle_mouse_event(
+            &mut app,
+            mouse(
+                MouseEventKind::Up(MouseButton::Left),
+                inner.x + 25,
+                screen_y_next,
+            ),
+        ));
+        assert!(
+            app.selection.is_some(),
+            "selection stays highlighted after release"
+        );
+        assert_eq!(
+            clip.writes().last().map(String::as_str),
+            Some("Hello world from Hermes TUI selection")
+        );
+
+        // 2. Moving the mouse afterwards must NOT clear the selection or trigger redraw.
+        assert!(!handle_mouse_event(
+            &mut app,
+            mouse(MouseEventKind::Moved, inner.x + 2, screen_y_start),
+        ));
+        assert!(app.selection.is_some());
+
+        // 3. Rendered frame highlights the selected cells in blue/white.
+        terminal.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let highlighted_cell = terminal
+            .backend()
+            .buffer()
+            .cell((inner.x, screen_y_start))
+            .unwrap();
+        assert_eq!(highlighted_cell.bg, Color::Blue);
+        assert_eq!(highlighted_cell.fg, Color::White);
+
+        // 4. Ctrl+C (and Russian Ctrl+С) copies active selection and clears it without touching composer.
+        app.input = "draft text".into();
+        app.cursor = app.input.len();
+        let mut handle = None;
+        let mut rx = None;
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Char('с'), KeyModifiers::CONTROL),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert!(app.selection.is_none());
+        assert_eq!(app.input, "draft text");
+        assert_eq!(clip.writes().len(), 2);
+
+        // 5. Right-click copies active selection and clears it.
+        assert!(handle_mouse_event(
+            &mut app,
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                inner.x,
+                screen_y_start
+            ),
+        ));
+        assert!(handle_mouse_event(
+            &mut app,
+            mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                inner.x + 4,
+                screen_y_start
+            ),
+        ));
+        assert!(handle_mouse_event(
+            &mut app,
+            mouse(
+                MouseEventKind::Up(MouseButton::Left),
+                inner.x + 4,
+                screen_y_start
+            ),
+        ));
+        assert_eq!(clip.writes().last().map(String::as_str), Some("Hello"));
+        assert!(handle_mouse_event(
+            &mut app,
+            mouse(
+                MouseEventKind::Down(MouseButton::Right),
+                inner.x + 2,
+                screen_y_start
+            ),
+        ));
+        assert!(app.selection.is_none());
+        assert_eq!(clip.writes().last().map(String::as_str), Some("Hello"));
+
+        // 6. Alt+M toggles mouse capture mode cleanly.
+        assert!(app.mouse_capture);
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Char('m'), KeyModifiers::ALT),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert!(!app.mouse_capture);
+
+        // 7. `/copy`, `/copy code`, and `/copy all` write clean clipboard payloads.
+        handle_slash_command(&mut app, &mut state, None, "copy").await;
+        assert!(clip
+            .writes()
+            .last()
+            .unwrap()
+            .contains("Hello world from Hermes TUI selection"));
+        handle_slash_command(&mut app, &mut state, None, "copy code").await;
+        assert_eq!(
+            clip.writes().last().map(String::as_str),
+            Some("let answer = 42;")
+        );
+        handle_slash_command(&mut app, &mut state, None, "copy all").await;
+        let all = clip.writes().last().cloned().unwrap();
+        assert!(all.contains("You:\nQuestion") && all.contains("Hermes:\nHello world"));
     }
 }
