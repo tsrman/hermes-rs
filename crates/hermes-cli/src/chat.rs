@@ -1138,12 +1138,20 @@ where
             }
         }
     };
-    mcp.lock().await.shutdown().await;
     if !receiving || (!json_mode && !emit(Event::Stdout("\n".into()))) {
+        mcp.lock().await.shutdown().await;
         return Err("chat output was interrupted".into());
     }
     match outcome {
         TurnOutcome::Completed(turn) => {
+            let saved_id = if let Some(mut writer) = writer {
+                Some(
+                    block_in_place(|| writer.save(&turn, root))
+                        .map_err(|error| error.to_string())?,
+                )
+            } else {
+                None
+            };
             let (input, output) = turn.usage();
             if json_mode {
                 let mut fields = serde_json::Map::new();
@@ -1153,9 +1161,7 @@ where
             } else if request.state_scope.is_some() {
                 emit(Event::Stderr(format!("Usage: {input} {output}")));
             }
-            if let Some(mut writer) = writer {
-                let id = block_in_place(|| writer.save(&turn, root))
-                    .map_err(|error| error.to_string())?;
+            if let Some(id) = saved_id {
                 if json_mode {
                     let mut fields = serde_json::Map::new();
                     fields.insert("id".into(), serde_json::json!(id));
@@ -1164,18 +1170,21 @@ where
                     emit(Event::Stderr(format!("Session: {id}")));
                 }
             }
+            mcp.lock().await.shutdown().await;
             if json_mode {
                 emit(Event::Stdout(json_done(0, "completed")));
             }
             Ok(0)
         }
         TurnOutcome::Interrupted(_) => {
+            mcp.lock().await.shutdown().await;
             if json_mode {
                 emit(Event::Stdout(json_done(130, "interrupted")));
             }
             Ok(130)
         }
         TurnOutcome::IterationLimit => {
+            mcp.lock().await.shutdown().await;
             if json_mode {
                 emit(Event::Stdout(json_done(1, "iteration_limit")));
             }

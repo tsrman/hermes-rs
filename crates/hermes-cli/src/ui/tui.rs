@@ -784,6 +784,13 @@ fn finish_turn(app: &mut TuiApp, state: &mut ReplState, result: Result<u8, Strin
             } else {
                 TuiApp::push_notice(state, NoticeKind::Info, format!("[{elapsed:.1}s]"));
             }
+            if app.turn_saved_session.is_none() && status != 0 {
+                TuiApp::push_notice(
+                    state,
+                    NoticeKind::Warn,
+                    "This turn ended before completion and was not saved to session history.",
+                );
+            }
         }
         Err(error) => {
             TuiApp::push_notice(state, NoticeKind::Error, error);
@@ -907,15 +914,28 @@ async fn handle_key_event(
                     .feed_entries
                     .push(FeedEntry::Assistant(cleaned.to_owned()));
             }
-            if let Some(q) = app.turn_query.take() {
+            let saved_id = app.turn_saved_session.take();
+            if let Some(id) = saved_id.clone() {
+                state.session = Some(id);
+                state.unsaved = None;
+            } else if let Some(q) = app.turn_query.take() {
                 state.unsaved = Some(q);
             }
+            app.turn_query = None;
             hermes_runtime::mcp::flush_cancellations().await;
-            TuiApp::push_notice(
-                state,
-                NoticeKind::Warn,
-                "interrupted (the turn is not saved; /retry sends it again)",
-            );
+            if saved_id.is_some() {
+                TuiApp::push_notice(
+                    state,
+                    NoticeKind::Info,
+                    "Turn was already saved to session history; cancelled post-turn cleanup.",
+                );
+            } else {
+                TuiApp::push_notice(
+                    state,
+                    NoticeKind::Warn,
+                    "interrupted (the turn is not saved; /retry sends it again)",
+                );
+            }
             return None;
         }
         // When idle, Ctrl-C closes a session picker modal or clears current composer text.

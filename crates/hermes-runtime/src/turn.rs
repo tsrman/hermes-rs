@@ -1054,6 +1054,25 @@ where
                     context_estimated: last_context.1,
                 }));
             }
+            Some("length") if result.tool_calls.is_empty() && !result.content.trim().is_empty() => {
+                // Save output-token-truncated replies instead of discarding the entire turn on resume.
+                let stored = redact_assistant_reply(&result.content, options.keep_phone_numbers);
+                messages.push(json!({"role": "assistant", "content": stored}));
+                let appended = messages.split_off(first_new_message);
+                messages.remove(0);
+                return Ok(TurnOutcome::Completed(CompletedTurn {
+                    model: route.model.clone(),
+                    final_response: result.content,
+                    system_prompt,
+                    replayed_history: original.unwrap_or(messages),
+                    messages: appended,
+                    compaction: history.compaction,
+                    input_tokens: usage.0,
+                    output_tokens: usage.1,
+                    context_tokens: last_context.0,
+                    context_estimated: last_context.1,
+                }));
+            }
             Some("tool_calls") if !result.tool_calls.is_empty() => {}
             _ => return Err(TurnError::InvalidCompletion),
         }

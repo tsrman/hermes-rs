@@ -824,6 +824,28 @@ fn strip_reasoning_tags(text: &str) -> String {
     result.trim().to_owned()
 }
 
+fn extract_merged_tail_original(text: &str) -> Option<String> {
+    const PRIOR_PREFIX: &str = "[PRIOR CONTEXT — for reference only; not a new message]";
+    const PRIOR_END: &str = "[END OF PRIOR CONTEXT — COMPACTION SUMMARY BELOW]";
+    if let Some(rest) = text.trim_start().strip_prefix(PRIOR_PREFIX) {
+        if let Some((orig, _)) = rest.split_once(PRIOR_END) {
+            let trimmed = orig.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_owned());
+            }
+        }
+    }
+    const SUMMARY_END: &str =
+        "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---";
+    if let Some((_, tail)) = text.split_once(SUMMARY_END) {
+        let trimmed = tail.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    None
+}
+
 pub fn collect_resume_recap(
     session_id: String,
     title: Option<String>,
@@ -832,7 +854,11 @@ pub fn collect_resume_recap(
 ) -> ResumeRecap {
     let user_turns = messages
         .iter()
-        .filter(|m| m.role == "user" && !m.compressed_summary)
+        .filter(|m| {
+            m.role == "user"
+                && (!m.compressed_summary
+                    || extract_merged_tail_original(&content_display_text(&m.content)).is_some())
+        })
         .count();
     let total_messages = messages.len();
     if settings.minimal {
@@ -854,22 +880,39 @@ pub fn collect_resume_recap(
             continue;
         }
         if msg.role == "user" {
-            if msg.compressed_summary {
-                continue;
-            }
-            let text = approval::sanitize_terminal_text(&content_display_text(&msg.content));
+            let raw = content_display_text(&msg.content);
+            let display = if msg.compressed_summary {
+                let Some(orig) = extract_merged_tail_original(&raw) else {
+                    continue;
+                };
+                orig
+            } else {
+                raw
+            };
+            let text = approval::sanitize_terminal_text(&display);
             let trimmed = text.trim();
             if trimmed.is_empty() {
                 continue;
             }
             raw_entries.push((true, truncate_chars(trimmed, settings.max_user_chars)));
         } else if msg.role == "assistant" {
-            if msg.compressed_summary {
-                continue;
-            }
-            let cleaned = approval::sanitize_terminal_text(&strip_reasoning_tags(
-                &content_display_text(&msg.content),
-            ));
+            let raw = content_display_text(&msg.content);
+            let display = if msg.compressed_summary {
+                let Some(orig) = extract_merged_tail_original(&raw) else {
+                    continue;
+                };
+                orig
+            } else {
+                raw
+            };
+            let stripped = strip_reasoning_tags(&display);
+            let fallback_raw = display.trim();
+            let effective = if stripped.is_empty() && !fallback_raw.is_empty() {
+                fallback_raw
+            } else {
+                stripped.as_str()
+            };
+            let cleaned = approval::sanitize_terminal_text(effective);
             let tc_summary = msg.tool_calls.as_ref().and_then(tool_calls_summary);
             if cleaned.is_empty() && (settings.skip_tool_only || tc_summary.is_none()) {
                 continue;
@@ -1275,5 +1318,80 @@ mod tests {
         assert_eq!(names, vec!["/compress", "/compact", "/copy"]);
         assert!(match_slash_commands("hello").is_empty());
         assert_eq!(match_slash_commands("/ui").len(), 1);
+    }
+
+    #[test]
+    fn resume_recap_keeps_merged_tail_and_reasoning_only_last_reply() {
+        let messages = vec![
+            Message {
+                id: 1,
+                role: "user".into(),
+                content: Value::String("standalone summary".into()),
+                tool_call_id: None,
+                tool_calls: None,
+                tool_name: None,
+                timestamp: 1.0,
+                finish_reason: None,
+                active: true,
+                compacted: false,
+                display_kind: None,
+                display_metadata: None,
+                compressed_summary: true,
+            },
+            Message {
+                id: 2,
+                role: "user".into(),
+                content: Value::String(
+                    "[PRIOR CONTEXT — for reference only; not a new message]\n\
+                     Original user prompt\n\n\
+                     [END OF PRIOR CONTEXT — COMPACTION SUMMARY BELOW]\n\n\
+                     Summary\n\n\
+                     --- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"
+                        .into(),
+                ),
+                tool_call_id: None,
+                tool_calls: None,
+                tool_name: None,
+                timestamp: 2.0,
+                finish_reason: None,
+                active: true,
+                compacted: false,
+                display_kind: None,
+                display_metadata: None,
+                compressed_summary: true,
+            },
+            Message {
+                id: 3,
+                role: "assistant".into(),
+                content: Value::String("<think>final answer inside tags</think>".into()),
+                tool_call_id: None,
+                tool_calls: None,
+                tool_name: None,
+                timestamp: 3.0,
+                finish_reason: Some("stop".into()),
+                active: true,
+                compacted: false,
+                display_kind: None,
+                display_metadata: None,
+                compressed_summary: false,
+            },
+        ];
+        let recap = collect_resume_recap(
+            "sess-1".into(),
+            None,
+            &messages,
+            &ResumeDisplaySettings::default(),
+        );
+        assert_eq!(recap.user_turns, 1);
+        assert_eq!(
+            recap.entries,
+            vec![
+                RecapEntry::User("Original user prompt".into()),
+                RecapEntry::Assistant {
+                    text: "<think>final answer inside tags</think>".into(),
+                    is_last: true,
+                },
+            ]
+        );
     }
 }

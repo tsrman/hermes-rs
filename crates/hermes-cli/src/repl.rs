@@ -25,7 +25,16 @@ pub async fn run(home: Option<&Path>, request: ChatRequest) -> Result<u8, String
     );
     let mut state = ReplState::new(home, request, !no_color);
     let mut startup_recap = if let Some(initial_id) = state.session.clone() {
-        ui::load_resumed_session(home, &mut state, &initial_id).ok()
+        match ui::load_resumed_session(home, &mut state, &initial_id) {
+            Ok(recap) => Some(recap),
+            Err(err) => {
+                state.feed_entries.push(ui::FeedEntry::Notice {
+                    kind: ui::NoticeKind::Error,
+                    text: format!("Could not resume session '{initial_id}': {err}"),
+                });
+                None
+            }
+        }
     } else {
         None
     };
