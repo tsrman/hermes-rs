@@ -8,6 +8,7 @@ mod setup_state;
 mod state;
 mod workspace;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
@@ -16,8 +17,9 @@ use std::time::Duration;
 use gpui::WindowControlArea;
 use gpui::{
     div, prelude::*, px, rgb, size, App, Application, Bounds, ClipboardItem, Context,
-    ExternalPaths, FocusHandle, HighlightStyle, KeyDownEvent, MouseButton, PathPromptOptions, Rgba,
-    SharedString, StyledText, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    ExternalPaths, FocusHandle, HighlightStyle, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, PathPromptOptions, Pixels, Point, Rgba, SharedString, StyledText, TextLayout,
+    TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 use hermes_runtime::config::profile_home;
 use hermes_runtime::local_owner::ApprovalScope;
@@ -33,13 +35,22 @@ use crate::workspace::{
     short_folder_label, WorkspacePrefs,
 };
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
 enum InputTarget {
     Composer,
     Search,
     WorkspacePath,
     Clarify,
     Setup(SetupField),
+}
+
+#[derive(Clone)]
+struct InputLayoutSnapshot {
+    layout: TextLayout,
+    /// Byte offset inside the rendered string where the synthetic `|` caret was inserted, if any.
+    caret_inserted_at: Option<usize>,
+    /// True when each source character was rendered as `•`.
+    masked: bool,
 }
 
 struct HermesAppView {
@@ -51,6 +62,8 @@ struct HermesAppView {
     rx: Receiver<ScopedUpdate>,
     focus_handle: FocusHandle,
     input_target: InputTarget,
+    input_layouts: HashMap<InputTarget, InputLayoutSnapshot>,
+    dragging_input: Option<InputTarget>,
 }
 
 impl HermesAppView {
@@ -101,6 +114,8 @@ impl HermesAppView {
             rx,
             focus_handle,
             input_target: initial_target,
+            input_layouts: HashMap::new(),
+            dragging_input: None,
         }
     }
 
@@ -287,8 +302,8 @@ impl HermesAppView {
         self.input_target = InputTarget::Composer;
     }
 
-    fn active_buffer_mut(&mut self) -> Option<&mut TextBuffer> {
-        match self.input_target {
+    fn buffer_mut(&mut self, target: InputTarget) -> Option<&mut TextBuffer> {
+        match target {
             InputTarget::Composer => Some(&mut self.state.composer_input),
             InputTarget::Search => Some(&mut self.state.search_input),
             InputTarget::WorkspacePath => Some(&mut self.state.workspace_path_input),
@@ -298,6 +313,93 @@ impl HermesAppView {
                 .as_mut()
                 .and_then(PendingClarify::active_buffer_mut),
             InputTarget::Setup(field) => Some(self.setup.buffer_mut(field)),
+        }
+    }
+
+    fn active_buffer_mut(&mut self) -> Option<&mut TextBuffer> {
+        self.buffer_mut(self.input_target)
+    }
+
+    fn hit_test_input(&self, target: InputTarget, position: Point<Pixels>, text: &str) -> usize {
+        let Some(snap) = self.input_layouts.get(&target) else {
+            return text.len();
+        };
+        let rendered_idx = match snap.layout.index_for_position(position) {
+            Ok(i) | Err(i) => i,
+        };
+        let adj = match snap.caret_inserted_at {
+            Some(caret) if rendered_idx > caret => rendered_idx.saturating_sub(1),
+            _ => rendered_idx,
+        };
+        if snap.masked {
+            // Each masked character is `•` (3 UTF-8 bytes).
+            let char_idx = adj / '•'.len_utf8();
+            text.char_indices()
+                .nth(char_idx)
+                .map_or(text.len(), |(byte_idx, _)| byte_idx)
+        } else {
+            let mut idx = adj.min(text.len());
+            while idx > 0 && !text.is_char_boundary(idx) {
+                idx -= 1;
+            }
+            idx
+        }
+    }
+
+    fn handle_input_mouse_down(
+        &mut self,
+        target: InputTarget,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.input_target = target;
+        window.focus(&self.focus_handle);
+        let text_owned = self
+            .buffer_mut(target)
+            .map(|b| b.as_str().to_owned())
+            .unwrap_or_default();
+        let idx = self.hit_test_input(target, event.position, &text_owned);
+        if let Some(buf) = self.buffer_mut(target) {
+            match event.click_count {
+                0 | 1 => {
+                    buf.set_cursor(idx, event.modifiers.shift);
+                    self.dragging_input = Some(target);
+                }
+                2 => {
+                    buf.select_word_at(idx);
+                    self.dragging_input = None;
+                }
+                _ => {
+                    buf.select_all();
+                    self.dragging_input = None;
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn handle_input_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target) = self.dragging_input else {
+            return;
+        };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.dragging_input = None;
+            return;
+        }
+        let text_owned = self
+            .buffer_mut(target)
+            .map(|b| b.as_str().to_owned())
+            .unwrap_or_default();
+        let idx = self.hit_test_input(target, event.position, &text_owned);
+        if let Some(buf) = self.buffer_mut(target) {
+            buf.set_cursor(idx, true);
+            cx.notify();
         }
     }
 
@@ -803,10 +905,47 @@ impl HermesAppView {
             return;
         }
 
-        if primary && key.eq_ignore_ascii_case("c") && self.state.streaming {
-            if let Some(tid) = self.state.active_turn_id.clone() {
-                self.client
-                    .cancel_turn(self.state.active_profile.clone(), tid);
+        if primary && key.eq_ignore_ascii_case("a") {
+            if let Some(buf) = self.active_buffer_mut() {
+                buf.select_all();
+                cx.notify();
+            }
+            return;
+        }
+
+        if primary && key.eq_ignore_ascii_case("c") {
+            let selected = self
+                .active_buffer_mut()
+                .and_then(|buf| buf.selected_text().map(str::to_owned));
+            if let Some(sel) = selected {
+                cx.write_to_clipboard(ClipboardItem::new_string(sel));
+                return;
+            }
+            if self.state.streaming {
+                if let Some(tid) = self.state.active_turn_id.clone() {
+                    self.client
+                        .cancel_turn(self.state.active_profile.clone(), tid);
+                }
+            }
+            return;
+        }
+
+        if primary && key.eq_ignore_ascii_case("x") {
+            let selected = self
+                .active_buffer_mut()
+                .and_then(|buf| buf.selected_text().map(str::to_owned));
+            if let Some(sel) = selected {
+                cx.write_to_clipboard(ClipboardItem::new_string(sel));
+                if let Some(buf) = self.active_buffer_mut() {
+                    buf.delete_selection();
+                }
+                if self.input_target == InputTarget::Search {
+                    self.client.list_sessions(
+                        self.state.active_profile.clone(),
+                        self.state.search_input.as_str().to_owned(),
+                    );
+                }
+                cx.notify();
             }
             return;
         }
@@ -864,25 +1003,25 @@ impl HermesAppView {
         match key {
             "left" => {
                 if let Some(buf) = self.active_buffer_mut() {
-                    buf.move_left();
+                    buf.move_left(mods.shift);
                     cx.notify();
                 }
             }
             "right" => {
                 if let Some(buf) = self.active_buffer_mut() {
-                    buf.move_right();
+                    buf.move_right(mods.shift);
                     cx.notify();
                 }
             }
             "home" => {
                 if let Some(buf) = self.active_buffer_mut() {
-                    buf.move_home();
+                    buf.move_home(mods.shift);
                     cx.notify();
                 }
             }
             "end" => {
                 if let Some(buf) = self.active_buffer_mut() {
-                    buf.move_end();
+                    buf.move_end(mods.shift);
                     cx.notify();
                 }
             }
@@ -1008,62 +1147,107 @@ fn text_from_keystroke<'a>(
 
 #[allow(clippy::too_many_arguments)]
 fn render_text_field_content(
-    before: &str,
-    after: &str,
+    full_text: &str,
+    cursor: usize,
+    selection: Option<std::ops::Range<usize>>,
     focused: bool,
+    masked: bool,
     placeholder: &str,
     text_main: Rgba,
     text_dim: Rgba,
     caret: Rgba,
     caret_h: f32,
-) -> gpui::AnyElement {
-    if before.is_empty() && after.is_empty() {
+) -> (gpui::AnyElement, Option<InputLayoutSnapshot>) {
+    if full_text.is_empty() {
         if focused {
-            return div()
+            return (
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .w(px(2.0))
+                            .h(px(caret_h))
+                            .bg(caret)
+                            .rounded_sm()
+                            .flex_shrink_0(),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_color(text_dim)
+                            .child(SharedString::from(placeholder.to_owned())),
+                    )
+                    .into_any_element(),
+                None,
+            );
+        }
+        return (
+            div()
                 .w_full()
                 .min_w(px(0.0))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_1()
-                .child(
-                    div()
-                        .w(px(2.0))
-                        .h(px(caret_h))
-                        .bg(caret)
-                        .rounded_sm()
-                        .flex_shrink_0(),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .text_color(text_dim)
-                        .child(SharedString::from(placeholder.to_owned())),
-                )
-                .into_any_element();
-        }
-        return div()
-            .w_full()
-            .min_w(px(0.0))
-            .text_color(text_dim)
-            .child(SharedString::from(placeholder.to_owned()))
-            .into_any_element();
+                .text_color(text_dim)
+                .child(SharedString::from(placeholder.to_owned()))
+                .into_any_element(),
+            None,
+        );
     }
+
     if !focused {
-        return div()
-            .w_full()
-            .min_w(px(0.0))
-            .text_color(text_main)
-            .child(SharedString::from(format!("{before}{after}")))
-            .into_any_element();
+        let styled = StyledText::new(full_text.to_owned());
+        let snap = InputLayoutSnapshot {
+            layout: styled.layout().clone(),
+            caret_inserted_at: None,
+            masked,
+        };
+        return (
+            div()
+                .w_full()
+                .min_w(px(0.0))
+                .text_color(text_main)
+                .child(styled)
+                .into_any_element(),
+            Some(snap),
+        );
     }
-    let mut combined = String::with_capacity(before.len() + after.len() + 1);
-    combined.push_str(before);
+
+    if let Some(sel) = selection {
+        let styled = StyledText::new(full_text.to_owned()).with_highlights([(
+            sel,
+            HighlightStyle {
+                color: Some(rgb(0xffffff).into()),
+                background_color: Some(rgb(0x264f78).into()),
+                ..Default::default()
+            },
+        )]);
+        let snap = InputLayoutSnapshot {
+            layout: styled.layout().clone(),
+            caret_inserted_at: None,
+            masked,
+        };
+        return (
+            div()
+                .w_full()
+                .min_w(px(0.0))
+                .text_color(text_main)
+                .child(styled)
+                .into_any_element(),
+            Some(snap),
+        );
+    }
+
+    let split = cursor.min(full_text.len());
+    let mut combined = String::with_capacity(full_text.len() + 1);
+    combined.push_str(&full_text[..split]);
     let caret_start = combined.len();
     combined.push('|');
     let caret_end = combined.len();
-    combined.push_str(after);
+    combined.push_str(&full_text[split..]);
     let styled = StyledText::new(combined).with_highlights([(
         caret_start..caret_end,
         HighlightStyle {
@@ -1072,15 +1256,26 @@ fn render_text_field_content(
             ..Default::default()
         },
     )]);
-    div()
-        .w_full()
-        .min_w(px(0.0))
-        .text_color(text_main)
-        .child(styled)
-        .into_any_element()
+    let snap = InputLayoutSnapshot {
+        layout: styled.layout().clone(),
+        caret_inserted_at: Some(caret_start),
+        masked,
+    };
+    (
+        div()
+            .w_full()
+            .min_w(px(0.0))
+            .text_color(text_main)
+            .child(styled)
+            .into_any_element(),
+        Some(snap),
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_buffer_input(
+    layouts: &mut HashMap<InputTarget, InputLayoutSnapshot>,
+    target: InputTarget,
     buf: &TextBuffer,
     focused: bool,
     placeholder: &str,
@@ -1089,20 +1284,33 @@ fn render_buffer_input(
     caret: Rgba,
     caret_h: f32,
 ) -> gpui::AnyElement {
-    let (before, after) = buf.split_at_cursor();
-    render_text_field_content(
-        before,
-        after,
+    let (el, snap) = render_text_field_content(
+        buf.as_str(),
+        buf.cursor(),
+        buf.selection_range(),
         focused,
+        false,
         placeholder,
         text_main,
         text_dim,
         caret,
         caret_h,
-    )
+    );
+    match snap {
+        Some(s) => {
+            layouts.insert(target, s);
+        }
+        None => {
+            layouts.remove(&target);
+        }
+    }
+    el
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_masked_input(
+    layouts: &mut HashMap<InputTarget, InputLayoutSnapshot>,
+    target: InputTarget,
     buf: &TextBuffer,
     focused: bool,
     placeholder: &str,
@@ -1111,19 +1319,37 @@ fn render_masked_input(
     caret: Rgba,
     caret_h: f32,
 ) -> gpui::AnyElement {
-    let (before_raw, after_raw) = buf.split_at_cursor();
-    let before = "•".repeat(before_raw.chars().count());
-    let after = "•".repeat(after_raw.chars().count());
-    render_text_field_content(
-        &before,
-        &after,
+    let raw = buf.as_str();
+    let bullet_len = '•'.len_utf8();
+    let masked_text = "•".repeat(raw.chars().count());
+    let cursor_chars = raw[..buf.cursor().min(raw.len())].chars().count();
+    let masked_cursor = cursor_chars * bullet_len;
+    let masked_sel = buf.selection_range().map(|r| {
+        let s = raw[..r.start.min(raw.len())].chars().count() * bullet_len;
+        let e = raw[..r.end.min(raw.len())].chars().count() * bullet_len;
+        s..e
+    });
+    let (el, snap) = render_text_field_content(
+        &masked_text,
+        masked_cursor,
+        masked_sel,
         focused,
+        true,
         placeholder,
         text_main,
         text_dim,
         caret,
         caret_h,
-    )
+    );
+    match snap {
+        Some(s) => {
+            layouts.insert(target, s);
+        }
+        None => {
+            layouts.remove(&target);
+        }
+    }
+    el
 }
 
 fn render_markdown_blocks(text: &str, cx: &mut Context<HermesAppView>) -> Vec<gpui::AnyElement> {
@@ -1513,10 +1739,15 @@ impl Render for HermesAppView {
                         line.push_str(" — ");
                         line.push_str(d);
                     }
-                    if let Some(s) = summary {
-                        line.push_str(" · ");
-                        line.push_str(s);
-                    }
+                    let error_reason = if *state == ToolCardState::Failed {
+                        summary.clone()
+                    } else {
+                        if let Some(s) = summary {
+                            line.push_str(" · ");
+                            line.push_str(s);
+                        }
+                        None
+                    };
                     let preview_children: Vec<_> = if *state == ToolCardState::Running {
                         live_output
                             .iter()
@@ -1529,6 +1760,13 @@ impl Render for HermesAppView {
                                     .into_any_element()
                             })
                             .collect()
+                    } else if let Some(reason) = error_reason {
+                        vec![div()
+                            .w_full()
+                            .text_xs()
+                            .text_color(rgb(0xff9b9b))
+                            .child(SharedString::from(format!("↳ {reason}")))
+                            .into_any_element()]
                     } else {
                         Vec::new()
                     };
@@ -1764,6 +2002,8 @@ impl Render for HermesAppView {
                 .cloned()
                 .unwrap_or_default();
             let custom_display = render_buffer_input(
+                &mut self.input_layouts,
+                InputTarget::Clarify,
                 &custom_buf,
                 self.input_target == InputTarget::Clarify,
                 "Type a custom answer (Enter to submit)...",
@@ -1892,10 +2132,8 @@ impl Render for HermesAppView {
                         .child(custom_display)
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(|view, _, window, cx| {
-                                view.input_target = InputTarget::Clarify;
-                                window.focus(&view.focus_handle);
-                                cx.notify();
+                            cx.listener(|view, ev, window, cx| {
+                                view.handle_input_mouse_down(InputTarget::Clarify, ev, window, cx);
                             }),
                         ),
                 )
@@ -2093,6 +2331,8 @@ impl Render for HermesAppView {
                 .collect();
 
             let base_url_display = render_buffer_input(
+                &mut self.input_layouts,
+                InputTarget::Setup(SetupField::BaseUrl),
                 &self.setup.base_url,
                 self.input_target == InputTarget::Setup(SetupField::BaseUrl),
                 "https://api.example.com/v1",
@@ -2102,6 +2342,8 @@ impl Render for HermesAppView {
                 14.0,
             );
             let model_display = render_buffer_input(
+                &mut self.input_layouts,
+                InputTarget::Setup(SetupField::Model),
                 &self.setup.model,
                 self.input_target == InputTarget::Setup(SetupField::Model),
                 "Model identifier (e.g. gpt-4.1, deepseek-chat)",
@@ -2117,6 +2359,8 @@ impl Render for HermesAppView {
                 format!("Paste {key_label} (saved to .env with chmod 600)")
             };
             let api_key_display = render_masked_input(
+                &mut self.input_layouts,
+                InputTarget::Setup(SetupField::ApiKey),
                 &self.setup.api_key,
                 self.input_target == InputTarget::Setup(SetupField::ApiKey),
                 &key_placeholder,
@@ -2129,6 +2373,8 @@ impl Render for HermesAppView {
             let web_env_name = self.setup.web_env_name();
             let web_key_display = web_env_name.map(|var| {
                 render_masked_input(
+                    &mut self.input_layouts,
+                    InputTarget::Setup(SetupField::WebApiKey),
                     &self.setup.web_api_key,
                     self.input_target == InputTarget::Setup(SetupField::WebApiKey),
                     &format!("Optional {var} (leave blank to keep existing)"),
@@ -2305,11 +2551,13 @@ impl Render for HermesAppView {
                                     .child(base_url_display)
                                     .on_mouse_down(
                                         MouseButton::Left,
-                                        cx.listener(|view, _, window, cx| {
-                                            view.input_target =
-                                                InputTarget::Setup(SetupField::BaseUrl);
-                                            window.focus(&view.focus_handle);
-                                            cx.notify();
+                                        cx.listener(|view, ev, window, cx| {
+                                            view.handle_input_mouse_down(
+                                                InputTarget::Setup(SetupField::BaseUrl),
+                                                ev,
+                                                window,
+                                                cx,
+                                            );
                                         }),
                                     ),
                             ),
@@ -2352,10 +2600,13 @@ impl Render for HermesAppView {
                                 .child(model_display)
                                 .on_mouse_down(
                                     MouseButton::Left,
-                                    cx.listener(|view, _, window, cx| {
-                                        view.input_target = InputTarget::Setup(SetupField::Model);
-                                        window.focus(&view.focus_handle);
-                                        cx.notify();
+                                    cx.listener(|view, ev, window, cx| {
+                                        view.handle_input_mouse_down(
+                                            InputTarget::Setup(SetupField::Model),
+                                            ev,
+                                            window,
+                                            cx,
+                                        );
                                     }),
                                 ),
                         ),
@@ -2391,11 +2642,13 @@ impl Render for HermesAppView {
                                     .child(api_key_display)
                                     .on_mouse_down(
                                         MouseButton::Left,
-                                        cx.listener(|view, _, window, cx| {
-                                            view.input_target =
-                                                InputTarget::Setup(SetupField::ApiKey);
-                                            window.focus(&view.focus_handle);
-                                            cx.notify();
+                                        cx.listener(|view, ev, window, cx| {
+                                            view.handle_input_mouse_down(
+                                                InputTarget::Setup(SetupField::ApiKey),
+                                                ev,
+                                                window,
+                                                cx,
+                                            );
                                         }),
                                     ),
                             ),
@@ -2443,11 +2696,13 @@ impl Render for HermesAppView {
                                 .child(display)
                                 .on_mouse_down(
                                     MouseButton::Left,
-                                    cx.listener(|view, _, window, cx| {
-                                        view.input_target =
-                                            InputTarget::Setup(SetupField::WebApiKey);
-                                        window.focus(&view.focus_handle);
-                                        cx.notify();
+                                    cx.listener(|view, ev, window, cx| {
+                                        view.handle_input_mouse_down(
+                                            InputTarget::Setup(SetupField::WebApiKey),
+                                            ev,
+                                            window,
+                                            cx,
+                                        );
                                     }),
                                 )
                         })),
@@ -2652,6 +2907,8 @@ impl Render for HermesAppView {
 
         let workspace_label = short_folder_label(&self.workspace_root);
         let workspace_path_display = render_buffer_input(
+            &mut self.input_layouts,
+            InputTarget::WorkspacePath,
             &self.state.workspace_path_input,
             self.input_target == InputTarget::WorkspacePath,
             "Project path (Enter to switch)...",
@@ -2756,6 +3013,8 @@ impl Render for HermesAppView {
         });
 
         let search_display = render_buffer_input(
+            &mut self.input_layouts,
+            InputTarget::Search,
             &self.state.search_input,
             self.input_target == InputTarget::Search,
             "Search sessions...",
@@ -2765,6 +3024,8 @@ impl Render for HermesAppView {
             14.0,
         );
         let composer_display = render_buffer_input(
+            &mut self.input_layouts,
+            InputTarget::Composer,
             &self.state.composer_input,
             self.input_target == InputTarget::Composer,
             "Message Hermes... (@file/@diff, /help, !<cmd>, or drop/attach 📎 files)",
@@ -2900,10 +3161,13 @@ impl Render for HermesAppView {
                                     .child(workspace_path_display)
                                     .on_mouse_down(
                                         MouseButton::Left,
-                                        cx.listener(|view, _, window, cx| {
-                                            view.input_target = InputTarget::WorkspacePath;
-                                            window.focus(&view.focus_handle);
-                                            cx.notify();
+                                        cx.listener(|view, ev, window, cx| {
+                                            view.handle_input_mouse_down(
+                                                InputTarget::WorkspacePath,
+                                                ev,
+                                                window,
+                                                cx,
+                                            );
                                         }),
                                     ),
                             )
@@ -2938,10 +3202,13 @@ impl Render for HermesAppView {
                             .child(search_display)
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|view, _, window, cx| {
-                                    view.input_target = InputTarget::Search;
-                                    window.focus(&view.focus_handle);
-                                    cx.notify();
+                                cx.listener(|view, ev, window, cx| {
+                                    view.handle_input_mouse_down(
+                                        InputTarget::Search,
+                                        ev,
+                                        window,
+                                        cx,
+                                    );
                                 }),
                             ),
                     )
@@ -3149,10 +3416,13 @@ impl Render for HermesAppView {
                                     .child(composer_display)
                                     .on_mouse_down(
                                         MouseButton::Left,
-                                        cx.listener(|view, _, window, cx| {
-                                            view.input_target = InputTarget::Composer;
-                                            window.focus(&view.focus_handle);
-                                            cx.notify();
+                                        cx.listener(|view, ev, window, cx| {
+                                            view.handle_input_mouse_down(
+                                                InputTarget::Composer,
+                                                ev,
+                                                window,
+                                                cx,
+                                            );
                                         }),
                                     ),
                             )
@@ -3202,6 +3472,13 @@ impl Render for HermesAppView {
             .id("hermes-gui-root")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_mouse_move(cx.listener(Self::handle_input_mouse_move))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|view, _, _, _| {
+                    view.dragging_input = None;
+                }),
+            )
             .on_drop(cx.listener(|view, paths: &ExternalPaths, _, cx| {
                 view.attach_paths(paths.paths(), cx);
             }))
@@ -3334,7 +3611,7 @@ fn main() -> std::process::ExitCode {
             },
         );
     });
-    std::process::ExitCode::SUCCESS
+    std::process::exit(0);
 }
 
 #[cfg(test)]

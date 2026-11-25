@@ -600,6 +600,9 @@ fn find_owner_binary() -> PathBuf {
     PathBuf::from(if cfg!(windows) { "hsr.exe" } else { "hsr" })
 }
 
+static OWNER_STDINS: std::sync::OnceLock<std::sync::Mutex<Vec<std::process::ChildStdin>>> =
+    std::sync::OnceLock::new();
+
 async fn ensure_owner_running(profile: &Path) -> Result<(), String> {
     if matches!(
         send_v2_command(profile, GuiCommand::Ping).await,
@@ -611,7 +614,8 @@ async fn ensure_owner_running(profile: &Path) -> Result<(), String> {
     let mut cmd = Command::new(&owner_bin);
     cmd.arg("owner")
         .env("HSR_HOME", profile)
-        .stdin(Stdio::null())
+        .env("HSR_OWNER_EXIT_ON_STDIN_EOF", "1")
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     #[cfg(windows)]
@@ -620,12 +624,18 @@ async fn ensure_owner_running(profile: &Path) -> Result<(), String> {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    cmd.spawn().map_err(|e| {
+    let mut child = cmd.spawn().map_err(|e| {
         format!(
             "Failed spawning local owner ({}): {e}.",
             owner_bin.display()
         )
     })?;
+    if let Some(stdin) = child.stdin.take() {
+        let store = OWNER_STDINS.get_or_init(|| std::sync::Mutex::new(Vec::new()));
+        if let Ok(mut guard) = store.lock() {
+            guard.push(stdin);
+        }
+    }
 
     let deadline = Instant::now() + Duration::from_secs(4);
     while Instant::now() < deadline {

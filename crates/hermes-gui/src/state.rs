@@ -500,7 +500,10 @@ impl GuiState {
                 if let Some(FeedRow::Assistant(existing)) = self.feed.last_mut() {
                     existing.push_str(&text);
                 } else {
-                    self.feed.push(FeedRow::Assistant(text));
+                    let trimmed = text.trim_start_matches(['\r', '\n']);
+                    if !trimmed.trim().is_empty() {
+                        self.feed.push(FeedRow::Assistant(trimmed.to_owned()));
+                    }
                 }
             }
             TurnStreamEvent::ReasoningDelta { text } => {
@@ -1149,5 +1152,32 @@ mod tests {
         assert!(st.sessions.is_empty());
         assert!(st.selected_session_id.is_none());
         assert!(st.feed.is_empty());
+    }
+
+    #[test]
+    fn ignores_leading_whitespace_only_text_delta_before_tool_cards() {
+        let mut st = GuiState::new(PathBuf::from("/tmp/profile-a"));
+        st.active_turn_id = Some("t-1".into());
+        st.apply_turn_event(
+            "t-1",
+            SequencedTurnEvent {
+                seq: 1,
+                event: TurnStreamEvent::TextDelta {
+                    text: "\n\n  ".into(),
+                },
+            },
+        );
+        assert!(st.feed.is_empty());
+        st.apply_turn_event(
+            "t-1",
+            SequencedTurnEvent {
+                seq: 2,
+                event: TurnStreamEvent::ToolStarted {
+                    name: "execute_code".into(),
+                    detail: None,
+                },
+            },
+        );
+        assert_eq!(st.feed.len(), 1);
     }
 }

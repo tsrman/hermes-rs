@@ -401,6 +401,84 @@ mod _sandbox_os {
     }
 }
 
+/// Sandboxed `winreg` stub for Windows: Python's frozen `importlib._bootstrap_external`
+/// unconditionally executes `import winreg` when `sys.platform == "win32"`, and catches
+/// `OSError` from `OpenKey`/`QueryValue`. Exposing this stub lets the stdlib import machinery
+/// bootstrap cleanly on Windows without granting sandboxed scripts access to the Windows Registry.
+#[cfg_attr(not(windows), allow(dead_code))]
+#[rustpython_vm::pymodule(name = "winreg")]
+mod _sandbox_winreg {
+    use super::*;
+
+    #[pyattr]
+    const HKEY_CLASSES_ROOT: u64 = 0x8000_0000;
+    #[pyattr]
+    const HKEY_CURRENT_USER: u64 = 0x8000_0001;
+    #[pyattr]
+    const HKEY_LOCAL_MACHINE: u64 = 0x8000_0002;
+    #[pyattr]
+    const HKEY_USERS: u64 = 0x8000_0003;
+    #[pyattr]
+    const HKEY_CURRENT_CONFIG: u64 = 0x8000_0005;
+    #[pyattr]
+    const KEY_READ: u32 = 0x20019;
+    #[pyattr]
+    const REG_SZ: u32 = 1;
+
+    fn disabled(vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        Err(vm.new_os_error("Windows registry access is disabled in the Python sandbox"))
+    }
+
+    #[pyfunction(name = "OpenKey")]
+    fn open_key(
+        _key: PyObjectRef,
+        _sub_key: OptionalArg<PyObjectRef>,
+        _reserved: OptionalArg<PyObjectRef>,
+        _access: OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        disabled(vm)
+    }
+
+    #[pyfunction(name = "OpenKeyEx")]
+    fn open_key_ex(
+        _key: PyObjectRef,
+        _sub_key: OptionalArg<PyObjectRef>,
+        _reserved: OptionalArg<PyObjectRef>,
+        _access: OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        disabled(vm)
+    }
+
+    #[pyfunction(name = "QueryValue")]
+    fn query_value(
+        _key: PyObjectRef,
+        _sub_key: OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        disabled(vm)
+    }
+
+    #[pyfunction(name = "QueryValueEx")]
+    fn query_value_ex(
+        _key: PyObjectRef,
+        _value_name: OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        disabled(vm)
+    }
+
+    #[pyfunction(name = "EnumKey")]
+    fn enum_key(
+        _key: PyObjectRef,
+        _index: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        disabled(vm)
+    }
+}
+
 #[rustpython_vm::pymodule]
 mod _hermes_bridge {
     use super::*;
@@ -708,10 +786,15 @@ impl EmbeddedKernel {
                 let stdlib_defs = rustpython_stdlib::stdlib_module_defs(&builder.ctx);
                 let os_def = _sandbox_os::module_def(&builder.ctx);
                 let bridge_def = _hermes_bridge::module_def(&builder.ctx);
-                let interp = builder
+                #[cfg(windows)]
+                let winreg_def = _sandbox_winreg::module_def(&builder.ctx);
+                let builder = builder
                     .add_native_modules(&stdlib_defs)
                     .add_native_module(os_def)
-                    .add_native_module(bridge_def)
+                    .add_native_module(bridge_def);
+                #[cfg(windows)]
+                let builder = builder.add_native_module(winreg_def);
+                let interp = builder
                     .add_frozen_modules(rustpython_pylib::FROZEN_STDLIB)
                     .init_hook(move |vm| {
                         vm.set_user_signal_channel(signal_rx);
@@ -954,10 +1037,15 @@ fn run_stdio_worker_inner() -> Result<u8, String> {
     let stdlib_defs = rustpython_stdlib::stdlib_module_defs(&builder.ctx);
     let os_def = _sandbox_os::module_def(&builder.ctx);
     let bridge_def = _hermes_bridge::module_def(&builder.ctx);
-    let interp = builder
+    #[cfg(windows)]
+    let winreg_def = _sandbox_winreg::module_def(&builder.ctx);
+    let builder = builder
         .add_native_modules(&stdlib_defs)
         .add_native_module(os_def)
-        .add_native_module(bridge_def)
+        .add_native_module(bridge_def);
+    #[cfg(windows)]
+    let builder = builder.add_native_module(winreg_def);
+    let interp = builder
         .add_frozen_modules(rustpython_pylib::FROZEN_STDLIB)
         .build();
 
@@ -1323,5 +1411,46 @@ print(avg, wb["sheets"]["Data"][1])
                 "embedded worker thread remained blocked in time.sleep after shutdown"
             );
         }
+    }
+
+    #[test]
+    fn sandbox_winreg_stub_imports_and_raises_os_error_on_open_key() {
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let builder = Interpreter::builder(Settings::default());
+                let stdlib_defs = rustpython_stdlib::stdlib_module_defs(&builder.ctx);
+                let os_def = _sandbox_os::module_def(&builder.ctx);
+                let winreg_def = _sandbox_winreg::module_def(&builder.ctx);
+                let interp = builder
+                    .add_native_modules(&stdlib_defs)
+                    .add_native_module(os_def)
+                    .add_native_module(winreg_def)
+                    .add_frozen_modules(rustpython_pylib::FROZEN_STDLIB)
+                    .build();
+                interp.enter(|vm| {
+                    let scope = vm.new_scope_with_builtins();
+                    let code = vm
+                        .compile(
+                            concat!(
+                                "import winreg\n",
+                                "assert winreg.HKEY_CURRENT_USER > 0\n",
+                                "assert winreg.HKEY_LOCAL_MACHINE > 0\n",
+                                "raised = False\n",
+                                "try:\n",
+                                "    winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Software')\n",
+                                "except OSError:\n",
+                                "    raised = True\n",
+                                "assert raised\n",
+                            ),
+                            Mode::Exec,
+                            "<test-winreg>",
+                        )
+                        .expect("compile");
+                    vm.run_code_obj(code, scope).expect("winreg stub behavior");
+                });
+            })
+            .expect("spawn test thread");
+        handle.join().expect("winreg test thread panicked");
     }
 }

@@ -10,7 +10,7 @@ use hermes_runtime::skills_sync;
 
 use crate::editor::TextBuffer;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum SetupField {
     BaseUrl,
     Model,

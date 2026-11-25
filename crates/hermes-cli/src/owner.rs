@@ -66,11 +66,47 @@ pub async fn serve(home: &Path) -> Result<(), String> {
     let home = Arc::<Path>::from(home);
     let hub = TurnHub::new();
 
+    // When auto-spawned by `hsr-gui`, the GUI holds our stdin pipe open and drops it when the
+    // window closes. Once stdin reaches EOF and no turns are still running, exit cleanly so no
+    // background `hsr-gui` process lingers in Task Manager after the window is closed.
+    let exit_on_stdin_eof =
+        std::env::var_os("HSR_OWNER_EXIT_ON_STDIN_EOF").is_some_and(|v| !v.is_empty() && v != "0");
+    let (eof_tx, mut eof_rx) = tokio::sync::watch::channel(false);
+    if exit_on_stdin_eof {
+        std::thread::Builder::new()
+            .name("hsr-owner-stdin-watch".into())
+            .spawn(move || {
+                use std::io::Read;
+                let mut stdin = std::io::stdin().lock();
+                let mut buf = [0u8; 64];
+                loop {
+                    match stdin.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                }
+                let _ = eof_tx.send(true);
+            })
+            .ok();
+    }
+    let mut parent_gone = false;
+    let mut idle_poll = tokio::time::interval(std::time::Duration::from_millis(250));
+    idle_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     #[cfg(unix)]
     let result = loop {
+        if parent_gone && hub.active_turns().iter().all(|t| t.finished) {
+            break Ok(());
+        }
         tokio::select! {
             result = &mut interrupt => break result.map_err(|error| error.to_string()),
             _ = terminate.recv() => break Ok(()),
+            changed = eof_rx.changed(), if exit_on_stdin_eof && !parent_gone => {
+                if changed.is_err() || *eof_rx.borrow() {
+                    parent_gone = true;
+                }
+            }
+            _ = idle_poll.tick(), if parent_gone => {}
             Some(_) = connections.join_next(), if !connections.is_empty() => {},
             accepted = listener.accept() => match accepted {
                 Ok(stream) => {
@@ -85,8 +121,17 @@ pub async fn serve(home: &Path) -> Result<(), String> {
 
     #[cfg(not(unix))]
     let result = loop {
+        if parent_gone && hub.active_turns().iter().all(|t| t.finished) {
+            break Ok(());
+        }
         tokio::select! {
             result = &mut interrupt => break result.map_err(|error| error.to_string()),
+            changed = eof_rx.changed(), if exit_on_stdin_eof && !parent_gone => {
+                if changed.is_err() || *eof_rx.borrow() {
+                    parent_gone = true;
+                }
+            }
+            _ = idle_poll.tick(), if parent_gone => {}
             Some(_) = connections.join_next(), if !connections.is_empty() => {},
             accepted = listener.accept() => match accepted {
                 Ok(stream) => {

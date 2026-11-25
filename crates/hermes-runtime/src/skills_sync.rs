@@ -23,8 +23,8 @@ pub const DEFAULT_SKILLS_ARCHIVE_URL: &str =
 pub const SKILLS_ARCHIVE_URL_ENV: &str = "HERMES_SKILLS_ARCHIVE_URL";
 const BUNDLED_MANIFEST: &str = ".bundled_manifest";
 const NO_BUNDLED_MARKER: &str = ".no-bundled-skills";
-const MAX_ARCHIVE_BYTES: usize = 80 * 1024 * 1024;
-const MAX_SKILL_FILES: usize = 4096;
+const MAX_ARCHIVE_BYTES: usize = 256 * 1024 * 1024;
+const MAX_SKILL_FILES: usize = 8192;
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct SkillsSyncReport {
@@ -169,7 +169,7 @@ pub async fn sync_skills(home: &Path, opts: SkillsSyncOptions) -> Result<SkillsS
 
 async fn download_archive(url: &str) -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
+        .timeout(Duration::from_secs(180))
         .user_agent("hsr-skills-sync/1")
         .build()
         .map_err(|error| format!("cannot build HTTP client for skills sync: {error}"))?;
@@ -185,6 +185,14 @@ async fn download_archive(url: &str) -> Result<Vec<u8>, String> {
             "skills archive download failed with HTTP {} from {url}",
             resp.status().as_u16()
         ));
+    }
+
+    if let Some(len) = resp.content_length() {
+        if len > MAX_ARCHIVE_BYTES as u64 {
+            return Err(format!(
+                "skills archive ({len} bytes) exceeds maximum allowed size ({MAX_ARCHIVE_BYTES} bytes)"
+            ));
+        }
     }
 
     let mut buf = Vec::new();

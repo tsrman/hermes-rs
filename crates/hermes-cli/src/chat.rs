@@ -282,6 +282,9 @@ pub struct ChatRequest {
     startup_warnings: Vec<String>,
     #[serde(default)]
     state_scope: Option<String>,
+    /// Emit detailed tool details/error summaries, reasoning deltas, and live tool output.
+    #[serde(default)]
+    detailed_events: bool,
     /// Where the compression summary is made; the main route when unset.
     #[serde(default)]
     summary: Option<Route>,
@@ -757,6 +760,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         resume_display: settings.resume_display.clone(),
         startup_warnings,
         state_scope: None,
+        detailed_events: false,
         prefill,
         summary,
         delegate,
@@ -1063,6 +1067,7 @@ where
                 }
                 // Output or tool effects from a failed attempt cannot be replayed safely.
                 let mut started = false;
+                let detailed = request.state_scope.is_some() || request.detailed_events;
                 let result = run_turn(
                     &primary,
                     &fallbacks,
@@ -1077,7 +1082,7 @@ where
                             TurnEvent::ContextUsage { .. }
                                 | TurnEvent::Reasoning(_)
                                 | TurnEvent::ToolOutput { .. }
-                        ) && (json_mode || request.state_scope.is_none())
+                        ) && (json_mode || !detailed)
                         {
                             return;
                         }
@@ -1085,7 +1090,7 @@ where
                             receiving = emit(if json_mode {
                                 format_json_event(event)
                             } else {
-                                format_event(event, request.state_scope.is_some())
+                                format_event(event, detailed)
                             });
                         }
                     },
@@ -1474,6 +1479,7 @@ pub fn prepare_gui_turn(
     // GUI turns are interactive sessions driven over the local owner v2 protocol even though the
     // background `hsr owner` process itself has no controlling TTY on stdin.
     request.single_query = false;
+    request.detailed_events = true;
     request.approval_timeout_secs = request.terminal_approval_timeout_secs.or(Some(60));
     request.approval_policy = Some(std::sync::Arc::new(
         hermes_runtime::approval_policy::ApprovalPolicy::new(

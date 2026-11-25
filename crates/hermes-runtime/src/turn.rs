@@ -588,7 +588,7 @@ fn summarize_tool_result(
 
     if let Some(err) = err_text {
         let first_line = err.lines().find(|l| !l.trim().is_empty()).unwrap_or(err);
-        let clipped = collapse_and_clip(first_line, 64, keep_phone_numbers)?;
+        let clipped = collapse_and_clip(first_line, 180, keep_phone_numbers)?;
         return if let Some(code) = structured.get("exit_code").and_then(Value::as_i64) {
             Some(format!("exit {code} · {clipped}"))
         } else {
@@ -601,12 +601,18 @@ fn summarize_tool_result(
             let code = structured.get("exit_code").and_then(Value::as_i64);
             let snippet = if !succeeded {
                 structured
-                    .get("stderr")
-                    .or_else(|| structured.get("output"))
-                    .or_else(|| structured.get("stdout"))
+                    .get("traceback")
                     .and_then(Value::as_str)
-                    .and_then(|s| s.lines().find(|l| !l.trim().is_empty()))
-                    .and_then(|l| collapse_and_clip(l, 56, keep_phone_numbers))
+                    .and_then(|tb| tb.lines().rev().find(|l| !l.trim().is_empty()))
+                    .or_else(|| {
+                        structured
+                            .get("stderr")
+                            .or_else(|| structured.get("output"))
+                            .or_else(|| structured.get("stdout"))
+                            .and_then(Value::as_str)
+                            .and_then(|s| s.lines().find(|l| !l.trim().is_empty()))
+                    })
+                    .and_then(|l| collapse_and_clip(l, 180, keep_phone_numbers))
             } else {
                 None
             };
