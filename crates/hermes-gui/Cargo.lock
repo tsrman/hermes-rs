@@ -2793,7 +2793,7 @@ version = "0.1.0"
 
 [[package]]
 name = "hermes-gui"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "gpui",
  "hermes-runtime",
