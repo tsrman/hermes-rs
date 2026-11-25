@@ -31,6 +31,7 @@ enum InputTarget {
 
 struct HermesAppView {
     state: GuiState,
+    workspace_root: PathBuf,
     client: OwnerClient,
     rx: Receiver<BackendUpdate>,
     focus_handle: FocusHandle,
@@ -66,8 +67,10 @@ impl HermesAppView {
         })
         .detach();
 
+        let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self {
             state: GuiState::new(home),
+            workspace_root,
             client,
             rx,
             focus_handle,
@@ -197,13 +200,171 @@ impl HermesAppView {
             return;
         }
         self.state.composer_input.clear();
-        self.state.feed.push(FeedRow::User(text.clone()));
+        self.state.palette_index = 0;
+        self.state.palette_dismissed = false;
+
+        // Direct local shell escape: `!<command>`
+        if let Some(shell_cmd) = text.strip_prefix('!').filter(|_| !text.contains('\n')) {
+            match hermes_runtime::context_refs::run_shell_escape(&self.workspace_root, shell_cmd) {
+                Ok(out) => {
+                    let mut body = format!("$ {shell_cmd}\n");
+                    if !out.stdout.trim_end().is_empty() {
+                        body.push_str(out.stdout.trim_end());
+                    }
+                    if !out.stderr.trim_end().is_empty() {
+                        if !body.ends_with('\n') {
+                            body.push('\n');
+                        }
+                        body.push_str(out.stderr.trim_end());
+                    }
+                    if out.exit_code != 0 {
+                        body.push_str(&format!("\n(exit {})", out.exit_code));
+                    }
+                    self.state.feed.push(FeedRow::Notice {
+                        is_error: out.exit_code != 0,
+                        text: body,
+                    });
+                    self.state.status_message = format!("Shell exit {}", out.exit_code);
+                }
+                Err(err) => {
+                    self.state.feed.push(FeedRow::Notice {
+                        is_error: true,
+                        text: err.clone(),
+                    });
+                    self.state.status_message = err;
+                }
+            }
+            cx.notify();
+            return;
+        }
+
+        // Slash commands & installed `/<skill-name> [args]`
+        let mut effective_query = text.clone();
+        if let Some(command) = text.strip_prefix('/').filter(|_| !text.contains('\n')) {
+            let (name, arg) = command
+                .split_once(char::is_whitespace)
+                .map_or((command, ""), |(n, r)| (n, r.trim()));
+            match name {
+                "help" => {
+                    self.state.feed.push(FeedRow::Notice {
+                        is_error: false,
+                        text: "Commands: /new (/reset), /clear, /undo, /skills [search], /yolo, /<skill-name> [args]\nShortcuts: @file:path[:a-b], @folder:dir, @diff, @staged, @git:N, @url:https://..., !<shell cmd>, Ctrl+P palette".into(),
+                    });
+                    cx.notify();
+                    return;
+                }
+                "new" | "reset" => {
+                    self.state.start_new_chat();
+                    cx.notify();
+                    return;
+                }
+                "clear" => {
+                    self.state.feed.clear();
+                    self.state.status_message = "Cleared visible feed".into();
+                    cx.notify();
+                    return;
+                }
+                "yolo" => {
+                    self.state.yolo = !self.state.yolo;
+                    self.state.status_message = if self.state.yolo {
+                        "YOLO enabled".into()
+                    } else {
+                        "YOLO disabled".into()
+                    };
+                    cx.notify();
+                    return;
+                }
+                "undo" => {
+                    if let Some(sid) = self.state.selected_session_id.clone() {
+                        match hermes_runtime::storage::undo_last_turn(
+                            &self.state.active_profile,
+                            &sid,
+                        ) {
+                            Ok(0) => {
+                                self.state.status_message =
+                                    "Nothing to undo in this session".into();
+                            }
+                            Ok(removed) => {
+                                self.state.status_message =
+                                    format!("Undid last exchange ({removed} message(s) removed)");
+                                self.client
+                                    .load_session(self.state.active_profile.clone(), sid);
+                            }
+                            Err(err) => {
+                                self.state.feed.push(FeedRow::Notice {
+                                    is_error: true,
+                                    text: format!("Undo failed: {err}"),
+                                });
+                            }
+                        }
+                    } else {
+                        self.state.status_message = "No active saved session to undo".into();
+                    }
+                    cx.notify();
+                    return;
+                }
+                "skills" => {
+                    let skills = hermes_runtime::context_refs::list_skill_commands(Some(
+                        &self.state.active_profile,
+                    ));
+                    let filter = arg
+                        .strip_prefix("search")
+                        .unwrap_or(arg)
+                        .trim()
+                        .to_ascii_lowercase();
+                    let matched: Vec<_> = skills
+                        .into_iter()
+                        .filter(|s| {
+                            filter.is_empty()
+                                || s.name.contains(&filter)
+                                || s.description.to_ascii_lowercase().contains(&filter)
+                        })
+                        .collect();
+                    let body = if matched.is_empty() {
+                        "No installed skills found. Run `hsr skills sync` to download bundled skills.".into()
+                    } else {
+                        let mut lines = vec![format!(
+                            "Installed skills ({}) — invoke with /<name> [prompt]:",
+                            matched.len()
+                        )];
+                        for s in matched {
+                            lines.push(format!("  /{} — {}", s.name, s.description));
+                        }
+                        lines.join("\n")
+                    };
+                    self.state.feed.push(FeedRow::Notice {
+                        is_error: false,
+                        text: body,
+                    });
+                    cx.notify();
+                    return;
+                }
+                other => {
+                    if let Some(inv) = hermes_runtime::context_refs::resolve_skill_invocation(
+                        Some(&self.state.active_profile),
+                        &text,
+                    ) {
+                        self.state.status_message = format!("Running skill /{}...", inv.name);
+                        effective_query = inv.prompt;
+                    } else {
+                        self.state.feed.push(FeedRow::Notice {
+                            is_error: true,
+                            text: format!("Unknown command /{other}; type /help for commands."),
+                        });
+                        cx.notify();
+                        return;
+                    }
+                }
+            }
+        }
+
+        self.state.feed.push(FeedRow::User(text));
         self.state.streaming = true;
         self.state.status_message = "Starting turn...".into();
         self.client.start_turn(
             self.state.active_profile.clone(),
             self.state.selected_session_id.clone(),
-            text,
+            effective_query,
             self.state.yolo,
         );
         cx.notify();
@@ -273,12 +434,67 @@ impl HermesAppView {
             return;
         }
 
+        if primary && key.eq_ignore_ascii_case("p") && self.input_target == InputTarget::Composer {
+            if self.state.composer_input.is_empty() {
+                self.state.composer_input.insert_char('/');
+                self.state.palette_index = 0;
+                self.state.palette_dismissed = false;
+                cx.notify();
+            }
+            return;
+        }
+
         if primary && key.eq_ignore_ascii_case("c") && self.state.streaming {
             if let Some(tid) = self.state.active_turn_id.clone() {
                 self.client
                     .cancel_turn(self.state.active_profile.clone(), tid);
             }
             return;
+        }
+
+        // Navigate and apply `@` / `/` completion palette when active in the composer
+        if self.input_target == InputTarget::Composer {
+            if let Some((_, items)) = self.state.compute_completions(&self.workspace_root) {
+                match key {
+                    "up" => {
+                        self.state.palette_index = self.state.palette_index.saturating_sub(1);
+                        cx.notify();
+                        return;
+                    }
+                    "down" => {
+                        if self.state.palette_index + 1 < items.len() {
+                            self.state.palette_index += 1;
+                        }
+                        cx.notify();
+                        return;
+                    }
+                    "tab" => {
+                        let idx = self.state.palette_index.min(items.len() - 1);
+                        self.state.insert_completion(&items[idx]);
+                        cx.notify();
+                        return;
+                    }
+                    "enter" if !mods.shift => {
+                        let idx = self.state.palette_index.min(items.len() - 1);
+                        let chosen = items[idx].clone();
+                        if chosen.at_start.is_some() {
+                            self.state.insert_completion(&chosen);
+                            cx.notify();
+                            return;
+                        }
+                        self.state.composer_input.clear();
+                        self.state.composer_input.insert_str(&chosen.replacement);
+                        self.send_composer(cx);
+                        return;
+                    }
+                    "escape" => {
+                        self.state.palette_dismissed = true;
+                        cx.notify();
+                        return;
+                    }
+                    _ => {}
+                }
+            }
         }
 
         match key {
@@ -309,7 +525,10 @@ impl HermesAppView {
             "backspace" => {
                 if let Some(buf) = self.active_buffer_mut() {
                     if buf.backspace() {
-                        if self.input_target == InputTarget::Search {
+                        if self.input_target == InputTarget::Composer {
+                            self.state.palette_dismissed = false;
+                            self.state.palette_index = 0;
+                        } else if self.input_target == InputTarget::Search {
                             self.client.list_sessions(
                                 self.state.active_profile.clone(),
                                 self.state.search_input.as_str().to_owned(),
@@ -322,7 +541,10 @@ impl HermesAppView {
             "delete" => {
                 if let Some(buf) = self.active_buffer_mut() {
                     if buf.delete() {
-                        if self.input_target == InputTarget::Search {
+                        if self.input_target == InputTarget::Composer {
+                            self.state.palette_dismissed = false;
+                            self.state.palette_index = 0;
+                        } else if self.input_target == InputTarget::Search {
                             self.client.list_sessions(
                                 self.state.active_profile.clone(),
                                 self.state.search_input.as_str().to_owned(),
@@ -365,7 +587,10 @@ impl HermesAppView {
                         if let Some(buf) = self.active_buffer_mut() {
                             buf.insert_str(ch);
                         }
-                        if self.input_target == InputTarget::Search {
+                        if self.input_target == InputTarget::Composer {
+                            self.state.palette_dismissed = false;
+                            self.state.palette_index = 0;
+                        } else if self.input_target == InputTarget::Search {
                             self.client.list_sessions(
                                 self.state.active_profile.clone(),
                                 self.state.search_input.as_str().to_owned(),
@@ -959,13 +1184,81 @@ impl Render for HermesAppView {
                 )
         });
 
+        let completion_panel = if self.input_target == InputTarget::Composer {
+            self.state
+                .compute_completions(&self.workspace_root)
+                .map(|(title, items)| {
+                    let selected_idx = self.state.palette_index.min(items.len().saturating_sub(1));
+                    let rows: Vec<_> = items
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, item)| {
+                            let is_sel = idx == selected_idx;
+                            let item_clone = item.clone();
+                            div()
+                                .px_2()
+                                .py_1()
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .bg(if is_sel { bg_user } else { bg_sidebar })
+                                .flex()
+                                .flex_row()
+                                .justify_between()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(if is_sel { accent } else { text_main })
+                                        .child(SharedString::from(item.display)),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(text_dim)
+                                        .child(SharedString::from(item.detail)),
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |view, _, window, cx| {
+                                        view.state.insert_completion(&item_clone);
+                                        view.input_target = InputTarget::Composer;
+                                        window.focus(&view.focus_handle);
+                                        cx.notify();
+                                    }),
+                                )
+                        })
+                        .collect();
+
+                    div()
+                        .mx_4()
+                        .mb_2()
+                        .p_2()
+                        .rounded_lg()
+                        .bg(bg_sidebar)
+                        .border_1()
+                        .border_color(accent)
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(accent)
+                                .child(SharedString::from(title)),
+                        )
+                        .children(rows)
+                })
+        } else {
+            None
+        };
+
         let search_display = self.state.search_input.display(
             self.input_target == InputTarget::Search,
             "Search sessions...",
         );
         let composer_display = self.state.composer_input.display(
             self.input_target == InputTarget::Composer,
-            "Message Hermes... (Enter send, Shift+Enter newline, Ctrl+V paste, Esc cancel)",
+            "Message Hermes... (@file/@diff, /help, !<cmd>, Shift+Enter newline)",
         );
         let header_session = self
             .state
@@ -1185,9 +1478,10 @@ impl Render for HermesAppView {
                             .gap_2()
                             .children(feed_ui),
                     )
-                    // Pending approval or clarify modal card
+                    // Pending approval, clarify modal, or `@` / `/` completion popup
                     .children(approval_panel)
                     .children(clarify_panel)
+                    .children(completion_panel)
                     // Composer bar
                     .child(
                         div()

@@ -1,7 +1,9 @@
 //! Pure UI state model for `hermes-gui` (unit-testable without a display server).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use hermes_runtime::context_refs::{complete_at_references, list_skill_commands};
 
 use hermes_runtime::local_owner::{
     ActiveTurnSummary, ProfileEntry, SequencedTurnEvent, SessionSummary, TranscriptItem,
@@ -154,6 +156,24 @@ pub struct PendingApproval {
     pub request: ApprovalRequest,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompletionItem {
+    pub replacement: String,
+    pub display: String,
+    pub detail: String,
+    pub at_start: Option<usize>,
+}
+
+const GUI_SLASH_COMMANDS: &[(&str, &str)] = &[
+    ("/help", "show commands & @ / ! shortcuts"),
+    ("/new", "start a new conversation"),
+    ("/reset", "alias for /new"),
+    ("/clear", "clear the visible chat feed"),
+    ("/undo", "roll back the last exchange in this session"),
+    ("/skills", "list or search installed skills"),
+    ("/yolo", "toggle auto-approve mode"),
+];
+
 #[derive(Clone, Debug)]
 pub struct GuiState {
     pub active_profile: PathBuf,
@@ -169,6 +189,8 @@ pub struct GuiState {
     pub pending_approval: Option<PendingApproval>,
     pub pending_clarify: Option<PendingClarify>,
     pub composer_input: TextBuffer,
+    pub palette_index: usize,
+    pub palette_dismissed: bool,
     pub yolo: bool,
     pub owner_connected: bool,
     pub status_message: String,
@@ -190,10 +212,93 @@ impl GuiState {
             pending_approval: None,
             pending_clarify: None,
             composer_input: TextBuffer::new(),
+            palette_index: 0,
+            palette_dismissed: false,
             yolo: false,
             owner_connected: false,
             status_message: "Connecting to local session owner...".into(),
         }
+    }
+
+    /// Compute `@` context-reference or `/` command+skill completions for the composer.
+    pub fn compute_completions(&self, root: &Path) -> Option<(&'static str, Vec<CompletionItem>)> {
+        if self.streaming
+            || self.pending_approval.is_some()
+            || self.pending_clarify.is_some()
+            || self.palette_dismissed
+        {
+            return None;
+        }
+        let text = self.composer_input.as_str();
+        let cursor = self.composer_input.cursor();
+        if let Some((at_start, token)) = active_at_token(text, cursor) {
+            let items: Vec<CompletionItem> = complete_at_references(root, token, 8)
+                .into_iter()
+                .map(|c| CompletionItem {
+                    replacement: c.replacement,
+                    display: c.display,
+                    detail: c.detail,
+                    at_start: Some(at_start),
+                })
+                .collect();
+            if !items.is_empty() {
+                return Some((
+                    "Context (@file / @folder / @diff) — Tab or click to insert",
+                    items,
+                ));
+            }
+        }
+        if text.starts_with('/') && !text.contains(char::is_whitespace) {
+            let lower = text.to_ascii_lowercase();
+            let mut items: Vec<CompletionItem> = GUI_SLASH_COMMANDS
+                .iter()
+                .filter(|(cmd, _)| cmd.starts_with(&lower))
+                .map(|(cmd, desc)| CompletionItem {
+                    replacement: (*cmd).to_owned(),
+                    display: (*cmd).to_owned(),
+                    detail: (*desc).to_owned(),
+                    at_start: None,
+                })
+                .collect();
+            let skill_needle = &lower[1..];
+            for skill in list_skill_commands(Some(&self.active_profile)) {
+                if skill_needle.is_empty() || skill.name.starts_with(skill_needle) {
+                    let slash = format!("/{}", skill.name);
+                    if !items.iter().any(|i| i.replacement == slash) {
+                        items.push(CompletionItem {
+                            replacement: slash.clone(),
+                            display: slash,
+                            detail: format!("[skill] {}", skill.description),
+                            at_start: None,
+                        });
+                    }
+                }
+            }
+            if !items.is_empty() {
+                return Some(("Commands & Skills — Tab to complete, Enter to run", items));
+            }
+        }
+        None
+    }
+
+    /// Insert a selected `@` or `/` completion into the composer.
+    pub fn insert_completion(&mut self, item: &CompletionItem) {
+        if let Some(at_start) = item.at_start {
+            let mut text = item.replacement.clone();
+            if !text.ends_with(':') {
+                text.push(' ');
+            }
+            self.composer_input.replace_range_to_cursor(at_start, &text);
+        } else {
+            self.composer_input.clear();
+            let mut text = item.replacement.clone();
+            if text == "/skills" || item.detail.starts_with("[skill]") {
+                text.push(' ');
+            }
+            self.composer_input.insert_str(&text);
+        }
+        self.palette_index = 0;
+        self.palette_dismissed = false;
     }
 
     pub fn reset_for_profile(&mut self, profile: PathBuf) {
@@ -408,6 +513,15 @@ impl GuiState {
             }
         }
     }
+}
+
+fn active_at_token(input: &str, cursor: usize) -> Option<(usize, &str)> {
+    let before = input.get(..cursor)?;
+    let start = before.rfind(char::is_whitespace).map_or(0, |idx| {
+        idx + before[idx..].chars().next().map_or(1, char::len_utf8)
+    });
+    let token = &before[start..];
+    token.starts_with('@').then_some((start, token))
 }
 
 fn truncate_preview(text: &str, max_chars: usize) -> String {
@@ -626,5 +740,39 @@ mod tests {
             finished: false,
         }]);
         assert_eq!(sub, Some(("turn-live".into(), 5)));
+    }
+
+    #[test]
+    fn computes_and_inserts_at_and_skill_completions() {
+        let dir = std::env::temp_dir().join(format!("hsr-gui-comp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let work = dir.join("work");
+        let profile = dir.join("profile");
+        std::fs::create_dir_all(work.join("src")).unwrap();
+        std::fs::write(work.join("src/lib.rs"), "pub fn x() {}").unwrap();
+        std::fs::create_dir_all(profile.join("skills/dev/audit")).unwrap();
+        std::fs::write(
+            profile.join("skills/dev/audit/SKILL.md"),
+            "---\nname: audit\ndescription: Run audit\n---\nBody",
+        )
+        .unwrap();
+
+        let mut st = GuiState::new(profile);
+        st.composer_input.insert_str("Review @lib");
+        let (_, at_items) = st.compute_completions(&work).expect("at completions");
+        let file_item = at_items
+            .iter()
+            .find(|i| i.replacement == "@file:src/lib.rs")
+            .cloned()
+            .expect("lib.rs completion");
+        st.insert_completion(&file_item);
+        assert_eq!(st.composer_input.as_str(), "Review @file:src/lib.rs ");
+
+        st.composer_input.clear();
+        st.composer_input.insert_str("/au");
+        let (_, slash_items) = st.compute_completions(&work).expect("slash completions");
+        assert!(slash_items.iter().any(|i| i.replacement == "/audit"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

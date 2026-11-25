@@ -20,9 +20,21 @@ impl TextBuffer {
         self.text.is_empty()
     }
 
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;
+    }
+
+    pub fn replace_range_to_cursor(&mut self, start: usize, replacement: &str) {
+        let clamped = start.min(self.cursor);
+        if self.text.is_char_boundary(clamped) && self.text.is_char_boundary(self.cursor) {
+            self.text.replace_range(clamped..self.cursor, replacement);
+            self.cursor = clamped + replacement.len();
+        }
     }
 
     pub fn insert_str(&mut self, s: &str) {
