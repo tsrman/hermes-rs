@@ -29,6 +29,13 @@ pub fn undo_last_turn(profile: &Path, session_id: &str) -> Result<usize, Storage
     SessionWriter::undo_last_turn(profile, session_id)
 }
 
+/// Permanently delete a saved session and all of its messages from `<profile>/state.db`.
+///
+/// Returns `Ok(true)` if the session existed and was removed, or `Ok(false)` if not found.
+pub fn delete_session(profile: &Path, session_id: &str) -> Result<bool, StorageError> {
+    SessionWriter::delete_session(profile, session_id)
+}
+
 pub(super) const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 const SCHEMA_VERSION: i64 = 33;
 const LEGACY_SCHEMA_VERSION: i64 = 32;

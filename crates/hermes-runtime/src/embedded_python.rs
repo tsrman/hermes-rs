@@ -850,7 +850,22 @@ impl Drop for EmbeddedKernel {
 /// Communicates with the host over stdin/stdout JSON lines using the same cell + tool-bridge
 /// protocol as the in-process kernel, so timeouts terminate the OS process cleanly even inside
 /// long-running builtins or tight loops.
+///
+/// Runs the RustPython VM on a dedicated 8 MiB stack thread because Windows MSVC binaries default
+/// to a 1 MiB main thread stack, which overflows while initializing/compiling frozen stdlib code.
 pub fn run_stdio_worker() -> Result<u8, String> {
+    let handle = std::thread::Builder::new()
+        .name("hsr-rustpython".into())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(run_stdio_worker_inner)
+        .map_err(|e| format!("failed spawning embedded Python worker thread: {e}"))?;
+    match handle.join() {
+        Ok(res) => res,
+        Err(_) => Err("embedded Python worker panicked".into()),
+    }
+}
+
+fn run_stdio_worker_inner() -> Result<u8, String> {
     let mut init_line = String::new();
     let n = std::io::stdin()
         .read_line(&mut init_line)
@@ -1010,6 +1025,7 @@ impl EmbeddedSubprocessKernel {
             .kill_on_drop(true);
         for key in [
             "PATH",
+            "PATHEXT",
             "LD_LIBRARY_PATH",
             "SYSTEMROOT",
             "COMSPEC",
@@ -1024,6 +1040,8 @@ impl EmbeddedSubprocessKernel {
         }
         #[cfg(unix)]
         command.process_group(0);
+        #[cfg(windows)]
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
 
         let mut child = command.spawn().map_err(|e| e.to_string())?;
         #[cfg(unix)]

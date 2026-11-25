@@ -190,6 +190,7 @@ pub struct GuiState {
     pub search_input: TextBuffer,
     pub selected_session_id: Option<String>,
     pub selected_session_title: Option<String>,
+    pub confirm_delete_session_id: Option<String>,
     pub feed: Vec<FeedRow>,
     pub active_turn_id: Option<String>,
     pub last_seq: u64,
@@ -218,6 +219,7 @@ impl GuiState {
             search_input: TextBuffer::new(),
             selected_session_id: None,
             selected_session_title: None,
+            confirm_delete_session_id: None,
             feed: Vec::new(),
             active_turn_id: None,
             last_seq: 0,
@@ -358,6 +360,7 @@ impl GuiState {
         self.resume_any_on_connect = false;
         self.selected_session_id = None;
         self.selected_session_title = None;
+        self.confirm_delete_session_id = None;
         self.feed.clear();
         self.attachments.clear();
         self.active_turn_id = None;
@@ -373,6 +376,17 @@ impl GuiState {
         self.selected_session_id = Some(id);
         self.loading_session = true;
         self.status_message = "Loading session...".into();
+    }
+
+    pub fn handle_session_deleted(&mut self, session_id: &str) {
+        self.sessions.retain(|s| s.id != session_id);
+        if self.confirm_delete_session_id.as_deref() == Some(session_id) {
+            self.confirm_delete_session_id = None;
+        }
+        if self.selected_session_id.as_deref() == Some(session_id) {
+            self.start_new_chat();
+        }
+        self.status_message = format!("Deleted session {session_id}");
     }
 
     pub fn load_transcript(
@@ -1013,5 +1027,43 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn handle_session_deleted_removes_entry_and_clears_active_view_if_selected() {
+        let mut st = GuiState::new(PathBuf::from("/tmp/profile-a"));
+        st.sessions = vec![
+            SessionSummary {
+                id: "sess-1".into(),
+                title: Some("First".into()),
+                model: None,
+                started_at: 1.0,
+                message_count: 2,
+            },
+            SessionSummary {
+                id: "sess-2".into(),
+                title: Some("Second".into()),
+                model: None,
+                started_at: 2.0,
+                message_count: 4,
+            },
+        ];
+        st.selected_session_id = Some("sess-1".into());
+        st.feed.push(FeedRow::User("hello".into()));
+        st.confirm_delete_session_id = Some("sess-2".into());
+
+        // Deleting a non-selected session keeps the active conversation intact.
+        st.handle_session_deleted("sess-2");
+        assert_eq!(st.sessions.len(), 1);
+        assert_eq!(st.sessions[0].id, "sess-1");
+        assert_eq!(st.selected_session_id.as_deref(), Some("sess-1"));
+        assert_eq!(st.feed.len(), 1);
+        assert!(st.confirm_delete_session_id.is_none());
+
+        // Deleting the currently selected session resets to a clean new chat.
+        st.handle_session_deleted("sess-1");
+        assert!(st.sessions.is_empty());
+        assert!(st.selected_session_id.is_none());
+        assert!(st.feed.is_empty());
     }
 }

@@ -389,6 +389,27 @@ async fn handle_v2(
             };
             write_frame(&mut stream, &reply).await
         }
+        GuiCommand::DeleteSession { session_id } => {
+            let reply = if hub.active_turn_for_session(&session_id).is_some() {
+                GuiReply::Error {
+                    message:
+                        "Cannot delete a conversation while a turn is running. Cancel it first."
+                            .into(),
+                }
+            } else {
+                match hermes_runtime::storage::delete_session(&home, &session_id) {
+                    Ok(_) => {
+                        hermes_runtime::terminal::forget_session(&session_id);
+                        hub.forget_session_grants(&session_id);
+                        GuiReply::Ack
+                    }
+                    Err(err) => GuiReply::Error {
+                        message: err.to_string(),
+                    },
+                }
+            };
+            write_frame(&mut stream, &reply).await
+        }
         GuiCommand::ActiveTurns => {
             let turns = hub.active_turns();
             write_frame(&mut stream, &GuiReply::ActiveTurns { turns }).await
@@ -414,7 +435,13 @@ async fn handle_v2(
                 }
             };
             hermes_runtime::approval_policy::warm_up();
-            let handle = hub.create_turn(session_id, query);
+            let policy = request.approval_policy();
+            if let (Some(sid), Some(pol)) = (session_id.as_deref(), policy.as_deref()) {
+                if let Some(saved) = hub.session_grants(sid) {
+                    pol.apply_session_grants(&saved);
+                }
+            }
+            let handle = hub.create_turn_with_policy(session_id, query, policy);
             let turn_id = handle.turn_id();
             let home_bg = Arc::clone(&home);
             tokio::spawn(async move {
@@ -465,9 +492,13 @@ async fn handle_v2(
             turn_id,
             approval_id,
             decision,
+            scope,
         } => {
-            let reply = match hub.respond_approval(&turn_id, approval_id, decision) {
-                Ok(()) => GuiReply::Ack,
+            let reply = match hub.respond_approval(&turn_id, approval_id, decision, scope) {
+                Ok(None) => GuiReply::Ack,
+                Ok(Some(warn)) => GuiReply::Error {
+                    message: format!("Approved, but failed saving permanent setting: {warn}"),
+                },
                 Err(message) => GuiReply::Error { message },
             };
             write_frame(&mut stream, &reply).await

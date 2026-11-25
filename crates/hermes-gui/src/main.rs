@@ -20,6 +20,7 @@ use gpui::{
     SharedString, StyledText, TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 use hermes_runtime::config::profile_home;
+use hermes_runtime::local_owner::ApprovalScope;
 use hermes_runtime::turn::{ApprovalAction, ApprovalDecision};
 
 use crate::editor::TextBuffer;
@@ -159,6 +160,16 @@ impl HermesAppView {
                 }
                 BackendUpdate::SessionsLoaded(sessions) => {
                     self.state.sessions = sessions;
+                }
+                BackendUpdate::SessionDeleted { session_id } => {
+                    if self.state.selected_session_id.as_deref() == Some(session_id.as_str()) {
+                        self.client.change_view();
+                    }
+                    self.state.handle_session_deleted(&session_id);
+                    self.client.list_sessions(
+                        self.state.active_profile.clone(),
+                        self.state.search_input.as_str().to_owned(),
+                    );
                 }
                 BackendUpdate::TranscriptLoaded {
                     session,
@@ -718,6 +729,7 @@ impl HermesAppView {
             clarify.turn_id,
             clarify.approval_id,
             decision,
+            ApprovalScope::Once,
         );
         self.input_target = InputTarget::Composer;
         cx.notify();
@@ -732,6 +744,7 @@ impl HermesAppView {
             clarify.turn_id,
             clarify.approval_id,
             PendingClarify::build_cancelled_decision(),
+            ApprovalScope::Once,
         );
         self.input_target = InputTarget::Composer;
         cx.notify();
@@ -841,6 +854,11 @@ impl HermesAppView {
                     _ => {}
                 }
             }
+        }
+
+        if key == "escape" && self.state.confirm_delete_session_id.take().is_some() {
+            cx.notify();
+            return;
         }
 
         match key {
@@ -1228,8 +1246,37 @@ fn render_markdown_blocks(text: &str, cx: &mut Context<HermesAppView>) -> Vec<gp
         .collect()
 }
 
+#[cfg(target_os = "windows")]
+fn toggle_maximize_window(window: &Window) {
+    use core::ffi::c_void;
+
+    const SW_MAXIMIZE: i32 = 3;
+    const SW_RESTORE: i32 = 9;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetActiveWindow() -> *mut c_void;
+        fn IsZoomed(hwnd: *mut c_void) -> i32;
+        fn ShowWindowAsync(hwnd: *mut c_void, cmd_show: i32) -> i32;
+    }
+
+    let hwnd = unsafe { GetActiveWindow() };
+    if !hwnd.is_null() {
+        let cmd = if unsafe { IsZoomed(hwnd) } != 0 || window.is_maximized() {
+            SW_RESTORE
+        } else {
+            SW_MAXIMIZE
+        };
+        unsafe {
+            ShowWindowAsync(hwnd, cmd);
+        }
+    } else if !window.is_maximized() {
+        window.zoom_window();
+    }
+}
+
 impl Render for HermesAppView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bg_app = rgb(0x11141a);
         let bg_sidebar = rgb(0x161b24);
         let bg_card = rgb(0x1d2432);
@@ -1286,7 +1333,10 @@ impl Render for HermesAppView {
             .iter()
             .map(|sess| {
                 let sid = sess.id.clone();
+                let sid_del = sess.id.clone();
                 let selected = self.state.selected_session_id.as_deref() == Some(sid.as_str());
+                let confirming_delete =
+                    self.state.confirm_delete_session_id.as_deref() == Some(sid.as_str());
                 let title = sess
                     .title
                     .clone()
@@ -1309,14 +1359,77 @@ impl Render for HermesAppView {
                     .cursor_pointer()
                     .bg(if selected { bg_user } else { bg_sidebar })
                     .border_1()
-                    .border_color(if selected { accent } else { border })
+                    .border_color(if confirming_delete {
+                        red
+                    } else if selected {
+                        accent
+                    } else {
+                        border
+                    })
                     .child(
                         div()
                             .w_full()
                             .min_w(px(0.0))
-                            .text_sm()
-                            .text_color(text_main)
-                            .child(SharedString::from(title)),
+                            .flex()
+                            .flex_row()
+                            .items_start()
+                            .justify_between()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .text_sm()
+                                    .text_color(text_main)
+                                    .child(SharedString::from(title)),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .px_1()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .bg(if confirming_delete {
+                                        red
+                                    } else {
+                                        gpui::rgba(0x00000000)
+                                    })
+                                    .text_color(if confirming_delete {
+                                        rgb(0xffffff)
+                                    } else {
+                                        text_dim
+                                    })
+                                    .hover(move |s| {
+                                        if confirming_delete {
+                                            s.bg(rgb(0xd93830)).text_color(rgb(0xffffff))
+                                        } else {
+                                            s.bg(rgb(0x3a1820)).text_color(red)
+                                        }
+                                    })
+                                    .child(if confirming_delete { "Del?" } else { "×" })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |view, _, _, cx| {
+                                            cx.stop_propagation();
+                                            if view.state.confirm_delete_session_id.as_deref()
+                                                == Some(sid_del.as_str())
+                                            {
+                                                view.state.confirm_delete_session_id = None;
+                                                view.state.status_message =
+                                                    format!("Deleting session {sid_del}...");
+                                                view.client.delete_session(
+                                                    view.state.active_profile.clone(),
+                                                    sid_del.clone(),
+                                                );
+                                            } else {
+                                                view.state.confirm_delete_session_id =
+                                                    Some(sid_del.clone());
+                                            }
+                                            cx.notify();
+                                        }),
+                                    ),
+                            ),
                     )
                     .child(
                         div()
@@ -1329,6 +1442,7 @@ impl Render for HermesAppView {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |view, _, _, cx| {
+                            view.state.confirm_delete_session_id = None;
                             view.load_session(sid.clone());
                             cx.notify();
                         }),
@@ -1348,7 +1462,6 @@ impl Render for HermesAppView {
                     .child(
                         div()
                             .max_w(px(720.0))
-                            .min_w(px(0.0))
                             .px_3()
                             .py_2()
                             .rounded_lg()
@@ -1410,9 +1523,8 @@ impl Render for HermesAppView {
                         .justify_start()
                         .child(
                             div()
+                                .w_full()
                                 .max_w(px(780.0))
-                                .min_w(px(0.0))
-                                .overflow_hidden()
                                 .px_3()
                                 .py_1()
                                 .rounded_md()
@@ -1436,8 +1548,8 @@ impl Render for HermesAppView {
                     .justify_start()
                     .child(
                         div()
+                            .w_full()
                             .max_w(px(780.0))
-                            .min_w(px(0.0))
                             .px_3()
                             .py_1()
                             .rounded_md()
@@ -1450,8 +1562,10 @@ impl Render for HermesAppView {
             .collect();
 
         let approval_panel = self.state.pending_approval.clone().map(|pending| {
-            let tid_a = pending.turn_id.clone();
-            let tid_d = pending.turn_id.clone();
+            let tid_once = pending.turn_id.clone();
+            let tid_session = pending.turn_id.clone();
+            let tid_always = pending.turn_id.clone();
+            let tid_deny = pending.turn_id.clone();
             let aid = pending.approval_id;
             let kind_label = match pending.request.action {
                 ApprovalAction::CreateFile => "Create file",
@@ -1460,6 +1574,13 @@ impl Render for HermesAppView {
                 ApprovalAction::RunCode => "Run Python code",
                 ApprovalAction::ManageSkills => "Modify skills",
                 ApprovalAction::Clarify => "Clarify question",
+            };
+            let always_hint = match pending.request.action {
+                ApprovalAction::RunCommand => {
+                    "Always saves flagged pattern(s) to command_allowlist in config.yaml"
+                }
+                ApprovalAction::RunCode => "Always saves approvals.code: off in config.yaml",
+                _ => "Always saves approvals.edits: off in config.yaml",
             };
             let title = format!(
                 "Approval required: {kind_label} ({})",
@@ -1497,6 +1618,8 @@ impl Render for HermesAppView {
                     div()
                         .flex()
                         .flex_row()
+                        .flex_wrap()
+                        .items_center()
                         .gap_2()
                         .child(
                             div()
@@ -1513,9 +1636,58 @@ impl Render for HermesAppView {
                                     cx.listener(move |view, _, _, cx| {
                                         view.client.respond_approval(
                                             view.state.active_profile.clone(),
-                                            tid_a.clone(),
+                                            tid_once.clone(),
                                             aid,
                                             ApprovalDecision::Approved,
+                                            ApprovalScope::Once,
+                                        );
+                                        cx.notify();
+                                    }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .bg(accent)
+                                .text_color(rgb(0x0b1017))
+                                .text_xs()
+                                .child("For session")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |view, _, _, cx| {
+                                        view.client.respond_approval(
+                                            view.state.active_profile.clone(),
+                                            tid_session.clone(),
+                                            aid,
+                                            ApprovalDecision::Approved,
+                                            ApprovalScope::Session,
+                                        );
+                                        cx.notify();
+                                    }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .bg(rgb(0x8957e5))
+                                .text_color(rgb(0xffffff))
+                                .text_xs()
+                                .child("Always (save)")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |view, _, _, cx| {
+                                        view.client.respond_approval(
+                                            view.state.active_profile.clone(),
+                                            tid_always.clone(),
+                                            aid,
+                                            ApprovalDecision::Approved,
+                                            ApprovalScope::Always,
                                         );
                                         cx.notify();
                                     }),
@@ -1536,14 +1708,21 @@ impl Render for HermesAppView {
                                     cx.listener(move |view, _, _, cx| {
                                         view.client.respond_approval(
                                             view.state.active_profile.clone(),
-                                            tid_d.clone(),
+                                            tid_deny.clone(),
                                             aid,
                                             ApprovalDecision::Denied,
+                                            ApprovalScope::Once,
                                         );
                                         cx.notify();
                                     }),
                                 ),
                         ),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(text_dim)
+                        .child(SharedString::from(always_hint)),
                 )
         });
 
@@ -2379,9 +2558,9 @@ impl Render for HermesAppView {
         } else {
             div()
                 .id("chat-feed")
+                .w_full()
                 .flex_1()
                 .min_h(px(0.0))
-                .min_w(px(0.0))
                 .overflow_y_scroll()
                 .p_4()
                 .flex()
@@ -2952,6 +3131,12 @@ impl Render for HermesAppView {
             .bg(bg_app)
             .text_color(text_main);
 
+        #[cfg(not(target_os = "windows"))]
+        let _ = window;
+
+        #[cfg(target_os = "windows")]
+        let is_maximized = window.is_maximized();
+
         #[cfg(target_os = "windows")]
         let root = root.child(
             div()
@@ -3003,10 +3188,10 @@ impl Render for HermesAppView {
                         .text_xs()
                         .text_color(text_main)
                         .hover(|s| s.bg(bg_card))
-                        .child("□")
+                        .child(if is_maximized { "❐" } else { "□" })
                         .on_mouse_down(MouseButton::Left, |_, window, cx| {
                             cx.stop_propagation();
-                            window.zoom_window();
+                            toggle_maximize_window(window);
                         }),
                 )
                 .child(

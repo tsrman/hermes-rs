@@ -10,9 +10,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use hermes_runtime::local_owner::{
-    self, read_frame, send_v2_command, write_frame, ActiveTurnSummary, GuiCommand, GuiReply,
-    ProfileEntry, SequencedTurnEvent, SessionSummary, TranscriptItem, TurnStreamEvent, V2Envelope,
-    PROTOCOL_V2,
+    self, read_frame, send_v2_command, write_frame, ActiveTurnSummary, ApprovalScope, GuiCommand,
+    GuiReply, ProfileEntry, SequencedTurnEvent, SessionSummary, TranscriptItem, TurnStreamEvent,
+    V2Envelope, PROTOCOL_V2,
 };
 use hermes_runtime::turn::ApprovalDecision;
 use tokio::runtime::Runtime;
@@ -33,6 +33,9 @@ pub enum BackendUpdate {
         profile: PathBuf,
     },
     SessionsLoaded(Vec<SessionSummary>),
+    SessionDeleted {
+        session_id: String,
+    },
     TranscriptLoaded {
         session: SessionSummary,
         messages: Vec<TranscriptItem>,
@@ -267,6 +270,31 @@ impl OwnerClient {
         });
     }
 
+    pub fn delete_session(&mut self, profile: PathBuf, session_id: String) {
+        let tx = self.sender(Request::Profile);
+        self.runtime().spawn(async move {
+            match send_v2_command(
+                &profile,
+                GuiCommand::DeleteSession {
+                    session_id: session_id.clone(),
+                },
+            )
+            .await
+            {
+                Ok(GuiReply::Ack) => {
+                    let _ = tx.send(BackendUpdate::SessionDeleted { session_id });
+                }
+                Ok(GuiReply::Error { message }) => {
+                    let _ = tx.send(BackendUpdate::Error(message));
+                }
+                Err(err) => {
+                    let _ = tx.send(BackendUpdate::Error(err));
+                }
+                _ => {}
+            }
+        });
+    }
+
     pub fn start_turn(
         &mut self,
         profile: PathBuf,
@@ -335,6 +363,7 @@ impl OwnerClient {
         turn_id: String,
         approval_id: u64,
         decision: ApprovalDecision,
+        scope: ApprovalScope,
     ) {
         let tx = self.sender(Request::Conversation(self.revisions.view));
         self.runtime().spawn(async move {
@@ -342,9 +371,16 @@ impl OwnerClient {
                 turn_id,
                 approval_id,
                 decision,
+                scope,
             };
-            if let Err(err) = send_v2_command(&profile, cmd).await {
-                let _ = tx.send(BackendUpdate::Error(err));
+            match send_v2_command(&profile, cmd).await {
+                Ok(GuiReply::Error { message }) => {
+                    let _ = tx.send(BackendUpdate::Error(message));
+                }
+                Err(err) => {
+                    let _ = tx.send(BackendUpdate::Error(err));
+                }
+                _ => {}
             }
         });
     }

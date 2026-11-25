@@ -547,6 +547,35 @@ async fn dispatch_sandbox_tool(
         if !cx.options.can_write_files() {
             return Ok(approval_error(ApprovalDecision::Unavailable));
         }
+        let Some(timeout_secs) = cx.options.approval_timeout_secs else {
+            return Ok(approval_error(ApprovalDecision::Unavailable));
+        };
+        let target = raw_args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("workbook.xlsx")
+            .to_owned();
+        let action = if workspace_root.join(&target).exists() {
+            ApprovalAction::ReplaceFile
+        } else {
+            ApprovalAction::CreateFile
+        };
+        let summary = raw_args.to_string();
+        let mut ask = |request: ApprovalRequest| (cx.approve)(request);
+        let decision = request_approval(
+            ApprovalRequest {
+                target,
+                content: summary,
+                action,
+                timeout_secs,
+            },
+            cx.options.approval_policy,
+            &mut ask,
+        )
+        .await;
+        if !matches!(decision, ApprovalDecision::Approved) {
+            return Ok(approval_error(decision));
+        }
         return Ok(excel_tools::xlsx_write(workspace_root, raw_args));
     }
 
@@ -825,22 +854,45 @@ pub(crate) fn call<'a>(
             .canonicalize()
             .unwrap_or_else(|_| cx.options.root.to_path_buf());
         let directory = crate::terminal::session_directory(&session, &root);
-        let mut ask = |request: ApprovalRequest| (cx.approve)(request);
-        let decision = request_approval(
-            ApprovalRequest {
-                target: directory.display().to_string(),
-                content: code.clone(),
-                action: ApprovalAction::RunCode,
-                timeout_secs: approval_timeout,
-            },
-            cx.options.approval_policy,
-            &mut ask,
-        )
-        .await;
-        if !matches!(decision, ApprovalDecision::Approved) {
-            return approval_error(decision);
-        }
         let tools = sandbox_tools(&ToolEnv::from_options(cx.options));
+        let env = settings.environment();
+        let will_use_embedded = {
+            #[cfg(not(unix))]
+            {
+                true
+            }
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                interpreter(&env).is_none()
+            }
+            #[cfg(target_os = "macos")]
+            {
+                false
+            }
+        };
+        let skip_upfront_approval = will_use_embedded
+            && match cx.options.approval_policy {
+                Some(policy) => policy.allows_embedded_code(),
+                None => crate::approval_policy::installed()
+                    .is_none_or(|policy| policy.allows_embedded_code()),
+            };
+        if !skip_upfront_approval {
+            let mut ask = |request: ApprovalRequest| (cx.approve)(request);
+            let decision = request_approval(
+                ApprovalRequest {
+                    target: directory.display().to_string(),
+                    content: code.clone(),
+                    action: ApprovalAction::RunCode,
+                    timeout_secs: approval_timeout,
+                },
+                cx.options.approval_policy,
+                &mut ask,
+            )
+            .await;
+            if !matches!(decision, ApprovalDecision::Approved) {
+                return approval_error(decision);
+            }
+        }
         let started = Instant::now();
         let mut state_reset = args.reset;
         let existing = {
@@ -859,7 +911,6 @@ pub(crate) fn call<'a>(
         let mut kernel = match existing {
             Some(kernel) => kernel,
             None => {
-                let env = settings.environment();
                 #[cfg(unix)]
                 {
                     if let Some(python) = interpreter(&env) {

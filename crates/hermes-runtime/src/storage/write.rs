@@ -100,6 +100,55 @@ impl<'a> SessionWriter<'a> {
         Ok(deleted)
     }
 
+    /// Permanently delete `session_id` and its dependent rows (messages, FTS via triggers,
+    /// admissions, worker records, locks/leases) from `<profile>/state.db`.
+    pub fn delete_session(profile: &Path, session_id: &str) -> Result<bool, StorageError> {
+        let path = profile.join("state.db");
+        if !database_exists(&path)? {
+            return Ok(false);
+        }
+        let mut connection = open_write(&path)?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        verify_write_schema(&transaction)?;
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?1)",
+            [session_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Ok(false);
+        }
+        transaction.execute(
+            "UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id = ?1",
+            [session_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM worker_receipts
+             WHERE execution_id IN (SELECT execution_id FROM worker_executions WHERE session_id = ?1)",
+            [session_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM worker_executions WHERE session_id = ?1",
+            [session_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM session_admissions WHERE target_session_id = ?1",
+            [session_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM compression_locks WHERE session_id = ?1",
+            [session_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM session_turn_leases WHERE conversation_id = ?1",
+            [session_id],
+        )?;
+        transaction.execute("DELETE FROM messages WHERE session_id = ?1", [session_id])?;
+        let deleted = transaction.execute("DELETE FROM sessions WHERE id = ?1", [session_id])?;
+        transaction.commit()?;
+        Ok(deleted > 0)
+    }
+
     pub fn prepare_resume(profile: &'a Path, id: &str) -> Result<Self, StorageError> {
         let mut writer = Self::prepare(profile)?;
         writer.planned_id = None;
@@ -430,5 +479,37 @@ mod tests {
         assert_ne!(id1, id2);
         assert_ne!(id1, "default");
         assert_ne!(id2, "default");
+    }
+
+    #[test]
+    fn delete_session_removes_session_messages_and_fts_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut writer = SessionWriter::prepare(dir.path()).unwrap();
+        let turn = CompletedTurn {
+            model: "test-model".into(),
+            final_response: "answer-beta".into(),
+            system_prompt: "system".into(),
+            replayed_history: Vec::new(),
+            messages: vec![
+                serde_json::json!({"role": "user", "content": "unique-delete-token-alpha"}),
+                serde_json::json!({"role": "assistant", "content": "answer-beta"}),
+            ],
+            compaction: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            context_tokens: 0,
+            context_estimated: false,
+        };
+        let id = writer.save(&turn, dir.path()).unwrap();
+
+        assert!(SessionWriter::delete_session(dir.path(), &id).unwrap());
+        assert!(!SessionWriter::delete_session(dir.path(), &id).unwrap());
+
+        let store = super::super::SessionStore::open_read_only(dir.path()).unwrap();
+        assert!(store.recent(10, None).unwrap().is_empty());
+        assert!(store
+            .recent(10, Some("unique-delete-token-alpha"))
+            .unwrap()
+            .is_empty());
     }
 }

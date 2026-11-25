@@ -1396,6 +1396,12 @@ impl ChatRequest {
         self.root = root;
     }
 
+    pub fn approval_policy(
+        &self,
+    ) -> Option<std::sync::Arc<hermes_runtime::approval_policy::ApprovalPolicy>> {
+        self.approval_policy.clone()
+    }
+
     /// Context window for status-bar display `(tokens, is_fallback)`:
     /// explicit config/provider window → known model table → 128K fallback.
     pub fn display_context_length(&self) -> (u64, bool) {
@@ -1448,7 +1454,9 @@ pub fn prepare_gui_turn(
     request.single_query = false;
     request.approval_timeout_secs = request.terminal_approval_timeout_secs.or(Some(60));
     request.approval_policy = Some(std::sync::Arc::new(
-        hermes_runtime::approval_policy::ApprovalPolicy::new(request.approvals.clone()),
+        hermes_runtime::approval_policy::ApprovalPolicy::new(
+            request.approvals.clone().with_profile_dir(home),
+        ),
     ));
     if let Some(dir) = cwd.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()) {
         request.set_root(OsString::from(dir));

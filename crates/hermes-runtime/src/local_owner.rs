@@ -27,6 +27,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::sync::{broadcast, oneshot};
 use tokio::time::timeout;
 
+use crate::approval_policy::{ApprovalPolicy, SessionGrants};
 use crate::file_tools::{ApprovalDecision, ApprovalRequest};
 use crate::storage::{Session, SessionStore, SessionSummary as StorageSessionSummary};
 
@@ -427,6 +428,15 @@ pub struct V2Envelope {
     pub command: GuiCommand,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalScope {
+    #[default]
+    Once,
+    Session,
+    Always,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GuiCommand {
@@ -437,6 +447,9 @@ pub enum GuiCommand {
         query: Option<String>,
     },
     LoadSession {
+        session_id: String,
+    },
+    DeleteSession {
         session_id: String,
     },
     ActiveTurns,
@@ -458,6 +471,8 @@ pub enum GuiCommand {
         turn_id: String,
         approval_id: u64,
         decision: ApprovalDecision,
+        #[serde(default)]
+        scope: ApprovalScope,
     },
 }
 
@@ -579,6 +594,7 @@ struct ManagedTurn {
     turn_id: String,
     session_id: Option<String>,
     query: String,
+    policy: Option<Arc<ApprovalPolicy>>,
     events: VecDeque<SequencedTurnEvent>,
     next_seq: u64,
     finished: bool,
@@ -606,6 +622,7 @@ impl ManagedTurn {
 #[derive(Default)]
 struct TurnRegistry {
     turns: HashMap<String, Arc<Mutex<ManagedTurn>>>,
+    session_grants: HashMap<String, SessionGrants>,
     completed: VecDeque<(Instant, String)>,
     next_id: u64,
 }
@@ -685,8 +702,19 @@ impl TurnEmitter {
         guard.publish(event);
         if finished {
             let turn_id = guard.turn_id.clone();
+            let sid_and_grants = guard.session_id.clone().and_then(|sid| {
+                let grants = guard.policy.as_ref()?.snapshot_session_grants();
+                (!grants.is_empty()).then_some((sid, grants))
+            });
             drop(guard);
             let mut registry = self.hub.registry.lock().unwrap();
+            if let Some((sid, grants)) = sid_and_grants {
+                registry
+                    .session_grants
+                    .entry(sid)
+                    .or_default()
+                    .merge_from(&grants);
+            }
             let now = Instant::now();
             registry.completed.push_back((now, turn_id));
             registry.prune(now);
@@ -719,6 +747,15 @@ impl TurnHub {
     }
 
     pub fn create_turn(&self, session_id: Option<String>, query: String) -> TurnHandle {
+        self.create_turn_with_policy(session_id, query, None)
+    }
+
+    pub fn create_turn_with_policy(
+        &self,
+        session_id: Option<String>,
+        query: String,
+        policy: Option<Arc<ApprovalPolicy>>,
+    ) -> TurnHandle {
         let mut registry = self.registry();
         registry.next_id += 1;
         // Each new owner has a different map hash seed, so stale subscriptions cannot
@@ -734,6 +771,7 @@ impl TurnHub {
             turn_id: turn_id.clone(),
             session_id,
             query,
+            policy,
             events: VecDeque::new(),
             next_seq: 0,
             finished: false,
@@ -750,6 +788,14 @@ impl TurnHub {
             },
             cancel_rx,
         }
+    }
+
+    pub fn session_grants(&self, session_id: &str) -> Option<SessionGrants> {
+        self.registry().session_grants.get(session_id).cloned()
+    }
+
+    pub fn forget_session_grants(&self, session_id: &str) {
+        self.registry().session_grants.remove(session_id);
     }
 
     fn registry(&self) -> std::sync::MutexGuard<'_, TurnRegistry> {
@@ -867,28 +913,56 @@ impl TurnHub {
         turn_id: &str,
         approval_id: u64,
         decision: ApprovalDecision,
-    ) -> Result<(), String> {
+        scope: ApprovalScope,
+    ) -> Result<Option<String>, String> {
         let turn = self
             .registry()
             .turns
             .get(turn_id)
             .cloned()
             .ok_or_else(|| format!("Unknown turn_id '{turn_id}'"))?;
-        let mut st = turn.lock().unwrap();
-        let matched = st
-            .pending_approval
-            .as_ref()
-            .is_some_and(|(id, _, _)| *id == approval_id);
-        if !matched {
-            return Err(format!(
-                "No pending approval #{approval_id} for turn '{turn_id}'"
-            ));
+        let (request, sender, policy, session_id) = {
+            let mut st = turn.lock().unwrap();
+            let matched = st
+                .pending_approval
+                .as_ref()
+                .is_some_and(|(id, _, _)| *id == approval_id);
+            if !matched {
+                return Err(format!(
+                    "No pending approval #{approval_id} for turn '{turn_id}'"
+                ));
+            }
+            let (_, request, sender) = st.pending_approval.take().expect("matched approval");
+            st.publish(TurnStreamEvent::ApprovalResolved { approval_id });
+            (request, sender, st.policy.clone(), st.session_id.clone())
+        };
+        let mut persist_warning = None;
+        if matches!(decision, ApprovalDecision::Approved) {
+            if let Some(policy) = policy {
+                match scope {
+                    ApprovalScope::Once => {}
+                    ApprovalScope::Session => {
+                        policy.remember_session(&request);
+                    }
+                    ApprovalScope::Always => {
+                        let (_, err) = policy.remember_always(&request);
+                        persist_warning = err;
+                    }
+                }
+                if !matches!(scope, ApprovalScope::Once) {
+                    if let Some(sid) = session_id {
+                        let snapshot = policy.snapshot_session_grants();
+                        self.registry()
+                            .session_grants
+                            .entry(sid)
+                            .or_default()
+                            .merge_from(&snapshot);
+                    }
+                }
+            }
         }
-        if let Some((_, _, sender)) = st.pending_approval.take() {
-            let _ = sender.send(decision);
-        }
-        st.publish(TurnStreamEvent::ApprovalResolved { approval_id });
-        Ok(())
+        let _ = sender.send(decision);
+        Ok(persist_warning)
     }
 }
 
@@ -1180,8 +1254,13 @@ mod tests {
         };
 
         // Reconnected client approves the pending prompt
-        hub.respond_approval(&turn_id, approval_id, ApprovalDecision::Approved)
-            .unwrap();
+        hub.respond_approval(
+            &turn_id,
+            approval_id,
+            ApprovalDecision::Approved,
+            ApprovalScope::Once,
+        )
+        .unwrap();
         assert_eq!(approval_rx.await.unwrap(), ApprovalDecision::Approved);
 
         handle.emit(TurnStreamEvent::Done {

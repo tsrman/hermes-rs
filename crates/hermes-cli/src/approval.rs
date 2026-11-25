@@ -46,7 +46,7 @@ pub fn record_grant(request: &ApprovalRequest, grant: Grant) -> Option<String> {
     match grant {
         Grant::Once => None,
         Grant::Session => {
-            policy.remember(request);
+            policy.remember_session(request);
             None
         }
         Grant::Always => policy.remember_always(request).1,
@@ -240,11 +240,11 @@ mod terminal {
             String::new()
         };
         let choices = if matches!(request.action, ApprovalAction::RunCode) {
-            "Answer a to always allow exactly this code in this conversation.\nApprove once? [y/N] "
+            "Answer y to approve once, s for this session, a to always allow Python code (saved to config.yaml), anything else to deny.\nApprove? [y/s/a/N] "
         } else if command {
             "Answer y to approve once, s for this conversation, a to always allow what it was flagged for (saved to command_allowlist), anything else to deny.\nApprove? [y/s/a/N] "
         } else {
-            "Answer a to always allow file changes in this conversation.\nApprove once? [y/N] "
+            "Answer y to approve once, s for this session, a to always allow file changes (saved to config.yaml), anything else to deny.\nApprove? [y/s/a/N] "
         };
         let prompt = format!(
             "\n{action} {:?}\n{preview} (escaped)\n{shown}\n{reason}{choices}",
@@ -276,9 +276,8 @@ mod terminal {
                             .trim()
                             .to_lowercase();
                         let grant = match text.as_str() {
-                            "a" | "always" if command => Some(Grant::Always),
-                            "a" | "always" => Some(Grant::Session),
-                            "s" | "session" if command => Some(Grant::Session),
+                            "a" | "always" => Some(Grant::Always),
+                            "s" | "session" => Some(Grant::Session),
                             "y" | "yes" => Some(Grant::Once),
                             _ => None,
                         };

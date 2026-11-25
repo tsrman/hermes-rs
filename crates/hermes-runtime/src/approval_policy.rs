@@ -29,12 +29,32 @@ use crate::approval_detect::hardline::{
 use crate::approval_detect::normalize::HomeEnv;
 use crate::file_tools::{ApprovalAction, ApprovalRequest};
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodeApprovalMode {
+    /// Embedded RustPython sandbox runs without upfront prompt (its mutating host tool calls
+    /// still require approval); external system `python3` asks for approval.
+    #[default]
+    Auto,
+    /// Always ask before running Python code (embedded or external).
+    Ask,
+    /// Never ask before running Python code.
+    Off,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ApprovalSettings {
     /// `approvals.mode: off`, or `--yolo`: approve everything the deny list and the hardline floor
     /// do not block.
     #[serde(default)]
     pub approve_all: bool,
+    /// `approvals.code: auto | ask | off` (default `auto`).
+    #[serde(default)]
+    pub code_mode: CodeApprovalMode,
+    /// `approvals.edits: off` (or `allow`/`approve`/`always`/`false`): approve file edits and
+    /// skill changes without asking.
+    #[serde(default)]
+    pub approve_edits: bool,
     /// Command patterns (`*` and `?`, case-insensitive) that need no asking.
     #[serde(default)]
     pub allow: Vec<String>,
@@ -55,6 +75,31 @@ pub struct ApprovalSettings {
     /// Where an "always" answer is saved; `None` keeps it for this run only.
     #[serde(skip)]
     pub profile_dir: Option<PathBuf>,
+}
+
+fn parse_code_approval_mode(value: &serde_yaml::Value) -> CodeApprovalMode {
+    if *value == false {
+        return CodeApprovalMode::Off;
+    }
+    match value
+        .as_str()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("off" | "false" | "allow" | "approve" | "always" | "yes") => CodeApprovalMode::Off,
+        Some("ask" | "manual" | "always_ask" | "strict") => CodeApprovalMode::Ask,
+        _ => CodeApprovalMode::Auto,
+    }
+}
+
+fn parse_edits_auto_approve(value: &serde_yaml::Value) -> bool {
+    *value == false
+        || value.as_str().is_some_and(|mode| {
+            matches!(
+                mode.trim().to_ascii_lowercase().as_str(),
+                "off" | "false" | "allow" | "approve" | "always" | "yes"
+            )
+        })
 }
 
 /// The reference's `_binary_approval_mode`: `approve`, `off`, `allow` or `yes` mean approve; anything
@@ -103,6 +148,8 @@ impl ApprovalSettings {
         Self {
             approve_all: matches!(mode.as_deref(), Some("off" | "false"))
                 || section["mode"] == false,
+            code_mode: parse_code_approval_mode(&section["code"]),
+            approve_edits: parse_edits_auto_approve(&section["edits"]),
             allow: string_list(&section["allow"]),
             deny: string_list(&section["deny"]),
             command_allowlist: string_list(&config["command_allowlist"]),
@@ -122,7 +169,10 @@ impl ApprovalSettings {
     /// to a run with no terminal. (The terminal itself is offered regardless: a command the
     /// detector does not flag needs no answer.)
     pub fn answers_without_a_person(&self) -> bool {
-        self.approve_all || !self.allow.is_empty()
+        self.approve_all
+            || !self.allow.is_empty()
+            || self.approve_edits
+            || self.code_mode == CodeApprovalMode::Off
     }
 }
 
@@ -133,9 +183,29 @@ pub enum Verdict {
     Ask,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct SessionGrants {
+    pub edits: bool,
+    pub all_code: bool,
+    pub keys: HashSet<String>,
+}
+
+impl SessionGrants {
+    pub fn is_empty(&self) -> bool {
+        !self.edits && !self.all_code && self.keys.is_empty()
+    }
+
+    pub fn merge_from(&mut self, other: &SessionGrants) {
+        self.edits |= other.edits;
+        self.all_code |= other.all_code;
+        self.keys.extend(other.keys.iter().cloned());
+    }
+}
+
 #[derive(Default)]
 struct Grants {
     edits: bool,
+    all_code: bool,
     /// Dangerous-pattern keys answered "session" or "always" in this run.
     keys: HashSet<String>,
     /// Python source the person allowed to run again, exactly as it was.
@@ -174,6 +244,10 @@ pub struct ApprovalPolicy {
     permanent: Mutex<HashSet<String>>,
     /// Set by `/yolo` in an interactive conversation; acts like `approve_all`.
     approve_all: std::sync::atomic::AtomicBool,
+    /// Set by `approvals.code: off` or an "Always" grant for Python code.
+    approve_code_always: std::sync::atomic::AtomicBool,
+    /// Set by `approvals.edits: off` or an "Always" grant for file edits.
+    approve_edits_always: std::sync::atomic::AtomicBool,
     /// The last command analysed, so asking about it, explaining it and remembering the answer read
     /// the detector once.
     analysed: Mutex<Option<Analysed>>,
@@ -286,14 +360,58 @@ fn persist_allowlist(dir: &Path, keys: &[String]) -> Result<(), String> {
 impl ApprovalPolicy {
     pub fn new(settings: ApprovalSettings) -> Self {
         let permanent = settings.command_allowlist.iter().cloned().collect();
+        let approve_code_always = settings.code_mode == CodeApprovalMode::Off;
+        let approve_edits_always = settings.approve_edits;
         Self {
             settings,
             grants: Mutex::new(Grants::default()),
             permanent: Mutex::new(permanent),
             approve_all: std::sync::atomic::AtomicBool::new(false),
+            approve_code_always: std::sync::atomic::AtomicBool::new(approve_code_always),
+            approve_edits_always: std::sync::atomic::AtomicBool::new(approve_edits_always),
             analysed: Mutex::new(None),
             unattended: Mutex::new(None),
         }
+    }
+
+    /// True when the sandboxed embedded RustPython kernel may execute without an upfront
+    /// `RunCode` prompt (its mutating host tools like `write_file`, `patch`, `xlsx_write`,
+    /// and `terminal` still run through their own approval checks).
+    pub fn allows_embedded_code(&self) -> bool {
+        if self.approves_all()
+            || self
+                .approve_code_always
+                .load(std::sync::atomic::Ordering::Relaxed)
+            || self.settings.code_mode == CodeApprovalMode::Auto
+        {
+            return true;
+        }
+        self.grants
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .all_code
+    }
+
+    pub fn snapshot_session_grants(&self) -> SessionGrants {
+        let grants = self
+            .grants
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        SessionGrants {
+            edits: grants.edits,
+            all_code: grants.all_code,
+            keys: grants.keys.clone(),
+        }
+    }
+
+    pub fn apply_session_grants(&self, saved: &SessionGrants) {
+        let mut grants = self
+            .grants
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        grants.edits |= saved.edits;
+        grants.all_code |= saved.all_code;
+        grants.keys.extend(saved.keys.iter().cloned());
     }
 
     pub fn settings(&self) -> &ApprovalSettings {
@@ -444,10 +562,17 @@ impl ApprovalPolicy {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         match request.action {
-            // Code can do anything its interpreter can, so no pattern list covers it: it runs
-            // when everything is approved, or when this exact code was allowed before.
+            // External Python code can do anything its interpreter can, so no command allowlist
+            // covers it: it runs when everything/code is approved, when granted for the session,
+            // or when this exact code was allowed before.
             ApprovalAction::RunCode => {
-                if self.approves_all() || grants.code.contains(&request.content) {
+                if self.approves_all()
+                    || self
+                        .approve_code_always
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    || grants.all_code
+                    || grants.code.contains(&request.content)
+                {
                     Verdict::Allow
                 } else {
                     Verdict::Ask
@@ -457,7 +582,12 @@ impl ApprovalPolicy {
             ApprovalAction::CreateFile
             | ApprovalAction::ReplaceFile
             | ApprovalAction::ManageSkills => {
-                if self.approves_all() || grants.edits {
+                if self.approves_all()
+                    || self
+                        .approve_edits_always
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    || grants.edits
+                {
                     Verdict::Allow
                 } else {
                     Verdict::Ask
@@ -478,8 +608,7 @@ impl ApprovalPolicy {
             .collect()
     }
 
-    /// The person answered "session": file edits and the exact code for the rest of the
-    /// conversation, and for a command the pattern keys it was flagged for.
+    /// Remember an approval for this run: file edits, exact code text, or flagged command keys.
     pub fn remember(&self, request: &ApprovalRequest) {
         let keys = match request.action {
             ApprovalAction::RunCommand => self.rememberable_keys(request.content.trim()),
@@ -503,26 +632,61 @@ impl ApprovalPolicy {
         }
     }
 
-    /// The person answered "always" to a command: remember its pattern keys for this run and add
-    /// them to `command_allowlist` in the profile's `config.yaml`. Returns the keys saved and any
-    /// error saving them (the run still remembers them).
-    pub fn remember_always(&self, request: &ApprovalRequest) -> (Vec<String>, Option<String>) {
-        if !matches!(request.action, ApprovalAction::RunCommand) {
-            self.remember(request);
-            return (Vec::new(), None);
+    /// The person answered "for this session": allows subsequent file edits, Python scripts,
+    /// or matching flagged command categories for the rest of the conversation.
+    pub fn remember_session(&self, request: &ApprovalRequest) {
+        if matches!(request.action, ApprovalAction::RunCode) {
+            let mut grants = self
+                .grants
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            grants.all_code = true;
+            grants.code.insert(request.content.clone());
+            return;
         }
-        let keys = self.rememberable_keys(request.content.trim());
         self.remember(request);
-        if keys.is_empty() {
-            return (keys, None);
+    }
+
+    /// The person answered "always": remember for this run and persist the setting into the
+    /// profile's `config.yaml` (`command_allowlist`, `approvals.code: off`, or `approvals.edits: off`).
+    pub fn remember_always(&self, request: &ApprovalRequest) -> (Vec<String>, Option<String>) {
+        match request.action {
+            ApprovalAction::RunCommand => {
+                let keys = self.rememberable_keys(request.content.trim());
+                self.remember(request);
+                if keys.is_empty() {
+                    return (keys, None);
+                }
+                self.permanent().extend(keys.iter().cloned());
+                let error = self
+                    .settings
+                    .profile_dir
+                    .as_deref()
+                    .and_then(|dir| persist_allowlist(dir, &keys).err());
+                (keys, error)
+            }
+            ApprovalAction::RunCode => {
+                self.remember_session(request);
+                self.approve_code_always
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                let error = self.settings.profile_dir.as_deref().and_then(|dir| {
+                    crate::config::set_config_value(dir, "approvals.code", "off").err()
+                });
+                (vec!["approvals.code=off".into()], error)
+            }
+            ApprovalAction::CreateFile
+            | ApprovalAction::ReplaceFile
+            | ApprovalAction::ManageSkills => {
+                self.remember(request);
+                self.approve_edits_always
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                let error = self.settings.profile_dir.as_deref().and_then(|dir| {
+                    crate::config::set_config_value(dir, "approvals.edits", "off").err()
+                });
+                (vec!["approvals.edits=off".into()], error)
+            }
+            ApprovalAction::Clarify => (Vec::new(), None),
         }
-        self.permanent().extend(keys.iter().cloned());
-        let error = self
-            .settings
-            .profile_dir
-            .as_deref()
-            .and_then(|dir| persist_allowlist(dir, &keys).err());
-        (keys, error)
     }
 }
 
@@ -822,5 +986,64 @@ mod tests {
         assert!(settings.answers_without_a_person());
         let manual: serde_yaml::Value = serde_yaml::from_str("approvals: {mode: smart}").unwrap();
         assert!(!ApprovalSettings::from_config(&manual).answers_without_a_person());
+    }
+
+    #[test]
+    fn code_and_edits_modes_session_and_always_persistence() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = ApprovalPolicy::new(ApprovalSettings::default().with_profile_dir(dir.path()));
+
+        // Default code mode is Auto: embedded RustPython skips upfront prompt, external still asks.
+        assert_eq!(policy.settings().code_mode, CodeApprovalMode::Auto);
+        assert!(policy.allows_embedded_code());
+        assert_eq!(
+            policy.decide(&request(ApprovalAction::RunCode, "print(1)")),
+            Verdict::Ask
+        );
+
+        // Explicit `approvals.code: ask` forces upfront prompt even for embedded RustPython.
+        let strict_cfg: serde_yaml::Value = serde_yaml::from_str("approvals: {code: ask}").unwrap();
+        let strict = ApprovalPolicy::new(ApprovalSettings::from_config(&strict_cfg));
+        assert!(!strict.allows_embedded_code());
+
+        // `remember_session` for RunCode grants subsequent scripts in the session.
+        let code_req = request(ApprovalAction::RunCode, "print(1)");
+        strict.remember_session(&code_req);
+        assert!(strict.allows_embedded_code());
+        assert_eq!(
+            strict.decide(&request(ApprovalAction::RunCode, "print(2)")),
+            Verdict::Allow
+        );
+
+        // Snapshot + apply transfers session grants cleanly to a subsequent turn's policy.
+        let saved = strict.snapshot_session_grants();
+        let next_turn = ApprovalPolicy::new(ApprovalSettings::from_config(&strict_cfg));
+        next_turn.apply_session_grants(&saved);
+        assert_eq!(
+            next_turn.decide(&request(ApprovalAction::RunCode, "print(3)")),
+            Verdict::Allow
+        );
+
+        // `remember_always` persists `approvals.code: off` and `approvals.edits: off` to config.yaml.
+        let (_, code_err) = policy.remember_always(&code_req);
+        assert!(code_err.is_none(), "{code_err:?}");
+        let edit_req = request(ApprovalAction::ReplaceFile, "new content");
+        let (_, edit_err) = policy.remember_always(&edit_req);
+        assert!(edit_err.is_none(), "{edit_err:?}");
+
+        let disk: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(dir.path().join("config.yaml")).unwrap())
+                .unwrap();
+        let reloaded = ApprovalPolicy::new(ApprovalSettings::from_config(&disk));
+        assert_eq!(reloaded.settings().code_mode, CodeApprovalMode::Off);
+        assert!(reloaded.settings().approve_edits);
+        assert_eq!(
+            reloaded.decide(&request(ApprovalAction::RunCode, "anything")),
+            Verdict::Allow
+        );
+        assert_eq!(
+            reloaded.decide(&request(ApprovalAction::CreateFile, "x")),
+            Verdict::Allow
+        );
     }
 }

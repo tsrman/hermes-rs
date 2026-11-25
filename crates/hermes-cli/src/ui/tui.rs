@@ -1587,55 +1587,47 @@ fn handle_modal_key(app: &mut TuiApp, state: &mut ReplState, home: Option<&Path>
             reply,
             scroll,
             ..
-        } => {
-            let is_command = matches!(request.action, ApprovalAction::RunCommand);
-            match key.code {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    *scroll = scroll.saturating_sub(1);
-                    app.modal = Some(modal);
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    *scroll = scroll.saturating_add(1);
-                    app.modal = Some(modal);
-                }
-                KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    if let Some(tx) = reply.take() {
-                        let _ = tx.send(ApprovalDecision::Approved);
-                    }
-                }
-                KeyCode::Char('s') | KeyCode::Char('S') if is_command => {
-                    let _ = approval::record_grant(request, Grant::Session);
-                    if let Some(tx) = reply.take() {
-                        let _ = tx.send(ApprovalDecision::Approved);
-                    }
-                }
-                KeyCode::Char('a') | KeyCode::Char('A') => {
-                    let grant = if is_command {
-                        Grant::Always
-                    } else {
-                        Grant::Session
-                    };
-                    if let Some(err) = approval::record_grant(request, grant) {
-                        TuiApp::push_notice(
-                            state,
-                            NoticeKind::Warn,
-                            format!("Could not save command_allowlist: {err}"),
-                        );
-                    }
-                    if let Some(tx) = reply.take() {
-                        let _ = tx.send(ApprovalDecision::Approved);
-                    }
-                }
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                    if let Some(tx) = reply.take() {
-                        let _ = tx.send(ApprovalDecision::Denied);
-                    }
-                }
-                _ => {
-                    app.modal = Some(modal);
+        } => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                *scroll = scroll.saturating_sub(1);
+                app.modal = Some(modal);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                *scroll = scroll.saturating_add(1);
+                app.modal = Some(modal);
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(tx) = reply.take() {
+                    let _ = tx.send(ApprovalDecision::Approved);
                 }
             }
-        }
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                let _ = approval::record_grant(request, Grant::Session);
+                if let Some(tx) = reply.take() {
+                    let _ = tx.send(ApprovalDecision::Approved);
+                }
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                if let Some(err) = approval::record_grant(request, Grant::Always) {
+                    TuiApp::push_notice(
+                        state,
+                        NoticeKind::Warn,
+                        format!("Could not save permanent approval setting: {err}"),
+                    );
+                }
+                if let Some(tx) = reply.take() {
+                    let _ = tx.send(ApprovalDecision::Approved);
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                if let Some(tx) = reply.take() {
+                    let _ = tx.send(ApprovalDecision::Denied);
+                }
+            }
+            _ => {
+                app.modal = Some(modal);
+            }
+        },
         ActiveModal::Clarify {
             questions,
             current,
@@ -2870,7 +2862,7 @@ fn render_modal(
             let keys_hint = if is_command {
                 "[y] Approve once   [s] Session   [a] Always (allowlist)   [n / Esc] Deny"
             } else {
-                "[y] Approve once   [a] Allow in session   [n / Esc] Deny"
+                "[y] Approve once   [s] Session   [a] Always (config.yaml)   [n / Esc] Deny"
             };
             lines.push(Line::from(Span::styled(
                 keys_hint,
