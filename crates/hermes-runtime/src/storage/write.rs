@@ -38,6 +38,48 @@ impl<'a> SessionWriter<'a> {
         })
     }
 
+    /// Remove the last user message and every subsequent message (assistant/tool rows) of the
+    /// last turn in `session_id`, keeping FTS5 indexes synchronized via triggers.
+    ///
+    /// Returns the number of deleted messages (`0` if the session has no active user message).
+    pub fn undo_last_turn(profile: &Path, session_id: &str) -> Result<usize, StorageError> {
+        let path = profile.join("state.db");
+        if !database_exists(&path)? {
+            return Err(StorageError::SessionNotFound(session_id.to_owned()));
+        }
+        let mut connection = open_write(&path)?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        verify_write_schema(&transaction)?;
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?1)",
+            [session_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(StorageError::SessionNotFound(session_id.to_owned()));
+        }
+        let last_user_id: Option<i64> = transaction.query_row(
+            "SELECT MAX(id) FROM messages WHERE session_id = ?1 AND role = 'user' AND active = 1",
+            [session_id],
+            |row| row.get(0),
+        )?;
+        let Some(cut_id) = last_user_id else {
+            return Ok(0);
+        };
+        let deleted = transaction.execute(
+            "DELETE FROM messages WHERE session_id = ?1 AND id >= ?2",
+            params![session_id, cut_id],
+        )?;
+        transaction.execute(
+            "UPDATE sessions
+             SET message_count = (SELECT COUNT(*) FROM messages WHERE session_id = ?1 AND active = 1)
+             WHERE id = ?1",
+            [session_id],
+        )?;
+        transaction.commit()?;
+        Ok(deleted)
+    }
+
     pub fn prepare_resume(profile: &'a Path, id: &str) -> Result<Self, StorageError> {
         let mut writer = Self::prepare(profile)?;
         writer.resume = Some(ResumeState::acquire(&profile.join("state.db"), id)?);

@@ -11,6 +11,7 @@ mod clarify;
 mod compaction;
 mod compaction_window;
 pub mod config;
+pub mod context_refs;
 pub mod cron;
 pub mod cronjob_tool;
 pub mod delegation;

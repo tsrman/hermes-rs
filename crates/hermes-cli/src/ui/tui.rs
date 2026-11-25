@@ -10,7 +10,7 @@
 use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -41,10 +41,10 @@ use crate::chat::{self, Event as ChatEvent, ManualCompress};
 use crate::ui::clipboard::{self, ClipboardRead};
 use crate::ui::markdown::render_markdown_lines;
 use crate::ui::{
-    build_context_bar, format_context_length, format_duration_ms, format_tokens_compact,
-    load_resumed_session, match_slash_commands, parse_stderr_event, record_prompt_history,
-    short_model_label, ActiveUi, FeedEntry, NoticeKind, ParsedStderr, ReplState, ToolStatus,
-    UiOutcome, HELP_TEXT,
+    active_at_token, build_context_bar, format_context_length, format_duration_ms,
+    format_shell_escape, format_skills_list, format_tokens_compact, load_resumed_session,
+    match_slash_commands, parse_stderr_event, record_prompt_history, short_model_label, ActiveUi,
+    FeedEntry, NoticeKind, ParsedStderr, ReplState, ToolStatus, UiOutcome, HELP_TEXT,
 };
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -127,10 +127,19 @@ enum ActiveModal {
     },
 }
 
+struct PaletteEntry {
+    replacement: String,
+    usage: String,
+    description: String,
+    at_start: Option<usize>,
+}
+
 pub struct TuiApp {
     input: String,
     /// Byte index of cursor in `input` (always on a UTF-8 char boundary).
     cursor: usize,
+    home: Option<PathBuf>,
+    root: PathBuf,
     history_pos: Option<usize>,
     draft_before_history: String,
     palette_index: usize,
@@ -154,6 +163,8 @@ impl TuiApp {
         Self {
             input: String::new(),
             cursor: 0,
+            home: None,
+            root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             history_pos: None,
             draft_before_history: String::new(),
             palette_index: 0,
@@ -298,6 +309,60 @@ impl TuiApp {
         self.palette_index = 0;
     }
 
+    fn completion_palette(&self) -> Option<(&'static str, Vec<PaletteEntry>)> {
+        if self.is_busy() || self.modal.is_some() || self.history_pos.is_some() {
+            return None;
+        }
+        if let Some((at_start, token)) = active_at_token(&self.input, self.cursor) {
+            let items: Vec<PaletteEntry> =
+                hermes_runtime::context_refs::complete_at_references(&self.root, token, 8)
+                    .into_iter()
+                    .map(|c| PaletteEntry {
+                        replacement: c.replacement,
+                        usage: c.display,
+                        description: c.detail,
+                        at_start: Some(at_start),
+                    })
+                    .collect();
+            if !items.is_empty() {
+                return Some((" Context (@file / @folder / @diff) — Tab to insert ", items));
+            }
+        }
+        if self.input.contains('\n') {
+            return None;
+        }
+        if self.input.starts_with('/') && !self.input.contains(char::is_whitespace) {
+            let mut items: Vec<PaletteEntry> = match_slash_commands(&self.input)
+                .into_iter()
+                .map(|c| PaletteEntry {
+                    replacement: c.name.to_owned(),
+                    usage: c.usage.to_owned(),
+                    description: c.description.to_owned(),
+                    at_start: None,
+                })
+                .collect();
+            let needle = self.input[1..].to_ascii_lowercase();
+            for skill in hermes_runtime::context_refs::list_skill_commands(self.home.as_deref()) {
+                if needle.is_empty() || skill.name.starts_with(&needle) {
+                    let slash_name = format!("/{}", skill.name);
+                    if !items.iter().any(|p| p.replacement == slash_name) {
+                        items.push(PaletteEntry {
+                            replacement: slash_name.clone(),
+                            usage: slash_name,
+                            description: format!("[skill] {}", skill.description),
+                            at_start: None,
+                        });
+                    }
+                }
+            }
+            if !items.is_empty() {
+                return Some((" Commands (Tab to complete) ", items));
+            }
+        }
+        None
+    }
+
+    #[cfg(test)]
     fn slash_palette(&self) -> Vec<&'static crate::ui::SlashCommand> {
         if self.is_busy()
             || self.modal.is_some()
@@ -330,6 +395,7 @@ pub async fn run(home: Option<&Path>, state: &mut ReplState) -> Result<UiOutcome
     let _ = terminal.clear();
 
     let mut app = TuiApp::new();
+    app.home = home.map(Path::to_path_buf);
     let stop_reader = Arc::new(AtomicBool::new(false));
     let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<TermEvent>();
     let stop_flag = Arc::clone(&stop_reader);
@@ -807,20 +873,30 @@ async fn handle_key_event(
         return None;
     }
 
-    // Slash palette navigation
-    let palette = app.slash_palette();
-    if !palette.is_empty() {
+    // Slash & `@` context palette navigation
+    if let Some((_title, palette)) = app.completion_palette() {
         match key.code {
             KeyCode::Tab => {
                 let idx = app.palette_index.min(palette.len() - 1);
-                app.input = palette[idx].name.to_owned();
-                if matches!(
-                    app.input.as_str(),
-                    "/resume" | "/model" | "/ui" | "/compress"
-                ) {
-                    app.input.push(' ');
+                let item = &palette[idx];
+                if let Some(at_start) = item.at_start {
+                    let suffix_space = !item.replacement.ends_with(':');
+                    let mut replacement = item.replacement.clone();
+                    if suffix_space {
+                        replacement.push(' ');
+                    }
+                    app.input.replace_range(at_start..app.cursor, &replacement);
+                    app.cursor = at_start + replacement.len();
+                } else {
+                    app.input = item.replacement.clone();
+                    if matches!(
+                        app.input.as_str(),
+                        "/resume" | "/model" | "/ui" | "/compress" | "/skills"
+                    ) {
+                        app.input.push(' ');
+                    }
+                    app.cursor = app.input.len();
                 }
-                app.cursor = app.input.len();
                 app.palette_index = 0;
                 return None;
             }
@@ -840,14 +916,26 @@ async fn handle_key_event(
                     && !key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
                 let idx = app.palette_index.min(palette.len() - 1);
-                let chosen = palette[idx].name;
+                let item = &palette[idx];
+                if let Some(at_start) = item.at_start {
+                    let suffix_space = !item.replacement.ends_with(':');
+                    let mut replacement = item.replacement.clone();
+                    if suffix_space {
+                        replacement.push(' ');
+                    }
+                    app.input.replace_range(at_start..app.cursor, &replacement);
+                    app.cursor = at_start + replacement.len();
+                    app.palette_index = 0;
+                    return None;
+                }
+                let chosen = item.replacement.clone();
                 app.input.clear();
                 app.cursor = 0;
                 app.history_pos = None;
                 app.draft_before_history.clear();
                 app.palette_index = 0;
-                if !matches!(chosen, "/exit" | "/quit") {
-                    record_prompt_history(home, &mut state.prompt_history, chosen);
+                if !matches!(chosen.as_str(), "/exit" | "/quit") {
+                    record_prompt_history(home, &mut state.prompt_history, &chosen);
                 }
                 if let Some(cmd) = chosen.strip_prefix('/') {
                     return handle_slash_command(app, state, home, cmd).await;
@@ -860,6 +948,11 @@ async fn handle_key_event(
 
     // Composer editing & submission
     match (key.code, key.modifiers) {
+        (KeyCode::Char('p'), m) if m.contains(KeyModifiers::CONTROL) && app.input.is_empty() => {
+            app.input = "/".into();
+            app.cursor = 1;
+            app.palette_index = 0;
+        }
         (KeyCode::Enter, m)
             if m.contains(KeyModifiers::ALT)
                 || m.contains(KeyModifiers::SHIFT)
@@ -888,6 +981,20 @@ async fn handle_key_event(
             let is_exit = matches!(text.as_str(), "/exit" | "/quit");
             if !is_exit {
                 record_prompt_history(home, &mut state.prompt_history, &text);
+            }
+            if let Some(shell_cmd) = text.strip_prefix('!').filter(|_| !text.contains('\n')) {
+                let (is_err, output) = format_shell_escape(&app.root, shell_cmd);
+                TuiApp::push_notice(
+                    state,
+                    if is_err {
+                        NoticeKind::Error
+                    } else {
+                        NoticeKind::Info
+                    },
+                    format!("$ {shell_cmd}\n{output}"),
+                );
+                app.scroll_from_bottom = 0;
+                return None;
             }
             if let Some(cmd) = text.strip_prefix('/').filter(|_| !text.contains('\n')) {
                 return handle_slash_command(app, state, home, cmd).await;
@@ -1340,6 +1447,57 @@ async fn handle_slash_command(
     match name {
         "exit" | "quit" => app.should_exit = Some(UiOutcome::Exit),
         "help" => TuiApp::push_notice(state, NoticeKind::Info, HELP_TEXT),
+        "palette" => {
+            app.input = "/".into();
+            app.cursor = 1;
+            app.palette_index = 0;
+        }
+        "clear" => {
+            state.feed_entries.clear();
+            app.scroll_from_bottom = 0;
+        }
+        "undo" => {
+            let Some(home) = home else {
+                TuiApp::push_notice(
+                    state,
+                    NoticeKind::Warn,
+                    "Cannot undo: profile root is unavailable.",
+                );
+                return None;
+            };
+            let Some(id) = state.session.clone() else {
+                TuiApp::push_notice(
+                    state,
+                    NoticeKind::Info,
+                    "Nothing to undo: no active saved session yet.",
+                );
+                return None;
+            };
+            match hermes_runtime::storage::undo_last_turn(home, &id) {
+                Ok(0) => TuiApp::push_notice(
+                    state,
+                    NoticeKind::Info,
+                    format!("Nothing to undo in session {id}."),
+                ),
+                Ok(removed) => {
+                    let _ = load_resumed_session(Some(home), state, &id);
+                    app.scroll_from_bottom = 0;
+                    TuiApp::push_notice(
+                        state,
+                        NoticeKind::Info,
+                        format!(
+                            "Undid last exchange in session {id} ({removed} message(s) removed)."
+                        ),
+                    );
+                }
+                Err(err) => {
+                    TuiApp::push_notice(state, NoticeKind::Error, format!("Undo failed: {err}"))
+                }
+            }
+        }
+        "skills" => {
+            TuiApp::push_notice(state, NoticeKind::Info, format_skills_list(home, argument));
+        }
         "ui" if argument.is_empty() => {
             TuiApp::push_notice(
                 state,
@@ -1365,7 +1523,7 @@ async fn handle_slash_command(
                 );
             }
         },
-        "new" => {
+        "new" | "reset" => {
             state.session = None;
             state.unsaved = None;
             state.reset_metrics();
@@ -1506,11 +1664,22 @@ async fn handle_slash_command(
                 "Nothing to retry: the last turn finished and is saved.",
             ),
         },
-        other => TuiApp::push_notice(
-            state,
-            NoticeKind::Warn,
-            format!("Unknown command /{other}; /help lists the commands."),
-        ),
+        other => {
+            let full = format!("/{command}");
+            if let Some(inv) = hermes_runtime::context_refs::resolve_skill_invocation(home, &full) {
+                TuiApp::push_notice(
+                    state,
+                    NoticeKind::Info,
+                    format!("Running skill /{}...", inv.name),
+                );
+                return Some(inv.prompt);
+            }
+            TuiApp::push_notice(
+                state,
+                NoticeKind::Warn,
+                format!("Unknown command /{other}; /help lists the commands."),
+            );
+        }
     }
     None
 }
@@ -1598,10 +1767,9 @@ pub fn render_frame(frame: &mut Frame<'_>, app: &TuiApp, state: &ReplState) {
     render_composer(frame, chunks[2], app, layout);
     render_footer(frame, chunks[3], app);
 
-    // Floating slash-command palette above the composer
-    let palette = app.slash_palette();
-    if !palette.is_empty() {
-        render_palette(frame, chunks[1], &palette, app.palette_index);
+    // Floating slash-command / `@` context palette above the composer
+    if let Some((title, palette)) = app.completion_palette() {
+        render_palette(frame, chunks[1], title, &palette, app.palette_index);
     }
 
     // Centered modal for Approval, Clarify, or SessionPicker
@@ -1984,12 +2152,13 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
 fn render_palette(
     frame: &mut Frame<'_>,
     feed_area: Rect,
-    palette: &[&'static crate::ui::SlashCommand],
+    title: &str,
+    palette: &[PaletteEntry],
     selected: usize,
 ) {
     let visible = palette.len().min(8) as u16;
     let height = visible + 2;
-    let width = feed_area.width.min(62);
+    let width = feed_area.width.min(68);
     let rect = Rect {
         x: feed_area.x + 1,
         y: feed_area.y + feed_area.height.saturating_sub(height),
@@ -2012,7 +2181,7 @@ fn render_palette(
                 Style::default().fg(Color::White)
             };
             Line::from(Span::styled(
-                format!(" {:<18} {}", cmd.usage, cmd.description),
+                format!(" {:<22} {}", cmd.usage, cmd.description),
                 style,
             ))
         })
@@ -2022,7 +2191,7 @@ fn render_palette(
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
             .title(Span::styled(
-                " Commands (Tab to complete) ",
+                title.to_owned(),
                 Style::default().fg(Color::Cyan),
             )),
     );

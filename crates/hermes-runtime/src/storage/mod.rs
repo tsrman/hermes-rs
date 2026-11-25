@@ -24,6 +24,11 @@ pub fn ensure_initialized(profile: &Path) -> Result<bool, StorageError> {
     SessionWriter::ensure_initialized(profile)
 }
 
+/// Roll back the last conversational exchange (last user message and following assistant/tool rows).
+pub fn undo_last_turn(profile: &Path, session_id: &str) -> Result<usize, StorageError> {
+    SessionWriter::undo_last_turn(profile, session_id)
+}
+
 pub(super) const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 const SCHEMA_VERSION: i64 = 33;
 const LEGACY_SCHEMA_VERSION: i64 = 32;

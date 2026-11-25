@@ -10,7 +10,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -30,10 +30,10 @@ use crate::approval;
 use crate::chat::{self, Event, ManualCompress};
 use crate::ui::markdown::StreamMarkdown;
 use crate::ui::{
-    format_context_length, format_duration_ms, format_tokens_compact, load_resumed_session,
-    match_slash_commands, parse_stderr_event, record_prompt_history, ActiveUi, FeedEntry,
-    NoticeKind, ParsedStderr, RecapEntry, ReplState, ResumeRecap, ToolStatus, UiOutcome, HELP_TEXT,
-    SLASH_COMMANDS,
+    active_at_token, format_context_length, format_duration_ms, format_shell_escape,
+    format_skills_list, format_tokens_compact, load_resumed_session, match_slash_commands,
+    parse_stderr_event, record_prompt_history, ActiveUi, FeedEntry, NoticeKind, ParsedStderr,
+    RecapEntry, ReplState, ResumeRecap, ToolStatus, UiOutcome, HELP_TEXT, SLASH_COMMANDS,
 };
 
 const PROMPT: &str = "› ";
@@ -51,14 +51,26 @@ const FG_YELLOW: &str = "\x1b[33m";
 const FG_GRAY: &str = "\x1b[90m";
 const FG_MAGENTA: &str = "\x1b[95m";
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct SlashHelper {
     styled: bool,
+    home: Option<PathBuf>,
+    root: PathBuf,
 }
 
 impl SlashHelper {
     pub fn new(styled: bool) -> Self {
-        Self { styled }
+        Self {
+            styled,
+            home: None,
+            root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        }
+    }
+
+    pub fn with_context(mut self, home: Option<&Path>, root: &Path) -> Self {
+        self.home = home.map(Path::to_path_buf);
+        self.root = root.to_path_buf();
+        self
     }
 }
 
@@ -74,6 +86,19 @@ impl Completer for SlashHelper {
         pos: usize,
         _ctx: &Context<'_>,
     ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        // Complete `@file:...`, `@folder:...`, `@diff`, `@staged`, `@git:3`, `@url:` anywhere in line
+        if let Some((start, token)) = active_at_token(line, pos) {
+            let candidates =
+                hermes_runtime::context_refs::complete_at_references(&self.root, token, 15)
+                    .into_iter()
+                    .map(|c| Pair {
+                        display: format!("{:<28} {}", c.display, c.detail),
+                        replacement: c.replacement,
+                    })
+                    .collect();
+            return Ok((start, candidates));
+        }
+
         let before = &line[..pos];
         if !before.starts_with('/') {
             return Ok((0, Vec::new()));
@@ -108,13 +133,25 @@ impl Completer for SlashHelper {
         if before.contains(char::is_whitespace) {
             return Ok((pos, Vec::new()));
         }
-        let matches = match_slash_commands(before)
+        let mut matches: Vec<Pair> = match_slash_commands(before)
             .into_iter()
             .map(|c| Pair {
                 display: format!("{:<14} {}", c.name, c.description),
                 replacement: c.name.to_owned(),
             })
             .collect();
+        let needle = before[1..].to_ascii_lowercase();
+        for skill in hermes_runtime::context_refs::list_skill_commands(self.home.as_deref()) {
+            if needle.is_empty() || skill.name.starts_with(&needle) {
+                let slash_name = format!("/{}", skill.name);
+                if !matches.iter().any(|p| p.replacement == slash_name) {
+                    matches.push(Pair {
+                        display: format!("{:<14} [skill] {}", slash_name, skill.description),
+                        replacement: slash_name,
+                    });
+                }
+            }
+        }
         Ok((0, matches))
     }
 }
@@ -392,7 +429,8 @@ pub async fn run(
             .build(),
     )
     .map_err(|error| error.to_string())?;
-    editor.set_helper(Some(SlashHelper::new(styled)));
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    editor.set_helper(Some(SlashHelper::new(styled).with_context(home, &cwd)));
     bind_clipboard_paste(&mut editor);
 
     for entry in &state.prompt_history {
@@ -461,6 +499,16 @@ pub async fn run(
             let _ = editor.add_history_entry(line);
             record_prompt_history(home, &mut state.prompt_history, line);
         }
+        if let Some(shell_cmd) = line.strip_prefix('!').filter(|_| !line.contains('\n')) {
+            let (is_err, output) = format_shell_escape(&cwd, shell_cmd);
+            if is_err {
+                eprintln!("{output}");
+            } else {
+                println!("{output}");
+            }
+            continue;
+        }
+        let mut effective_turn_line: Option<String> = None;
         if let Some(command) = line.strip_prefix('/').filter(|_| !line.contains('\n')) {
             let (name, argument) = command
                 .split_once(char::is_whitespace)
@@ -468,6 +516,39 @@ pub async fn run(
             match name {
                 "exit" | "quit" => break,
                 "help" => println!("{HELP_TEXT}"),
+                "palette" => {
+                    println!("{HELP_TEXT}\n\n{}", format_skills_list(home, ""));
+                }
+                "clear" => {
+                    state.feed_entries.clear();
+                    if styled {
+                        print!("\x1b[2J\x1b[H");
+                        let _ = io::stdout().flush();
+                    }
+                }
+                "undo" => {
+                    let Some(home) = home else {
+                        eprintln!("Cannot undo: profile root is unavailable.");
+                        continue;
+                    };
+                    let Some(id) = state.session.clone() else {
+                        println!("Nothing to undo: no active saved session yet.");
+                        continue;
+                    };
+                    match hermes_runtime::storage::undo_last_turn(home, &id) {
+                        Ok(0) => println!("Nothing to undo in session {id}."),
+                        Ok(removed) => {
+                            let _ = load_resumed_session(Some(home), state, &id);
+                            println!(
+                                "Undid last exchange in session {id} ({removed} message(s) removed)."
+                            );
+                        }
+                        Err(err) => eprintln!("Undo failed: {err}"),
+                    }
+                }
+                "skills" => {
+                    println!("{}", format_skills_list(home, argument));
+                }
                 "ui" if argument.is_empty() => {
                     println!(
                         "Current UI mode: {} (options: inline, tui, plain)",
@@ -505,7 +586,7 @@ pub async fn run(
                         eprintln!("Unknown UI mode '{other}'. Expected: inline, tui, or plain.");
                     }
                 },
-                "new" => {
+                "new" | "reset" => {
                     announce(&state.session, styled);
                     state.session = None;
                     state.unsaved = None;
@@ -609,16 +690,29 @@ pub async fn run(
                         "Nothing to retry: the last turn finished and is saved. Ask again to add to it."
                     ),
                 },
-                other => eprintln!("Unknown command /{other}; /help lists the commands."),
+                other => {
+                    if let Some(inv) =
+                        hermes_runtime::context_refs::resolve_skill_invocation(home, line)
+                    {
+                        eprintln!("Running skill /{}...", inv.name);
+                        effective_turn_line = Some(inv.prompt);
+                    } else {
+                        eprintln!("Unknown command /{other}; /help lists the commands.");
+                    }
+                }
             }
-            continue;
+            if effective_turn_line.is_none() {
+                continue;
+            }
         }
 
+        let turn_query = effective_turn_line.as_deref().unwrap_or(line);
         state.feed_entries.push(FeedEntry::User(line.to_owned()));
-        let turn = state
-            .request
-            .clone()
-            .for_turn(line, &state.scope, state.session.as_deref());
+        let turn =
+            state
+                .request
+                .clone()
+                .for_turn(turn_query, &state.scope, state.session.as_deref());
 
         let mut saved = None;
         let mut usage = None;

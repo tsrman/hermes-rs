@@ -96,6 +96,26 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "start a new conversation (the old one stays saved)",
     },
     SlashCommand {
+        name: "/reset",
+        usage: "/reset",
+        description: "alias for /new",
+    },
+    SlashCommand {
+        name: "/clear",
+        usage: "/clear",
+        description: "clear the visible screen / conversation feed",
+    },
+    SlashCommand {
+        name: "/undo",
+        usage: "/undo",
+        description: "remove the last exchange from the active session",
+    },
+    SlashCommand {
+        name: "/skills",
+        usage: "/skills [search <kw>]",
+        description: "list or search installed skills (invoke any via /<skill>)",
+    },
+    SlashCommand {
         name: "/sessions",
         usage: "/sessions [id|num]",
         description: "list and select a recent session to resume",
@@ -141,6 +161,11 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "connect, inspect, or disconnect a live CDP browser session",
     },
     SlashCommand {
+        name: "/palette",
+        usage: "/palette",
+        description: "list commands and installed skills (Ctrl-P in TUI)",
+    },
+    SlashCommand {
         name: "/exit",
         usage: "/exit, /quit",
         description: "leave (Ctrl-D also works)",
@@ -155,7 +180,10 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
 pub const HELP_TEXT: &str = "\
 Commands:
   /help                  show this list
-  /new                   start a new conversation (the old one stays saved)
+  /new, /reset           start a new conversation (the old one stays saved)
+  /clear                 clear the visible screen / conversation feed
+  /undo                  roll back the last exchange from the active session
+  /skills [search <kw>]  list or search installed skills (or run /<skill-name> [args])
   /sessions [id|num]     list and select a recent session to resume
   /resume [id|num]       pick or continue a saved session
   /model [name]          show or change the model for the next turns
@@ -164,8 +192,87 @@ Commands:
   /retry                 send the last turn again when it was interrupted or failed
   /ui [inline|tui|plain] show or switch the console interface mode
   /browser [connect|status|disconnect] connect or manage a live CDP browser
+  /palette               show commands & installed skills (Ctrl-P in TUI)
   /exit, /quit           leave (Ctrl-D also works)
+
+Context references & shortcuts:
+  @file:path[:a-b]       attach a file or line range (@folder:dir, @diff, @staged, @git:N, @url:...)
+  /<skill-name> [args]   run an installed skill directly from <profile>/skills/
+  !<command>             run a local shell command immediately without calling the model
 A line ending in \\ continues on the next line. Ctrl-C stops a running turn.";
+
+/// Find the active `@...` token ending at `cursor` (ignoring emails like `user@host`).
+pub fn active_at_token(input: &str, cursor: usize) -> Option<(usize, &str)> {
+    let before = input.get(..cursor)?;
+    let start = before.rfind(char::is_whitespace).map_or(0, |idx| {
+        idx + before[idx..].chars().next().map_or(1, char::len_utf8)
+    });
+    let token = &before[start..];
+    if token.starts_with('@') {
+        Some((start, token))
+    } else {
+        None
+    }
+}
+
+/// Format `/skills [search <kw>]` output cleanly for both inline REPL and TUI.
+pub fn format_skills_list(home: Option<&Path>, argument: &str) -> String {
+    let skills = hermes_runtime::context_refs::list_skill_commands(home);
+    if skills.is_empty() {
+        return "No skills installed in this profile. Run `hsr skills sync` to download official bundled skills.".into();
+    }
+    let filter = argument
+        .trim()
+        .strip_prefix("search")
+        .unwrap_or(argument)
+        .trim()
+        .to_ascii_lowercase();
+    let matched: Vec<_> = skills
+        .into_iter()
+        .filter(|s| {
+            filter.is_empty()
+                || s.name.contains(&filter)
+                || s.rel_path.to_ascii_lowercase().contains(&filter)
+                || s.description.to_ascii_lowercase().contains(&filter)
+        })
+        .collect();
+    if matched.is_empty() {
+        return format!("No installed skills matching '{filter}'.");
+    }
+    let mut lines = vec![format!(
+        "Installed skills ({}) — invoke with /<name> [prompt]:",
+        matched.len()
+    )];
+    for s in matched {
+        lines.push(format!("  /{:<20} {}", s.name, s.description));
+    }
+    lines.join("\n")
+}
+
+/// Execute `!<command>` directly in `root` and return `(is_error, display_text)`.
+pub fn format_shell_escape(root: &Path, command: &str) -> (bool, String) {
+    match hermes_runtime::context_refs::run_shell_escape(root, command) {
+        Ok(out) => {
+            let mut body = String::new();
+            if !out.stdout.trim_end().is_empty() {
+                body.push_str(out.stdout.trim_end());
+            }
+            if !out.stderr.trim_end().is_empty() {
+                if !body.is_empty() {
+                    body.push('\n');
+                }
+                body.push_str(out.stderr.trim_end());
+            }
+            if body.is_empty() {
+                body = format!("(exit {})", out.exit_code);
+            } else if out.exit_code != 0 {
+                body.push_str(&format!("\n(exit {})", out.exit_code));
+            }
+            (out.exit_code != 0, body)
+        }
+        Err(err) => (true, err),
+    }
+}
 
 /// Return slash commands matching the typed prefix (e.g. `"/mo"` -> `[/model]`).
 pub fn match_slash_commands(prefix: &str) -> Vec<&'static SlashCommand> {

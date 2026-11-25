@@ -1004,6 +1004,28 @@ where
                 .ok()
         })
         .collect::<Vec<_>>();
+    let expanded = hermes_runtime::context_refs::expand_context_references(
+        &request.query,
+        root,
+        request.compression.context_window().map(|n| n as usize),
+        Some(&request.web.website_policy),
+    )
+    .await;
+    for warning in &expanded.warnings {
+        if json_mode {
+            emit(Event::Stdout(json_warning(warning)));
+        } else {
+            emit(Event::Stderr(format!("Warning: {warning}")));
+        }
+    }
+    if !expanded.expanded.is_empty() && !json_mode {
+        emit(Event::Stderr(format!(
+            "Attached context: {}",
+            expanded.expanded.join(", ")
+        )));
+    }
+    let effective_query = expanded.text;
+
     let mut receiving = true;
     let outcome = {
         let turn = async {
@@ -1017,7 +1039,7 @@ where
                     &primary,
                     summarizer.as_ref(),
                     CompactionTrigger::Estimate {
-                        query: &request.query,
+                        query: &effective_query,
                     },
                     guard,
                 )
@@ -1040,7 +1062,7 @@ where
                 let result = run_turn(
                     &primary,
                     &fallbacks,
-                    &request.query,
+                    &effective_query,
                     options,
                     history.clone(),
                     |event| {
