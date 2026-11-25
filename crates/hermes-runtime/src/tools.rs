@@ -110,6 +110,8 @@ pub(crate) struct ToolContext<'c, 'w> {
     /// The model this turn is talking to, which a subagent talks to as well.
     pub route: &'c crate::turn::ModelRoute,
     pub fallbacks: &'c [crate::turn::ModelRoute],
+    /// Optional channel for streaming live tool output previews (`terminal`, `execute_code`).
+    pub tool_output: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 }
 
 type Call = for<'a, 'b, 'w> fn(&'a mut ToolContext<'b, 'w>, &'a str) -> BoxFuture<'a, Value>;
@@ -199,6 +201,7 @@ fn terminal_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFutur
             settings,
             session,
             cx.options.approval_policy,
+            cx.tool_output.clone(),
             &mut cx.approve,
         )
         .await

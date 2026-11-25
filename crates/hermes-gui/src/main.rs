@@ -1500,6 +1500,7 @@ impl Render for HermesAppView {
                     name,
                     detail,
                     summary,
+                    live_output,
                     state,
                 } => {
                     let (icon, col) = match state {
@@ -1516,6 +1517,21 @@ impl Render for HermesAppView {
                         line.push_str(" · ");
                         line.push_str(s);
                     }
+                    let preview_children: Vec<_> = if *state == ToolCardState::Running {
+                        live_output
+                            .iter()
+                            .map(|l| {
+                                div()
+                                    .w_full()
+                                    .text_xs()
+                                    .text_color(text_dim)
+                                    .child(SharedString::from(format!("┆ {l}")))
+                                    .into_any_element()
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
                     div()
                         .w_full()
                         .flex_shrink_0()
@@ -1535,9 +1551,17 @@ impl Render for HermesAppView {
                                 } else {
                                     border
                                 })
-                                .text_xs()
-                                .text_color(col)
-                                .child(SharedString::from(line)),
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .text_xs()
+                                        .text_color(col)
+                                        .child(SharedString::from(line)),
+                                )
+                                .children(preview_children),
                         )
                         .into_any_element()
                 }
@@ -1580,6 +1604,7 @@ impl Render for HermesAppView {
                     "Always saves flagged pattern(s) to command_allowlist in config.yaml"
                 }
                 ApprovalAction::RunCode => "Always saves approvals.code: off in config.yaml",
+                ApprovalAction::ManageSkills => "Always saves approvals.skills: off in config.yaml",
                 _ => "Always saves approvals.edits: off in config.yaml",
             };
             let title = format!(
@@ -2552,6 +2577,60 @@ impl Render for HermesAppView {
                 )
         });
 
+        let reasoning_preview_ui = if self.state.streaming {
+            let mut preview = self.state.live_reasoning.clone();
+            let partial = self.state.live_reasoning_partial.trim();
+            if !partial.is_empty() {
+                preview.push(partial.to_owned());
+            }
+            if preview.len() > 3 {
+                preview.drain(..preview.len() - 3);
+            }
+            if !preview.is_empty() {
+                Some(
+                    div()
+                        .w_full()
+                        .flex_shrink_0()
+                        .flex()
+                        .justify_start()
+                        .child(
+                            div()
+                                .w_full()
+                                .max_w(px(780.0))
+                                .px_3()
+                                .py_2()
+                                .rounded_md()
+                                .bg(rgb(0x161b24))
+                                .border_1()
+                                .border_color(border)
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .text_xs()
+                                        .text_color(accent)
+                                        .child("Thinking…"),
+                                )
+                                .children(preview.into_iter().map(|line| {
+                                    div()
+                                        .w_full()
+                                        .text_xs()
+                                        .text_color(text_dim)
+                                        .child(SharedString::from(format!("┆ {line}")))
+                                        .into_any_element()
+                                })),
+                        )
+                        .into_any_element(),
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         // Scrollable feed or Setup screen
         let main_body = if let Some(setup_el) = setup_view {
             setup_el.into_any_element()
@@ -2567,6 +2646,7 @@ impl Render for HermesAppView {
                 .flex_col()
                 .gap_2()
                 .children(feed_ui)
+                .children(reasoning_preview_ui)
                 .into_any_element()
         };
 
@@ -3218,7 +3298,11 @@ impl Render for HermesAppView {
     }
 }
 
-fn main() {
+fn main() -> std::process::ExitCode {
+    if let Some(code) = hermes_cli::try_run_embedded_subcommand() {
+        return code;
+    }
+
     Application::new().run(|cx: &mut App| {
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
@@ -3250,6 +3334,7 @@ fn main() {
             },
         );
     });
+    std::process::ExitCode::SUCCESS
 }
 
 #[cfg(test)]

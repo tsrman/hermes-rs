@@ -518,6 +518,9 @@ async fn run_managed_turn(home: Arc<Path>, request: ChatRequest, handle: TurnHan
                 ParsedStderr::ToolStarted { name, detail } => {
                     emitter.emit(TurnStreamEvent::ToolStarted { name, detail })
                 }
+                ParsedStderr::ToolOutput { name, text } => {
+                    emitter.emit(TurnStreamEvent::ToolOutput { name, text })
+                }
                 ParsedStderr::ToolFinished {
                     name,
                     succeeded,
@@ -527,6 +530,9 @@ async fn run_managed_turn(home: Arc<Path>, request: ChatRequest, handle: TurnHan
                     succeeded,
                     summary,
                 }),
+                ParsedStderr::Reasoning(text) => {
+                    emitter.emit(TurnStreamEvent::ReasoningDelta { text })
+                }
                 _ => emitter.emit(TurnStreamEvent::Status { text }),
             },
             Event::Approval { .. } | Event::Exit(_) => {}

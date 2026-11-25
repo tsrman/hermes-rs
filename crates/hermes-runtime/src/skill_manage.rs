@@ -1795,22 +1795,25 @@ where
             return shape_error("operations must be a non-empty array.");
         }
     }
-    let Some(timeout) = approval_timeout else {
-        return approval_error(ApprovalDecision::Unavailable);
-    };
-    let decision = request_approval(
-        ApprovalRequest {
-            target: skills.local_root().display().to_string(),
-            content: describe_changes(&args),
-            action: ApprovalAction::ManageSkills,
-            timeout_secs: timeout,
-        },
-        policy,
-        approve,
-    )
-    .await;
-    if !matches!(decision, ApprovalDecision::Approved) {
-        return approval_error(decision);
+    let auto_allowed = policy.is_some_and(|p| p.allows_skills());
+    if !auto_allowed {
+        let Some(timeout) = approval_timeout else {
+            return approval_error(ApprovalDecision::Unavailable);
+        };
+        let decision = request_approval(
+            ApprovalRequest {
+                target: skills.local_root().display().to_string(),
+                content: describe_changes(&args),
+                action: ApprovalAction::ManageSkills,
+                timeout_secs: timeout,
+            },
+            policy,
+            approve,
+        )
+        .await;
+        if !matches!(decision, ApprovalDecision::Approved) {
+            return approval_error(decision);
+        }
     }
     let default_name = text(args.get("name")).filter(|name| !name.is_empty());
     match operations {

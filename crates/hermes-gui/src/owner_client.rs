@@ -587,7 +587,7 @@ async fn stream_turn_events(
     }
 }
 
-fn find_hsr_binary() -> PathBuf {
+fn find_owner_binary() -> PathBuf {
     if let Ok(explicit) = std::env::var("HSR_BIN") {
         let p = PathBuf::from(explicit);
         if p.is_file() {
@@ -595,13 +595,7 @@ fn find_hsr_binary() -> PathBuf {
         }
     }
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let name = if cfg!(windows) { "hsr.exe" } else { "hsr" };
-            let sibling = dir.join(name);
-            if sibling.is_file() {
-                return sibling;
-            }
-        }
+        return exe;
     }
     PathBuf::from(if cfg!(windows) { "hsr.exe" } else { "hsr" })
 }
@@ -613,20 +607,25 @@ async fn ensure_owner_running(profile: &Path) -> Result<(), String> {
     ) {
         return Ok(());
     }
-    let hsr = find_hsr_binary();
-    Command::new(&hsr)
-        .arg("owner")
+    let owner_bin = find_owner_binary();
+    let mut cmd = Command::new(&owner_bin);
+    cmd.arg("owner")
         .env("HSR_HOME", profile)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| {
-            format!(
-                "Failed spawning local owner ({}): {e}. Ensure `hsr` is built or in PATH.",
-                hsr.display()
-            )
-        })?;
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.spawn().map_err(|e| {
+        format!(
+            "Failed spawning local owner ({}): {e}.",
+            owner_bin.display()
+        )
+    })?;
 
     let deadline = Instant::now() + Duration::from_secs(4);
     while Instant::now() < deadline {

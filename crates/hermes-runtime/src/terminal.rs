@@ -340,6 +340,7 @@ pub(crate) async fn execute<A, F>(
     settings: &TerminalSettings,
     session: &str,
     policy: Option<&crate::approval_policy::ApprovalPolicy>,
+    live_output: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     approve: &mut A,
 ) -> Value
 where
@@ -359,6 +360,7 @@ where
             settings,
             session,
             policy,
+            live_output,
             approve,
         )
         .await
@@ -374,6 +376,7 @@ where
             settings,
             session,
             policy,
+            live_output,
             approve,
         );
         approval_error(ApprovalDecision::Unavailable)
@@ -459,6 +462,7 @@ mod shell {
         settings: &TerminalSettings,
         session: &str,
         policy: Option<&crate::approval_policy::ApprovalPolicy>,
+        live_output: Option<tokio::sync::mpsc::UnboundedSender<String>>,
         approve: &mut A,
     ) -> Result<Value, String>
     where
@@ -582,6 +586,7 @@ mod shell {
             Duration::from_secs(u64::from(seconds)),
             settings,
             session,
+            live_output,
         )
         .await?;
         // Remember where the command ended, when that is still inside the workspace.
@@ -802,6 +807,7 @@ mod shell {
         duration: Duration,
         settings: &TerminalSettings,
         session: &str,
+        live_output: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> Result<Value, String> {
         // One pipe carries both streams, so output keeps the order the command wrote it in.
         let (reader, writer) = std::io::pipe().map_err(|error| error.to_string())?;
@@ -857,7 +863,11 @@ mod shell {
                     _ => Ok(None),
                 }
             };
-            tokio::try_join!(group.wait(), capture(receiver, &mut kept), snap_fut)
+            tokio::try_join!(
+                group.wait(),
+                capture(receiver, &mut kept, command, live_output.as_ref()),
+                snap_fut
+            )
         })
         .await;
         match result {
@@ -1071,14 +1081,49 @@ mod shell {
         }
     }
 
-    async fn capture(mut reader: impl AsyncRead + Unpin, kept: &mut Kept) -> io::Result<()> {
+    async fn capture(
+        mut reader: impl AsyncRead + Unpin,
+        kept: &mut Kept,
+        command: &str,
+        live_output: Option<&tokio::sync::mpsc::UnboundedSender<String>>,
+    ) -> io::Result<()> {
         let mut buffer = [0; 8192];
+        let mut last_emit = std::time::Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(std::time::Instant::now);
         loop {
             let count = reader.read(&mut buffer).await?;
             if count == 0 {
                 return Ok(());
             }
             kept.push(&buffer[..count]);
+            if let Some(tx) = live_output {
+                let now = std::time::Instant::now();
+                if now.duration_since(last_emit) >= Duration::from_millis(60) {
+                    let raw = String::from_utf8_lossy(&buffer[..count]);
+                    let stripped = crate::session_search::strip_ansi(&raw);
+                    let visible = match stripped.find(CWD_MARKER) {
+                        Some(idx) => &stripped[..idx],
+                        None => stripped.as_str(),
+                    };
+                    if !visible.trim().is_empty() {
+                        let tail = if visible.len() > 1024 {
+                            let mut start = visible.len() - 1024;
+                            while !visible.is_char_boundary(start) {
+                                start += 1;
+                            }
+                            &visible[start..]
+                        } else {
+                            visible
+                        };
+                        let safe = redact_terminal_output(tail, Some(command), &[]);
+                        if !safe.is_empty() {
+                            let _ = tx.send(safe);
+                            last_emit = now;
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1107,6 +1152,7 @@ mod tests {
             // One conversation per test directory, so tests running together do not share a
             // remembered working directory.
             &format!("terminal-test-{}", root.display()),
+            None,
             None,
             &mut approve,
         )
@@ -1373,6 +1419,7 @@ mod tests {
             background,
             settings,
             session,
+            None,
             None,
             &mut approve,
         )

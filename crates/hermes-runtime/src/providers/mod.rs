@@ -120,20 +120,46 @@ pub(crate) fn merge(
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum StreamDelta<'a> {
+    Text(&'a str),
+    Reasoning(&'a str),
+}
+
 impl Provider {
     pub async fn complete<F>(
         &self,
         request: &serde_json::Value,
-        on_text: F,
+        mut on_text: F,
     ) -> Result<Completion, ProviderError>
     where
         F: FnMut(&str),
     {
+        self.complete_stream(request, |delta| {
+            if let StreamDelta::Text(text) = delta {
+                on_text(text);
+            }
+        })
+        .await
+    }
+
+    pub async fn complete_stream<F>(
+        &self,
+        request: &serde_json::Value,
+        mut on_delta: F,
+    ) -> Result<Completion, ProviderError>
+    where
+        F: FnMut(StreamDelta<'_>),
+    {
         match self {
-            Self::OpenAi(provider) => provider.complete(request, on_text).await,
-            Self::Anthropic(provider) => provider.complete(request, on_text).await,
-            Self::Responses(provider) => provider.complete(request, on_text).await,
-            Self::Bedrock(provider) => provider.complete(request, on_text).await,
+            Self::OpenAi(provider) => provider.complete_stream(request, on_delta).await,
+            Self::Anthropic(provider) => provider.complete_stream(request, on_delta).await,
+            Self::Responses(provider) => provider.complete_stream(request, on_delta).await,
+            Self::Bedrock(provider) => {
+                provider
+                    .complete(request, |text| on_delta(StreamDelta::Text(text)))
+                    .await
+            }
         }
     }
 }

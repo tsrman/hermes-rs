@@ -201,7 +201,10 @@ pub struct TuiApp {
     mouse_capture: bool,
     spinner_tick: usize,
     streaming_assistant: String,
+    streaming_reasoning_lines: Vec<String>,
+    streaming_reasoning_partial: String,
     active_tools: HashMap<String, Instant>,
+    active_tool_output: HashMap<String, (Vec<String>, String)>,
     turn_started: Option<Instant>,
     turn_saved_session: Option<String>,
     turn_usage: Option<(u64, u64)>,
@@ -229,7 +232,10 @@ impl TuiApp {
             mouse_capture: true,
             spinner_tick: 0,
             streaming_assistant: String::new(),
+            streaming_reasoning_lines: Vec::new(),
+            streaming_reasoning_partial: String::new(),
             active_tools: HashMap::new(),
+            active_tool_output: HashMap::new(),
             turn_started: None,
             turn_saved_session: None,
             turn_usage: None,
@@ -656,6 +662,10 @@ fn parse_clarify_questions(content: &str) -> Vec<ClarifyQuestion> {
 fn handle_turn_event(app: &mut TuiApp, state: &mut ReplState, ev: ChatEvent) {
     match ev {
         ChatEvent::Stdout(chunk) => {
+            if !chunk.trim().is_empty() {
+                app.streaming_reasoning_lines.clear();
+                app.streaming_reasoning_partial.clear();
+            }
             if app.streaming_assistant.is_empty() {
                 let trimmed = chunk.trim_start_matches(['\r', '\n']);
                 if trimmed.is_empty() {
@@ -672,7 +682,17 @@ fn handle_turn_event(app: &mut TuiApp, state: &mut ReplState, ev: ChatEvent) {
             ParsedStderr::ContextUsage { tokens, estimated } => {
                 state.record_context(tokens, estimated);
             }
+            ParsedStderr::Reasoning(chunk) => {
+                crate::ui::append_preview_lines(
+                    &mut app.streaming_reasoning_lines,
+                    &mut app.streaming_reasoning_partial,
+                    &chunk,
+                    3,
+                );
+            }
             ParsedStderr::ToolStarted { name, detail } => {
+                app.streaming_reasoning_lines.clear();
+                app.streaming_reasoning_partial.clear();
                 let flushed = std::mem::take(&mut app.streaming_assistant);
                 let cleaned = flushed.trim_start_matches(['\r', '\n']).trim_end();
                 if !cleaned.is_empty() {
@@ -681,6 +701,7 @@ fn handle_turn_event(app: &mut TuiApp, state: &mut ReplState, ev: ChatEvent) {
                         .push(FeedEntry::Assistant(cleaned.to_owned()));
                 }
                 app.active_tools.insert(name.clone(), Instant::now());
+                app.active_tool_output.remove(&name);
                 state.feed_entries.push(FeedEntry::Tool {
                     name,
                     detail,
@@ -688,6 +709,13 @@ fn handle_turn_event(app: &mut TuiApp, state: &mut ReplState, ev: ChatEvent) {
                     summary: None,
                     elapsed_ms: None,
                 });
+            }
+            ParsedStderr::ToolOutput { name, text } => {
+                let entry = app
+                    .active_tool_output
+                    .entry(name)
+                    .or_insert_with(|| (Vec::new(), String::new()));
+                crate::ui::append_preview_lines(&mut entry.0, &mut entry.1, &text, 3);
             }
             ParsedStderr::ToolFinished {
                 name,
@@ -698,6 +726,7 @@ fn handle_turn_event(app: &mut TuiApp, state: &mut ReplState, ev: ChatEvent) {
                     .active_tools
                     .remove(&name)
                     .map(|t| t.elapsed().as_millis() as u64);
+                app.active_tool_output.remove(&name);
                 let new_status = if succeeded {
                     ToolStatus::Succeeded
                 } else {
@@ -759,6 +788,9 @@ fn finish_turn(app: &mut TuiApp, state: &mut ReplState, result: Result<u8, Strin
         .map(|s| s.elapsed().as_secs_f64())
         .unwrap_or(0.0);
     app.active_tools.clear();
+    app.active_tool_output.clear();
+    app.streaming_reasoning_lines.clear();
+    app.streaming_reasoning_partial.clear();
     let final_text = std::mem::take(&mut app.streaming_assistant);
     let cleaned = final_text.trim_start_matches(['\r', '\n']).trim_end();
     if !cleaned.is_empty() {
@@ -816,7 +848,10 @@ fn start_turn(
     state.feed_entries.push(FeedEntry::User(query.clone()));
     app.scroll_from_bottom = 0;
     app.streaming_assistant.clear();
+    app.streaming_reasoning_lines.clear();
+    app.streaming_reasoning_partial.clear();
     app.active_tools.clear();
+    app.active_tool_output.clear();
     app.turn_started = Some(Instant::now());
     app.turn_saved_session = None;
     app.turn_usage = None;
@@ -907,6 +942,9 @@ async fn handle_key_event(
             app.modal = None;
             app.turn_started = None;
             app.active_tools.clear();
+            app.active_tool_output.clear();
+            app.streaming_reasoning_lines.clear();
+            app.streaming_reasoning_partial.clear();
             let partial = std::mem::take(&mut app.streaming_assistant);
             let cleaned = partial.trim_start_matches(['\r', '\n']).trim_end();
             if !cleaned.is_empty() {
@@ -2467,6 +2505,16 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
                         Span::styled(note, Style::default().fg(Color::Red)),
                     ]));
                 }
+                if matches!(status, ToolStatus::Running) {
+                    if let Some((buf_lines, partial)) = app.active_tool_output.get(name) {
+                        for preview_line in crate::ui::preview_tail_lines(buf_lines, partial, 3) {
+                            lines.push(Line::from(vec![
+                                Span::styled("  │   ┆ ", Style::default().fg(Color::DarkGray)),
+                                Span::styled(preview_line, Style::default().fg(Color::Gray)),
+                            ]));
+                        }
+                    }
+                }
             }
             FeedEntry::Notice { kind, text } => {
                 let (prefix, style) = match kind {
@@ -2484,7 +2532,22 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
         }
     }
 
-    if !app.streaming_assistant.is_empty() {
+    let (inline_think_lines, visible_stream) = if !app.streaming_assistant.is_empty() {
+        crate::ui::split_streaming_think(&app.streaming_assistant, 3)
+    } else {
+        (Vec::new(), "")
+    };
+    let reasoning_preview = if !inline_think_lines.is_empty() {
+        inline_think_lines
+    } else {
+        crate::ui::preview_tail_lines(
+            &app.streaming_reasoning_lines,
+            &app.streaming_reasoning_partial,
+            3,
+        )
+    };
+
+    if !visible_stream.is_empty() {
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));
         }
@@ -2497,7 +2560,7 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
             ),
             Span::styled(spinner_glyph, Style::default().fg(Color::Cyan)),
         ]));
-        let cleaned = app.streaming_assistant.trim_start_matches(['\r', '\n']);
+        let cleaned = visible_stream.trim_start_matches(['\r', '\n']);
         lines.extend(render_markdown_lines(cleaned, state.color));
     } else if app.is_busy() && app.active_tools.is_empty() {
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
@@ -2507,6 +2570,17 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
             Span::styled(spinner_glyph, Style::default().fg(Color::Cyan)),
             Span::styled(" Thinking…", Style::default().fg(Color::DarkGray)),
         ]));
+        for thought_line in reasoning_preview {
+            lines.push(Line::from(vec![
+                Span::styled("  ┆ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    thought_line,
+                    Style::default()
+                        .fg(Color::Gray)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+        }
     }
 
     let inner = Rect {
@@ -4064,5 +4138,63 @@ mod tests {
         handle_slash_command(&mut app, &mut state, None, "copy all").await;
         let all = clip.writes().last().cloned().unwrap();
         assert!(all.contains("You:\nQuestion") && all.contains("Hermes:\nHello world"));
+    }
+
+    #[test]
+    fn renders_live_reasoning_and_tool_output_preview_lines_and_clears_when_done() {
+        let mut state = sample_state();
+        state.feed_entries.clear();
+        let mut app = TuiApp::new();
+        app.turn_started = Some(Instant::now());
+
+        // 1. Live reasoning preview shows last 3 lines under Thinking…
+        handle_turn_event(
+            &mut app,
+            &mut state,
+            ChatEvent::Stderr(
+                "Reasoning: \"thought 1\\nthought 2\\nthought 3\\nthought 4\"".into(),
+            ),
+        );
+        let backend = TestBackend::new(90, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let screen1 = buffer_text(&terminal);
+        assert!(screen1.contains("Thinking…"), "{screen1}");
+        assert!(!screen1.contains("thought 1"), "{screen1}");
+        assert!(screen1.contains("thought 2"), "{screen1}");
+        assert!(screen1.contains("thought 3"), "{screen1}");
+        assert!(screen1.contains("thought 4"), "{screen1}");
+
+        // 2. Live tool output preview shows last 3 lines under running tool card
+        handle_turn_event(
+            &mut app,
+            &mut state,
+            ChatEvent::Stderr("Tool started: \"terminal\"\tpython3 run.py".into()),
+        );
+        handle_turn_event(
+            &mut app,
+            &mut state,
+            ChatEvent::Stderr(
+                "Tool output: \"terminal\"\t\"row 1\\nrow 2\\nrow 3\\nrow 4\\n\"".into(),
+            ),
+        );
+        terminal.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let screen2 = buffer_text(&terminal);
+        assert!(screen2.contains("terminal"), "{screen2}");
+        assert!(!screen2.contains("row 1"), "{screen2}");
+        assert!(screen2.contains("row 2"), "{screen2}");
+        assert!(screen2.contains("row 3"), "{screen2}");
+        assert!(screen2.contains("row 4"), "{screen2}");
+
+        // 3. Finishing the tool clears its transient output lines cleanly.
+        handle_turn_event(
+            &mut app,
+            &mut state,
+            ChatEvent::Stderr("Tool completed: \"terminal\"\texit 0".into()),
+        );
+        terminal.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let screen3 = buffer_text(&terminal);
+        assert!(!screen3.contains("row 4"), "{screen3}");
+        assert!(screen3.contains("exit 0"), "{screen3}");
     }
 }

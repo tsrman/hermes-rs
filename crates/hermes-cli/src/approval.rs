@@ -241,6 +241,8 @@ mod terminal {
         };
         let choices = if matches!(request.action, ApprovalAction::RunCode) {
             "Answer y to approve once, s for this session, a to always allow Python code (saved to config.yaml), anything else to deny.\nApprove? [y/s/a/N] "
+        } else if matches!(request.action, ApprovalAction::ManageSkills) {
+            "Answer y to approve once, s for this session, a to always allow skill changes (saved to config.yaml), anything else to deny.\nApprove? [y/s/a/N] "
         } else if command {
             "Answer y to approve once, s for this conversation, a to always allow what it was flagged for (saved to command_allowlist), anything else to deny.\nApprove? [y/s/a/N] "
         } else {

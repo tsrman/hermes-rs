@@ -839,6 +839,40 @@ pub async fn run(
                                     }
                                     output_open
                                 }
+                                ParsedStderr::ToolOutput { name, text } => {
+                                    if styled {
+                                        if let Some(last) = text
+                                            .lines()
+                                            .rev()
+                                            .map(str::trim)
+                                            .find(|l| !l.is_empty())
+                                        {
+                                            let clean = approval::sanitize_terminal_text(last);
+                                            let clip: String = clean.chars().take(72).collect();
+                                            if !clip.is_empty() {
+                                                sp_for_events.start(format!("{name} · {clip}"));
+                                            }
+                                        }
+                                    }
+                                    true
+                                }
+                                ParsedStderr::Reasoning(text) => {
+                                    if styled && !has_printed_text {
+                                        if let Some(last) = text
+                                            .lines()
+                                            .rev()
+                                            .map(str::trim)
+                                            .find(|l| !l.is_empty())
+                                        {
+                                            let clean = approval::sanitize_terminal_text(last);
+                                            let clip: String = clean.chars().take(72).collect();
+                                            if !clip.is_empty() {
+                                                sp_for_events.start(format!("Thinking · {clip}"));
+                                            }
+                                        }
+                                    }
+                                    true
+                                }
                                 ParsedStderr::ToolFinished {
                                     name,
                                     succeeded,

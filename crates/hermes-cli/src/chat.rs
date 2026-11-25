@@ -1072,8 +1072,12 @@ where
                     |event| {
                         started |=
                             matches!(event, TurnEvent::Text(_) | TurnEvent::ToolStarted { .. });
-                        if matches!(event, TurnEvent::ContextUsage { .. })
-                            && (json_mode || request.state_scope.is_none())
+                        if matches!(
+                            event,
+                            TurnEvent::ContextUsage { .. }
+                                | TurnEvent::Reasoning(_)
+                                | TurnEvent::ToolOutput { .. }
+                        ) && (json_mode || request.state_scope.is_none())
                         {
                             return;
                         }
@@ -1200,6 +1204,7 @@ fn format_json_event(event: TurnEvent<'_>) -> Event {
             fields.insert("text".into(), serde_json::json!(text));
             json_event("text", fields)
         }
+        TurnEvent::Reasoning(_) | TurnEvent::ToolOutput { .. } => String::new(),
         TurnEvent::Fallback(model) => {
             fields.insert("model".into(), serde_json::json!(model));
             json_event("fallback", fields)
@@ -1231,11 +1236,19 @@ fn format_json_event(event: TurnEvent<'_>) -> Event {
 fn format_event(event: TurnEvent<'_>, detailed: bool) -> Event {
     match event {
         TurnEvent::Text(text) => Event::Stdout(text.into()),
+        TurnEvent::Reasoning(text) => Event::Stderr(format!(
+            "Reasoning: {}",
+            serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into())
+        )),
         TurnEvent::Fallback(model) => Event::Stderr(format!("Model fallback: {model:?}")),
         TurnEvent::ToolStarted { name, detail } => match detail.filter(|_| detailed) {
             Some(detail) => Event::Stderr(format!("Tool started: {name:?}\t{detail}")),
             None => Event::Stderr(format!("Tool started: {name:?}")),
         },
+        TurnEvent::ToolOutput { name, text } => Event::Stderr(format!(
+            "Tool output: {name:?}\t{}",
+            serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into())
+        )),
         TurnEvent::ToolFinished {
             name,
             succeeded,

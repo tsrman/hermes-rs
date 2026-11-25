@@ -51,10 +51,14 @@ pub struct ApprovalSettings {
     /// `approvals.code: auto | ask | off` (default `auto`).
     #[serde(default)]
     pub code_mode: CodeApprovalMode,
-    /// `approvals.edits: off` (or `allow`/`approve`/`always`/`false`): approve file edits and
-    /// skill changes without asking.
+    /// `approvals.edits: off` (or `allow`/`approve`/`always`/`false`): approve file edits without
+    /// asking.
     #[serde(default)]
     pub approve_edits: bool,
+    /// `approvals.skills: ask` (or `on`/`true`/`manual`/`strict`): ask before `skill_manage`
+    /// creates, modifies, or deletes skills. Defaults to `false` (`off`, no prompt).
+    #[serde(default)]
+    pub skills_ask: bool,
     /// Command patterns (`*` and `?`, case-insensitive) that need no asking.
     #[serde(default)]
     pub allow: Vec<String>,
@@ -98,6 +102,16 @@ fn parse_edits_auto_approve(value: &serde_yaml::Value) -> bool {
             matches!(
                 mode.trim().to_ascii_lowercase().as_str(),
                 "off" | "false" | "allow" | "approve" | "always" | "yes"
+            )
+        })
+}
+
+fn parse_skills_ask(value: &serde_yaml::Value) -> bool {
+    *value == true
+        || value.as_str().is_some_and(|mode| {
+            matches!(
+                mode.trim().to_ascii_lowercase().as_str(),
+                "ask" | "on" | "true" | "manual" | "always_ask" | "strict"
             )
         })
 }
@@ -150,6 +164,7 @@ impl ApprovalSettings {
                 || section["mode"] == false,
             code_mode: parse_code_approval_mode(&section["code"]),
             approve_edits: parse_edits_auto_approve(&section["edits"]),
+            skills_ask: parse_skills_ask(&section["skills"]),
             allow: string_list(&section["allow"]),
             deny: string_list(&section["deny"]),
             command_allowlist: string_list(&config["command_allowlist"]),
@@ -186,17 +201,19 @@ pub enum Verdict {
 #[derive(Clone, Debug, Default)]
 pub struct SessionGrants {
     pub edits: bool,
+    pub skills: bool,
     pub all_code: bool,
     pub keys: HashSet<String>,
 }
 
 impl SessionGrants {
     pub fn is_empty(&self) -> bool {
-        !self.edits && !self.all_code && self.keys.is_empty()
+        !self.edits && !self.skills && !self.all_code && self.keys.is_empty()
     }
 
     pub fn merge_from(&mut self, other: &SessionGrants) {
         self.edits |= other.edits;
+        self.skills |= other.skills;
         self.all_code |= other.all_code;
         self.keys.extend(other.keys.iter().cloned());
     }
@@ -205,6 +222,7 @@ impl SessionGrants {
 #[derive(Default)]
 struct Grants {
     edits: bool,
+    skills: bool,
     all_code: bool,
     /// Dangerous-pattern keys answered "session" or "always" in this run.
     keys: HashSet<String>,
@@ -248,6 +266,8 @@ pub struct ApprovalPolicy {
     approve_code_always: std::sync::atomic::AtomicBool,
     /// Set by `approvals.edits: off` or an "Always" grant for file edits.
     approve_edits_always: std::sync::atomic::AtomicBool,
+    /// Set by `approvals.skills: off` (default) or an "Always" grant for `skill_manage`.
+    approve_skills_always: std::sync::atomic::AtomicBool,
     /// The last command analysed, so asking about it, explaining it and remembering the answer read
     /// the detector once.
     analysed: Mutex<Option<Analysed>>,
@@ -362,6 +382,7 @@ impl ApprovalPolicy {
         let permanent = settings.command_allowlist.iter().cloned().collect();
         let approve_code_always = settings.code_mode == CodeApprovalMode::Off;
         let approve_edits_always = settings.approve_edits;
+        let approve_skills_always = !settings.skills_ask;
         Self {
             settings,
             grants: Mutex::new(Grants::default()),
@@ -369,9 +390,26 @@ impl ApprovalPolicy {
             approve_all: std::sync::atomic::AtomicBool::new(false),
             approve_code_always: std::sync::atomic::AtomicBool::new(approve_code_always),
             approve_edits_always: std::sync::atomic::AtomicBool::new(approve_edits_always),
+            approve_skills_always: std::sync::atomic::AtomicBool::new(approve_skills_always),
             analysed: Mutex::new(None),
             unattended: Mutex::new(None),
         }
+    }
+
+    /// True when `skill_manage` may run without asking for approval (default: true unless
+    /// `approvals.skills: ask` is configured).
+    pub fn allows_skills(&self) -> bool {
+        if self.approves_all()
+            || self
+                .approve_skills_always
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return true;
+        }
+        self.grants
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .skills
     }
 
     /// True when the sandboxed embedded RustPython kernel may execute without an upfront
@@ -399,6 +437,7 @@ impl ApprovalPolicy {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         SessionGrants {
             edits: grants.edits,
+            skills: grants.skills,
             all_code: grants.all_code,
             keys: grants.keys.clone(),
         }
@@ -410,6 +449,7 @@ impl ApprovalPolicy {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         grants.edits |= saved.edits;
+        grants.skills |= saved.skills;
         grants.all_code |= saved.all_code;
         grants.keys.extend(saved.keys.iter().cloned());
     }
@@ -579,14 +619,24 @@ impl ApprovalPolicy {
                 }
             }
             ApprovalAction::RunCommand => self.decide_command(request.content.trim(), &grants),
-            ApprovalAction::CreateFile
-            | ApprovalAction::ReplaceFile
-            | ApprovalAction::ManageSkills => {
+            ApprovalAction::CreateFile | ApprovalAction::ReplaceFile => {
                 if self.approves_all()
                     || self
                         .approve_edits_always
                         .load(std::sync::atomic::Ordering::Relaxed)
                     || grants.edits
+                {
+                    Verdict::Allow
+                } else {
+                    Verdict::Ask
+                }
+            }
+            ApprovalAction::ManageSkills => {
+                if self.approves_all()
+                    || self
+                        .approve_skills_always
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    || grants.skills
                 {
                     Verdict::Allow
                 } else {
@@ -608,7 +658,7 @@ impl ApprovalPolicy {
             .collect()
     }
 
-    /// Remember an approval for this run: file edits, exact code text, or flagged command keys.
+    /// Remember an approval for this run: file edits, skill changes, exact code text, or flagged command keys.
     pub fn remember(&self, request: &ApprovalRequest) {
         let keys = match request.action {
             ApprovalAction::RunCommand => self.rememberable_keys(request.content.trim()),
@@ -623,17 +673,18 @@ impl ApprovalPolicy {
                 grants.code.insert(request.content.clone());
             }
             ApprovalAction::RunCommand => grants.keys.extend(keys),
-            ApprovalAction::CreateFile
-            | ApprovalAction::ReplaceFile
-            | ApprovalAction::ManageSkills => {
+            ApprovalAction::CreateFile | ApprovalAction::ReplaceFile => {
                 grants.edits = true;
+            }
+            ApprovalAction::ManageSkills => {
+                grants.skills = true;
             }
             ApprovalAction::Clarify => {}
         }
     }
 
-    /// The person answered "for this session": allows subsequent file edits, Python scripts,
-    /// or matching flagged command categories for the rest of the conversation.
+    /// The person answered "for this session": allows subsequent file edits, skill changes,
+    /// Python scripts, or matching flagged command categories for the rest of the conversation.
     pub fn remember_session(&self, request: &ApprovalRequest) {
         if matches!(request.action, ApprovalAction::RunCode) {
             let mut grants = self
@@ -648,7 +699,8 @@ impl ApprovalPolicy {
     }
 
     /// The person answered "always": remember for this run and persist the setting into the
-    /// profile's `config.yaml` (`command_allowlist`, `approvals.code: off`, or `approvals.edits: off`).
+    /// profile's `config.yaml` (`command_allowlist`, `approvals.code: off`, `approvals.edits: off`,
+    /// or `approvals.skills: off`).
     pub fn remember_always(&self, request: &ApprovalRequest) -> (Vec<String>, Option<String>) {
         match request.action {
             ApprovalAction::RunCommand => {
@@ -674,9 +726,7 @@ impl ApprovalPolicy {
                 });
                 (vec!["approvals.code=off".into()], error)
             }
-            ApprovalAction::CreateFile
-            | ApprovalAction::ReplaceFile
-            | ApprovalAction::ManageSkills => {
+            ApprovalAction::CreateFile | ApprovalAction::ReplaceFile => {
                 self.remember(request);
                 self.approve_edits_always
                     .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -684,6 +734,15 @@ impl ApprovalPolicy {
                     crate::config::set_config_value(dir, "approvals.edits", "off").err()
                 });
                 (vec!["approvals.edits=off".into()], error)
+            }
+            ApprovalAction::ManageSkills => {
+                self.remember(request);
+                self.approve_skills_always
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                let error = self.settings.profile_dir.as_deref().and_then(|dir| {
+                    crate::config::set_config_value(dir, "approvals.skills", "off").err()
+                });
+                (vec!["approvals.skills=off".into()], error)
             }
             ApprovalAction::Clarify => (Vec::new(), None),
         }
@@ -1045,5 +1104,40 @@ mod tests {
             reloaded.decide(&request(ApprovalAction::CreateFile, "x")),
             Verdict::Allow
         );
+
+        // `approvals.skills` defaults to off (no prompt for `skill_manage`), can be enabled with `ask`,
+        // and `remember_always` persists `approvals.skills: off` independently of `approvals.edits`.
+        let skills_dir = tempfile::tempdir().unwrap();
+        let default_skills = ApprovalPolicy::new(
+            ApprovalSettings::from_config(&serde_yaml::Value::Null)
+                .with_profile_dir(skills_dir.path()),
+        );
+        assert!(default_skills.allows_skills());
+        assert_eq!(
+            default_skills.decide(&request(ApprovalAction::ManageSkills, "create s")),
+            Verdict::Allow
+        );
+        assert_eq!(
+            default_skills.decide(&request(ApprovalAction::CreateFile, "x")),
+            Verdict::Ask
+        );
+
+        let ask_cfg: serde_yaml::Value = serde_yaml::from_str("approvals: {skills: ask}").unwrap();
+        let ask_skills = ApprovalPolicy::new(
+            ApprovalSettings::from_config(&ask_cfg).with_profile_dir(skills_dir.path()),
+        );
+        assert!(!ask_skills.allows_skills());
+        let skill_req = request(ApprovalAction::ManageSkills, "create s");
+        assert_eq!(ask_skills.decide(&skill_req), Verdict::Ask);
+        let (_, skills_err) = ask_skills.remember_always(&skill_req);
+        assert!(skills_err.is_none(), "{skills_err:?}");
+        assert!(ask_skills.allows_skills());
+        let skills_disk: serde_yaml::Value = serde_yaml::from_str(
+            &std::fs::read_to_string(skills_dir.path().join("config.yaml")).unwrap(),
+        )
+        .unwrap();
+        let reloaded_skills = ApprovalPolicy::new(ApprovalSettings::from_config(&skills_disk));
+        assert!(reloaded_skills.allows_skills());
+        assert!(!reloaded_skills.settings().approve_edits);
     }
 }

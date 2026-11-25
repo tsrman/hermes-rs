@@ -66,34 +66,63 @@ impl AnthropicProvider {
     pub async fn complete<F>(
         &self,
         request: &Value,
-        on_text: F,
+        mut on_text: F,
     ) -> Result<Completion, ProviderError>
     where
         F: FnMut(&str),
     {
-        self.complete_with(request, on_text, true).await
+        self.complete_with(
+            request,
+            |delta| {
+                if let super::StreamDelta::Text(text) = delta {
+                    on_text(text);
+                }
+            },
+            true,
+        )
+        .await
+    }
+
+    pub async fn complete_stream<F>(
+        &self,
+        request: &Value,
+        on_delta: F,
+    ) -> Result<Completion, ProviderError>
+    where
+        F: FnMut(super::StreamDelta<'_>),
+    {
+        self.complete_with(request, on_delta, true).await
     }
 
     /// A side request such as the compression summary: the configured body fields are not sent.
     pub async fn complete_plain<F>(
         &self,
         request: &Value,
-        on_text: F,
+        mut on_text: F,
     ) -> Result<Completion, ProviderError>
     where
         F: FnMut(&str),
     {
-        self.complete_with(request, on_text, false).await
+        self.complete_with(
+            request,
+            |delta| {
+                if let super::StreamDelta::Text(text) = delta {
+                    on_text(text);
+                }
+            },
+            false,
+        )
+        .await
     }
 
     async fn complete_with<F>(
         &self,
         request: &Value,
-        mut on_text: F,
+        mut on_delta: F,
         with_extra_body: bool,
     ) -> Result<Completion, ProviderError>
     where
-        F: FnMut(&str),
+        F: FnMut(super::StreamDelta<'_>),
     {
         let mut request = translate_request(request)?;
         if with_extra_body {
@@ -175,7 +204,7 @@ impl AnthropicProvider {
                                     .get("text")
                                     .and_then(Value::as_str)
                                     .ok_or(ProviderError::InvalidEvent)?;
-                                on_text(text);
+                                on_delta(super::StreamDelta::Text(text));
                                 completion.content.push_str(text);
                             }
                             Some("input_json_delta") => {
@@ -189,7 +218,15 @@ impl AnthropicProvider {
                                     .arguments
                                     .push_str(part);
                             }
-                            // Thinking and signature deltas are not part of the replayed history.
+                            Some("thinking_delta") => {
+                                if let Some(thought) = delta.get("thinking").and_then(Value::as_str)
+                                {
+                                    if !thought.is_empty() {
+                                        on_delta(super::StreamDelta::Reasoning(thought));
+                                    }
+                                }
+                            }
+                            // Signature and other deltas are not part of the replayed history.
                             _ => {}
                         }
                     }

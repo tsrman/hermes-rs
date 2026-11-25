@@ -664,10 +664,17 @@ fn apply_ephemeral_prompt(base: &str, ephemeral: Option<&str>) -> String {
 
 pub enum TurnEvent<'a> {
     Text(&'a str),
+    /// Incremental model reasoning / thinking delta (ephemeral live preview, not stored in reply).
+    Reasoning(&'a str),
     Fallback(&'a str),
     ToolStarted {
         name: &'a str,
         detail: Option<&'a str>,
+    },
+    /// Incremental live output chunk from a running tool (`terminal`, `execute_code`).
+    ToolOutput {
+        name: &'a str,
+        text: &'a str,
     },
     ToolFinished {
         name: &'a str,
@@ -909,9 +916,16 @@ where
             let mut emitted_text = false;
             let result = route
                 .provider
-                .complete(&request, |text| {
-                    emitted_text |= !text.is_empty();
-                    on_event(TurnEvent::Text(text));
+                .complete_stream(&request, |delta| match delta {
+                    crate::providers::StreamDelta::Text(text) => {
+                        emitted_text |= !text.is_empty();
+                        on_event(TurnEvent::Text(text));
+                    }
+                    crate::providers::StreamDelta::Reasoning(thought) => {
+                        if !thought.is_empty() {
+                            on_event(TurnEvent::Reasoning(thought));
+                        }
+                    }
                 })
                 .await;
             match result {
@@ -1135,6 +1149,7 @@ where
             } else {
                 tools::find(&name, options.tools)
             } {
+                let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
                 let mut context = ToolContext {
                     options: &options,
                     skills: &history.skills,
@@ -1144,8 +1159,35 @@ where
                     approve: &mut approve_dyn,
                     route,
                     fallbacks,
+                    tool_output: Some(out_tx),
                 };
-                tool.call(&mut context, &arguments).await
+                let out = {
+                    let mut call_fut = std::pin::pin!(tool.call(&mut context, &arguments));
+                    loop {
+                        tokio::select! {
+                            biased;
+                            Some(chunk) = out_rx.recv() => {
+                                if !chunk.is_empty() {
+                                    on_event(TurnEvent::ToolOutput {
+                                        name: &name,
+                                        text: &chunk,
+                                    });
+                                }
+                            }
+                            res = &mut call_fut => break res,
+                        }
+                    }
+                };
+                drop(context);
+                while let Ok(chunk) = out_rx.try_recv() {
+                    if !chunk.is_empty() {
+                        on_event(TurnEvent::ToolOutput {
+                            name: &name,
+                            text: &chunk,
+                        });
+                    }
+                }
+                out
             } else {
                 // A tool the toolset configuration does not allow is unknown, whatever the model sends.
                 json!({"error": format!("Unknown tool: {name}")})

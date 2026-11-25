@@ -391,15 +391,91 @@ pub enum ParsedStderr {
         name: String,
         detail: Option<String>,
     },
+    ToolOutput {
+        name: String,
+        text: String,
+    },
     ToolFinished {
         name: String,
         succeeded: bool,
         summary: Option<String>,
     },
+    Reasoning(String),
     Fallback(String),
     ContextCompressed(String),
     IterationLimit(String),
     Other(String),
+}
+
+/// Append a raw live-output or reasoning chunk into a rolling tail buffer of at most `max_lines`
+/// non-empty sanitized lines, preserving an in-progress partial line across chunk boundaries and
+/// handling `\r` progress overwrites cleanly.
+pub fn append_preview_lines(
+    lines: &mut Vec<String>,
+    partial: &mut String,
+    chunk: &str,
+    max_lines: usize,
+) {
+    let max_lines = max_lines.max(1);
+    for ch in chunk.chars() {
+        match ch {
+            '\n' => {
+                let cleaned = approval::sanitize_terminal_text(partial.trim());
+                partial.clear();
+                if !cleaned.is_empty() {
+                    lines.push(cleaned);
+                    if lines.len() > max_lines {
+                        let excess = lines.len() - max_lines;
+                        lines.drain(..excess);
+                    }
+                }
+            }
+            '\r' => {
+                partial.clear();
+            }
+            c => {
+                if partial.len() < 400 {
+                    partial.push(c);
+                }
+            }
+        }
+    }
+}
+
+/// Snapshot the latest `max_lines` lines from `(lines, partial)` for live rendering.
+pub fn preview_tail_lines(lines: &[String], partial: &str, max_lines: usize) -> Vec<String> {
+    let mut out: Vec<String> = lines.to_vec();
+    let trimmed = approval::sanitize_terminal_text(partial.trim());
+    if !trimmed.is_empty() {
+        out.push(trimmed);
+    }
+    if out.len() > max_lines {
+        out.drain(..out.len() - max_lines);
+    }
+    out
+}
+
+/// Split an in-flight streaming assistant buffer that begins with an inline `<think>` / `<thought>`
+/// / `<thinking>` / `<reasoning>` tag into `(active_reasoning_preview_lines, visible_answer)`.
+pub fn split_streaming_think(raw: &str, max_lines: usize) -> (Vec<String>, &str) {
+    let trimmed = raw.trim_start();
+    for (open, close) in [
+        ("<think>", "</think>"),
+        ("<thought>", "</thought>"),
+        ("<thinking>", "</thinking>"),
+        ("<reasoning>", "</reasoning>"),
+    ] {
+        if let Some(after_open) = trimmed.strip_prefix(open) {
+            if let Some((_inside, rest)) = after_open.split_once(close) {
+                return (Vec::new(), rest.trim_start_matches(['\r', '\n', ' ']));
+            }
+            let mut lines = Vec::new();
+            let mut partial = String::new();
+            append_preview_lines(&mut lines, &mut partial, after_open, max_lines);
+            return (preview_tail_lines(&lines, &partial, max_lines), "");
+        }
+    }
+    (Vec::new(), raw)
 }
 
 fn unquote_debug_str(raw: &str) -> String {
@@ -444,6 +520,18 @@ pub fn parse_stderr_event(text: &str) -> ParsedStderr {
     if let Some(raw) = text.strip_prefix("Tool started: ") {
         let (name, detail) = split_name_and_extra(raw);
         return ParsedStderr::ToolStarted { name, detail };
+    }
+    if let Some(raw) = text.strip_prefix("Tool output: ") {
+        if let Some((name_raw, chunk_raw)) = raw.split_once('\t') {
+            let name = unquote_debug_str(name_raw);
+            let chunk =
+                serde_json::from_str::<String>(chunk_raw).unwrap_or_else(|_| chunk_raw.to_owned());
+            return ParsedStderr::ToolOutput { name, text: chunk };
+        }
+    }
+    if let Some(raw) = text.strip_prefix("Reasoning: ") {
+        let chunk = serde_json::from_str::<String>(raw).unwrap_or_else(|_| raw.to_owned());
+        return ParsedStderr::Reasoning(chunk);
     }
     if let Some(raw) = text.strip_prefix("Tool completed: ") {
         let (name, summary) = split_name_and_extra(raw);
@@ -1393,5 +1481,42 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn parses_reasoning_and_tool_output_and_keeps_three_preview_lines() {
+        assert_eq!(
+            parse_stderr_event("Reasoning: \"checking\\nfiles\""),
+            ParsedStderr::Reasoning("checking\nfiles".into())
+        );
+        assert_eq!(
+            parse_stderr_event("Tool output: \"terminal\"\t\"step 1\\nstep 2\\n\""),
+            ParsedStderr::ToolOutput {
+                name: "terminal".into(),
+                text: "step 1\nstep 2\n".into(),
+            }
+        );
+
+        let mut lines = Vec::new();
+        let mut partial = String::new();
+        append_preview_lines(&mut lines, &mut partial, "line 1\nline 2\n", 3);
+        append_preview_lines(
+            &mut lines,
+            &mut partial,
+            "old\rline 3\nline 4\nin progress",
+            3,
+        );
+        assert_eq!(
+            preview_tail_lines(&lines, &partial, 3),
+            vec!["line 3", "line 4", "in progress"]
+        );
+
+        let (think_lines, visible) = split_streaming_think("<think>a\nb\nc\nd", 3);
+        assert_eq!(think_lines, vec!["b", "c", "d"]);
+        assert_eq!(visible, "");
+
+        let (done_lines, answer) = split_streaming_think("<think>step 1</think>\nFinal answer", 3);
+        assert!(done_lines.is_empty());
+        assert_eq!(answer, "Final answer");
     }
 }

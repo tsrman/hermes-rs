@@ -78,12 +78,32 @@ impl OpenAiProvider {
     pub async fn complete<F>(
         &self,
         request: &Value,
-        on_text: F,
+        mut on_text: F,
     ) -> Result<Completion, ProviderError>
     where
         F: FnMut(&str),
     {
-        self.complete_with(request, on_text, true).await
+        self.complete_with(
+            request,
+            |delta| {
+                if let super::StreamDelta::Text(text) = delta {
+                    on_text(text);
+                }
+            },
+            true,
+        )
+        .await
+    }
+
+    pub async fn complete_stream<F>(
+        &self,
+        request: &Value,
+        on_delta: F,
+    ) -> Result<Completion, ProviderError>
+    where
+        F: FnMut(super::StreamDelta<'_>),
+    {
+        self.complete_with(request, on_delta, true).await
     }
 
     /// A side request such as the compression summary: the configured `extra_body` belongs to
@@ -91,22 +111,31 @@ impl OpenAiProvider {
     pub async fn complete_plain<F>(
         &self,
         request: &Value,
-        on_text: F,
+        mut on_text: F,
     ) -> Result<Completion, ProviderError>
     where
         F: FnMut(&str),
     {
-        self.complete_with(request, on_text, false).await
+        self.complete_with(
+            request,
+            |delta| {
+                if let super::StreamDelta::Text(text) = delta {
+                    on_text(text);
+                }
+            },
+            false,
+        )
+        .await
     }
 
     async fn complete_with<F>(
         &self,
         request: &Value,
-        mut on_text: F,
+        mut on_delta: F,
         with_extra_body: bool,
     ) -> Result<Completion, ProviderError>
     where
-        F: FnMut(&str),
+        F: FnMut(super::StreamDelta<'_>),
     {
         let mut request = request
             .as_object()
@@ -126,7 +155,7 @@ impl OpenAiProvider {
                 .json()
                 .await
                 .map_err(|_| ProviderError::InvalidEvent)?;
-            return parse_non_streaming_completion(&payload, on_text);
+            return parse_non_streaming_completion(&payload, on_delta);
         }
         request.insert("stream".into(), Value::Bool(true));
         request
@@ -170,8 +199,17 @@ impl OpenAiProvider {
                     let Some(delta) = choice.get("delta") else {
                         continue;
                     };
+                    if let Some(thought) = delta
+                        .get("reasoning_content")
+                        .or_else(|| delta.get("reasoning"))
+                        .and_then(Value::as_str)
+                    {
+                        if !thought.is_empty() {
+                            on_delta(super::StreamDelta::Reasoning(thought));
+                        }
+                    }
                     if let Some(text) = delta.get("content").and_then(Value::as_str) {
-                        on_text(text);
+                        on_delta(super::StreamDelta::Text(text));
                         completion.content.push_str(text);
                     }
                     if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
@@ -222,10 +260,10 @@ impl OpenAiProvider {
 
 fn parse_non_streaming_completion<F>(
     payload: &Value,
-    mut on_text: F,
+    mut on_delta: F,
 ) -> Result<Completion, ProviderError>
 where
-    F: FnMut(&str),
+    F: FnMut(super::StreamDelta<'_>),
 {
     let mut completion = Completion::default();
     if let Some(usage) = payload.get("usage").filter(|u| u.is_object()) {
@@ -255,9 +293,18 @@ where
         .get("message")
         .and_then(Value::as_object)
         .ok_or(ProviderError::InvalidEvent)?;
+    if let Some(thought) = message
+        .get("reasoning_content")
+        .or_else(|| message.get("reasoning"))
+        .and_then(Value::as_str)
+    {
+        if !thought.is_empty() {
+            on_delta(super::StreamDelta::Reasoning(thought));
+        }
+    }
     if let Some(text) = message.get("content").and_then(Value::as_str) {
         if !text.is_empty() {
-            on_text(text);
+            on_delta(super::StreamDelta::Text(text));
             completion.content.push_str(text);
         }
     }

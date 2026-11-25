@@ -527,6 +527,9 @@ pub enum TurnStreamEvent {
     TextDelta {
         text: String,
     },
+    ReasoningDelta {
+        text: String,
+    },
     Status {
         text: String,
     },
@@ -536,6 +539,10 @@ pub enum TurnStreamEvent {
     ToolStarted {
         name: String,
         detail: Option<String>,
+    },
+    ToolOutput {
+        name: String,
+        text: String,
     },
     ToolFinished {
         name: String,

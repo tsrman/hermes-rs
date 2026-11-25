@@ -75,17 +75,14 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          cargo build -p hermes-cli --release --locked --target "$TARGET"
           cargo build --manifest-path crates/hermes-gui/Cargo.toml --release --locked --target "$TARGET"
           ldd "crates/hermes-gui/target/$TARGET/release/hsr-gui"
-          ldd "target/$TARGET/release/hsr"
           mkdir -p "$RUNNER_TEMP/dist" "$RUNNER_TEMP/stage"
           cp "crates/hermes-gui/target/$TARGET/release/hsr-gui" "$RUNNER_TEMP/stage/hsr-gui"
-          cp "target/$TARGET/release/hsr" "$RUNNER_TEMP/stage/hsr"
           version="${GITHUB_REF_NAME#gui-v}"
           if [[ -z "$version" || "$version" == "$GITHUB_REF_NAME" ]]; then version="0.1.0"; fi
           archive="hsr-gui-$version-$TARGET.tar.gz"
-          tar -czf "$RUNNER_TEMP/dist/$archive" -C "$RUNNER_TEMP/stage" hsr-gui hsr
+          tar -czf "$RUNNER_TEMP/dist/$archive" -C "$RUNNER_TEMP/stage" hsr-gui
           (cd "$RUNNER_TEMP/dist" && sha256sum "$archive" > "$archive.sha256")
       - name: Build and package (Windows MSVC)
         if: runner.os == 'Windows'
@@ -93,19 +90,14 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = "-C target-feature=+crt-static"
-          cargo build -p hermes-cli --release --locked --target $env:TARGET
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Remove-Item Env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS -ErrorAction SilentlyContinue
           cargo build --manifest-path crates/hermes-gui/Cargo.toml --release --locked --target $env:TARGET
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/dist" | Out-Null
           New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/stage" | Out-Null
           Copy-Item "crates/hermes-gui/target/$env:TARGET/release/hsr-gui.exe" "$env:RUNNER_TEMP/stage/hsr-gui.exe"
-          Copy-Item "target/$env:TARGET/release/hsr.exe" "$env:RUNNER_TEMP/stage/hsr.exe"
           $version = if ($env:GITHUB_REF_NAME -like 'gui-v*') { $env:GITHUB_REF_NAME.Substring(5) } else { '0.1.0' }
           $archive = "hsr-gui-$version-$env:TARGET.zip"
-          Compress-Archive -Path "$env:RUNNER_TEMP/stage/hsr-gui.exe", "$env:RUNNER_TEMP/stage/hsr.exe" -DestinationPath "$env:RUNNER_TEMP/dist/$archive" -Force
+          Compress-Archive -Path "$env:RUNNER_TEMP/stage/hsr-gui.exe" -DestinationPath "$env:RUNNER_TEMP/dist/$archive" -Force
           $hash = (Get-FileHash "$env:RUNNER_TEMP/dist/$archive" -Algorithm SHA256).Hash.ToLower()
           "$hash  $archive" | Out-File -Encoding ascii "$env:RUNNER_TEMP/dist/$archive.sha256"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -146,17 +138,14 @@ jobs:
           RUSTFLAGS: '-C target-feature=-crt-static'
         run: |
           cargo test --manifest-path crates/hermes-gui/Cargo.toml --locked --target "$TARGET"
-          cargo build -p hermes-cli --release --locked --target "$TARGET"
           cargo build --manifest-path crates/hermes-gui/Cargo.toml --release --locked --target "$TARGET"
           ldd "crates/hermes-gui/target/$TARGET/release/hsr-gui"
-          ldd "target/$TARGET/release/hsr"
           mkdir -p "$RUNNER_TEMP/dist" "$RUNNER_TEMP/stage"
           cp "crates/hermes-gui/target/$TARGET/release/hsr-gui" "$RUNNER_TEMP/stage/hsr-gui"
-          cp "target/$TARGET/release/hsr" "$RUNNER_TEMP/stage/hsr"
           version="${GITHUB_REF_NAME#gui-v}"
           if [[ -z "$version" || "$version" == "$GITHUB_REF_NAME" ]]; then version="0.1.0"; fi
           archive="hsr-gui-$version-$TARGET.tar.gz"
-          tar -czf "$RUNNER_TEMP/dist/$archive" -C "$RUNNER_TEMP/stage" hsr-gui hsr
+          tar -czf "$RUNNER_TEMP/dist/$archive" -C "$RUNNER_TEMP/stage" hsr-gui
           (cd "$RUNNER_TEMP/dist" && sha256sum "$archive" > "$archive.sha256")
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

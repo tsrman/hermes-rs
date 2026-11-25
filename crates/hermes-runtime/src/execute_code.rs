@@ -161,14 +161,45 @@ _LIMIT = 5000000
 
 
 class _Capture(io.StringIO):
+    def __init__(self, emit=None):
+        super().__init__()
+        self._emit = emit
+        self._buf = ""
+        self._last = 0.0
+
     def write(self, text):
+        if self._emit and text:
+            self._buf += text
+            now = time.monotonic()
+            if "\n" in self._buf or "\r" in self._buf or (len(self._buf) >= 120 and now - self._last >= 0.15):
+                chunk = self._buf[-512:] if len(self._buf) > 512 else self._buf
+                self._buf = ""
+                if now - self._last >= 0.08 or "\n" in chunk:
+                    self._last = now
+                    try:
+                        self._emit(chunk)
+                    except Exception:
+                        pass
         if self.tell() < _LIMIT:
             return super().write(text)
         return len(text)
 
+    def flush_preview(self):
+        if self._emit and self._buf:
+            chunk = self._buf[-512:] if len(self._buf) > 512 else self._buf
+            self._buf = ""
+            try:
+                self._emit(chunk)
+            except Exception:
+                pass
+
 
 def _send(message):
     _sock.sendall((json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8"))
+
+
+def _emit_output(text):
+    _send({"type": "output", "text": text})
 
 
 def _call(tool, args):
@@ -227,7 +258,7 @@ for _line in _reader:
             sys.path.insert(0, _cwd)
     except Exception:
         pass
-    _out, _err = _Capture(), _Capture()
+    _out, _err = _Capture(_emit_output), _Capture(_emit_output)
     _status, _trace = "ok", ""
     try:
         with contextlib.redirect_stdout(_out), contextlib.redirect_stderr(_err):
@@ -236,6 +267,8 @@ for _line in _reader:
         _status, _trace = "exit", "SystemExit: " + repr(_exit.code)
     except BaseException:
         _status, _trace = "error", traceback.format_exc()
+    _out.flush_preview()
+    _err.flush_preview()
     _send({"type": "done", "status": _status, "stdout": _out.getvalue(),
            "stderr": _err.getvalue(), "traceback": _trace})
 "#;
@@ -654,6 +687,13 @@ async fn run_unix_cell(
         };
         match message["type"].as_str() {
             Some("done") => return Cell::Done(message),
+            Some("output") => {
+                if let Some(raw) = message["text"].as_str().filter(|s| !s.is_empty()) {
+                    if let Some(tx) = &cx.tool_output {
+                        let _ = tx.send(clean(raw));
+                    }
+                }
+            }
             Some("call") => {
                 let name = message["tool"].as_str().unwrap_or("").to_owned();
                 let value = match dispatch_sandbox_tool(
@@ -704,6 +744,13 @@ async fn run_embedded_cell(
     loop {
         match kernel.next_event(deadline).await {
             EmbeddedEvent::Done(payload) => return Cell::Done(payload),
+            EmbeddedEvent::Output(raw) => {
+                if !raw.is_empty() {
+                    if let Some(tx) = &cx.tool_output {
+                        let _ = tx.send(clean(&raw));
+                    }
+                }
+            }
             EmbeddedEvent::TimedOut => return Cell::TimedOut,
             EmbeddedEvent::Died => return Cell::Died,
             EmbeddedEvent::ToolCall { tool, args } => {
@@ -741,6 +788,13 @@ async fn run_embedded_process_cell(
     loop {
         match kernel.next_event(deadline).await {
             EmbeddedEvent::Done(payload) => return Cell::Done(payload),
+            EmbeddedEvent::Output(raw) => {
+                if !raw.is_empty() {
+                    if let Some(tx) = &cx.tool_output {
+                        let _ = tx.send(clean(&raw));
+                    }
+                }
+            }
             EmbeddedEvent::TimedOut => return Cell::TimedOut,
             EmbeddedEvent::Died => return Cell::Died,
             EmbeddedEvent::ToolCall { tool, args } => {

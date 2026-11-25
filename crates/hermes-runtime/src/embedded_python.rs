@@ -30,6 +30,7 @@ enum HostCell {
 
 enum PyEvent {
     ToolCall { tool: String, args_json: String },
+    Output(String),
     CellDone(Value),
 }
 
@@ -445,6 +446,30 @@ mod _hermes_bridge {
     }
 
     #[pyfunction]
+    fn emit_output(text: String) {
+        if text.is_empty() {
+            return;
+        }
+        BRIDGE.with(|slot| {
+            let borrow = slot.borrow();
+            let Some(state) = borrow.as_ref() else {
+                return;
+            };
+            if state.abort.aborted.load(Ordering::Acquire) {
+                return;
+            }
+            match &state.transport {
+                BridgeTransport::InProcess { event_tx, .. } => {
+                    let _ = event_tx.send(PyEvent::Output(text));
+                }
+                BridgeTransport::Stdio => {
+                    let _ = write_stdio_line(&json!({"type": "output", "text": text}));
+                }
+            }
+        });
+    }
+
+    #[pyfunction]
     fn sleep(object: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
         let dur = object.try_into_value::<Duration>(vm).map_err(|e| {
             if e.class().is(vm.ctx.exceptions.value_error) {
@@ -533,10 +558,37 @@ time.sleep = _hermes_bridge.sleep
 _LIMIT = 5000000
 
 class _Capture(io.StringIO):
+    def __init__(self, emit=None):
+        super().__init__()
+        self._emit = emit
+        self._buf = ""
+        self._last = 0.0
+
     def write(self, text):
+        if self._emit and text:
+            self._buf += text
+            now = time.monotonic()
+            if "\n" in self._buf or "\r" in self._buf or (len(self._buf) >= 120 and now - self._last >= 0.15):
+                chunk = self._buf[-512:] if len(self._buf) > 512 else self._buf
+                self._buf = ""
+                if now - self._last >= 0.08 or "\n" in chunk:
+                    self._last = now
+                    try:
+                        self._emit(chunk)
+                    except Exception:
+                        pass
         if self.tell() < _LIMIT:
             return super().write(text)
         return len(text)
+
+    def flush_preview(self):
+        if self._emit and self._buf:
+            chunk = self._buf[-512:] if len(self._buf) > 512 else self._buf
+            self._buf = ""
+            try:
+                self._emit(chunk)
+            except Exception:
+                pass
 
 def _call(tool, args):
     raw = _hermes_bridge.call_tool(tool, json.dumps(args, ensure_ascii=False))
@@ -580,7 +632,7 @@ def _hermes_run_cell(code, cwd):
                 sys.path.insert(0, cwd)
     except Exception:
         pass
-    _out, _err = _Capture(), _Capture()
+    _out, _err = _Capture(_hermes_bridge.emit_output), _Capture(_hermes_bridge.emit_output)
     _status, _trace = "ok", ""
     try:
         with contextlib.redirect_stdout(_out), contextlib.redirect_stderr(_err):
@@ -589,6 +641,8 @@ def _hermes_run_cell(code, cwd):
         _status, _trace = "exit", "SystemExit: " + repr(_exit.code)
     except BaseException:
         _status, _trace = "error", traceback.format_exc()
+    _out.flush_preview()
+    _err.flush_preview()
     return json.dumps({{
         "type": "done",
         "status": _status,
@@ -612,6 +666,7 @@ pub(crate) struct EmbeddedKernel {
 
 pub(crate) enum EmbeddedEvent {
     ToolCall { tool: String, args: Value },
+    Output(String),
     Done(Value),
     TimedOut,
     Died,
@@ -821,6 +876,7 @@ impl EmbeddedKernel {
             Err(_) => EmbeddedEvent::TimedOut,
             Ok(None) => EmbeddedEvent::Died,
             Ok(Some(PyEvent::CellDone(payload))) => EmbeddedEvent::Done(payload),
+            Ok(Some(PyEvent::Output(text))) => EmbeddedEvent::Output(text),
             Ok(Some(PyEvent::ToolCall { tool, args_json })) => {
                 let args = serde_json::from_str::<Value>(&args_json)
                     .unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
@@ -1120,6 +1176,9 @@ impl EmbeddedSubprocessKernel {
                 };
                 match msg["type"].as_str() {
                     Some("done") => EmbeddedEvent::Done(msg),
+                    Some("output") => {
+                        EmbeddedEvent::Output(msg["text"].as_str().unwrap_or_default().to_owned())
+                    }
                     Some("call") => EmbeddedEvent::ToolCall {
                         tool: msg["tool"].as_str().unwrap_or("").to_owned(),
                         args: msg["args"].clone(),
@@ -1156,6 +1215,7 @@ mod tests {
         loop {
             match kernel.next_event(deadline).await {
                 EmbeddedEvent::Done(payload) => return payload,
+                EmbeddedEvent::Output(_) => {}
                 EmbeddedEvent::ToolCall { tool, args } => {
                     let val = match tool.as_str() {
                         "xlsx_write" => crate::excel_tools::xlsx_write(dir, &args),

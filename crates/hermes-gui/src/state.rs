@@ -31,6 +31,8 @@ pub enum FeedRow {
         name: String,
         detail: Option<String>,
         summary: Option<String>,
+        #[allow(dead_code)]
+        live_output: Vec<String>,
         state: ToolCardState,
     },
     Notice {
@@ -192,6 +194,8 @@ pub struct GuiState {
     pub selected_session_title: Option<String>,
     pub confirm_delete_session_id: Option<String>,
     pub feed: Vec<FeedRow>,
+    pub live_reasoning: Vec<String>,
+    pub live_reasoning_partial: String,
     pub active_turn_id: Option<String>,
     pub last_seq: u64,
     pub streaming: bool,
@@ -221,6 +225,8 @@ impl GuiState {
             selected_session_title: None,
             confirm_delete_session_id: None,
             feed: Vec::new(),
+            live_reasoning: Vec::new(),
+            live_reasoning_partial: String::new(),
             active_turn_id: None,
             last_seq: 0,
             streaming: false,
@@ -413,6 +419,7 @@ impl GuiState {
                         name: item.tool_name.unwrap_or_else(|| "tool".into()),
                         detail: None,
                         summary: Some(summary),
+                        live_output: Vec::new(),
                         state,
                     });
                 }
@@ -486,11 +493,23 @@ impl GuiState {
                 }
             }
             TurnStreamEvent::TextDelta { text } => {
+                if !text.trim().is_empty() {
+                    self.live_reasoning.clear();
+                    self.live_reasoning_partial.clear();
+                }
                 if let Some(FeedRow::Assistant(existing)) = self.feed.last_mut() {
                     existing.push_str(&text);
                 } else {
                     self.feed.push(FeedRow::Assistant(text));
                 }
+            }
+            TurnStreamEvent::ReasoningDelta { text } => {
+                push_rolling_lines(
+                    &mut self.live_reasoning,
+                    &mut self.live_reasoning_partial,
+                    &text,
+                    3,
+                );
             }
             TurnStreamEvent::Status { text } => {
                 self.status_message = text;
@@ -500,12 +519,39 @@ impl GuiState {
                 self.status_message = format!("Session {session_id}");
             }
             TurnStreamEvent::ToolStarted { name, detail } => {
+                self.live_reasoning.clear();
+                self.live_reasoning_partial.clear();
                 self.feed.push(FeedRow::Tool {
                     name,
                     detail,
                     summary: None,
+                    live_output: Vec::new(),
                     state: ToolCardState::Running,
                 });
+            }
+            TurnStreamEvent::ToolOutput { name, text } => {
+                if let Some(FeedRow::Tool { live_output, .. }) =
+                    self.feed.iter_mut().rev().find(|row| {
+                        matches!(
+                            row,
+                            FeedRow::Tool {
+                                name: n,
+                                state: ToolCardState::Running,
+                                ..
+                            } if n == &name
+                        )
+                    })
+                {
+                    let mut partial = String::new();
+                    push_rolling_lines(live_output, &mut partial, &text, 3);
+                    let trimmed = partial.trim();
+                    if !trimmed.is_empty() {
+                        live_output.push(trimmed.to_owned());
+                        if live_output.len() > 3 {
+                            live_output.drain(..live_output.len() - 3);
+                        }
+                    }
+                }
             }
             TurnStreamEvent::ToolFinished {
                 name,
@@ -519,6 +565,7 @@ impl GuiState {
                 };
                 if let Some(FeedRow::Tool {
                     summary: slot,
+                    live_output,
                     state,
                     ..
                 }) = self.feed.iter_mut().rev().find(|row| {
@@ -532,12 +579,14 @@ impl GuiState {
                     )
                 }) {
                     *slot = summary;
+                    live_output.clear();
                     *state = target_state;
                 } else {
                     self.feed.push(FeedRow::Tool {
                         name,
                         detail: None,
                         summary,
+                        live_output: Vec::new(),
                         state: target_state,
                     });
                 }
@@ -578,6 +627,8 @@ impl GuiState {
                 cancelled,
             } => {
                 self.streaming = false;
+                self.live_reasoning.clear();
+                self.live_reasoning_partial.clear();
                 self.pending_approval = None;
                 self.pending_clarify = None;
                 self.active_turn_id = None;
@@ -682,6 +733,35 @@ fn summarize_tool_payload(content: &str) -> (ToolCardState, String) {
         }
     }
     (ToolCardState::Succeeded, truncate_preview(content, 120))
+}
+
+fn push_rolling_lines(
+    lines: &mut Vec<String>,
+    partial: &mut String,
+    chunk: &str,
+    max_lines: usize,
+) {
+    let max_lines = max_lines.max(1);
+    for ch in chunk.chars() {
+        match ch {
+            '\n' => {
+                let cleaned = partial.trim();
+                if !cleaned.is_empty() {
+                    lines.push(cleaned.to_owned());
+                    if lines.len() > max_lines {
+                        let excess = lines.len() - max_lines;
+                        lines.drain(..excess);
+                    }
+                }
+                partial.clear();
+            }
+            '\r' => partial.clear(),
+            c if !c.is_control() && partial.len() < 400 => {
+                partial.push(c);
+            }
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]
@@ -865,6 +945,7 @@ mod tests {
                 name: "read_file".into(),
                 detail: Some("Cargo.toml".into()),
                 summary: Some("ok".into()),
+                live_output: Vec::new(),
                 state: ToolCardState::Succeeded,
             }]
         );
@@ -1011,18 +1092,21 @@ mod tests {
                         "Code execution requires user approval, which is unavailable in this environment."
                             .into()
                     ),
+                    live_output: Vec::new(),
                     state: ToolCardState::Failed,
                 },
                 FeedRow::Tool {
                     name: "terminal".into(),
                     detail: None,
                     summary: Some("hello world".into()),
+                    live_output: Vec::new(),
                     state: ToolCardState::Succeeded,
                 },
                 FeedRow::Tool {
                     name: "search_tools".into(),
                     detail: None,
                     summary: Some("3 matching tool(s)".into()),
+                    live_output: Vec::new(),
                     state: ToolCardState::Succeeded,
                 },
             ]
