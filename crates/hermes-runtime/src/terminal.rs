@@ -1,5 +1,6 @@
 //! Approved foreground commands on the local Linux and macOS CLI.
 
+#[cfg(unix)]
 use crate::paths::PathExt;
 use std::future::Future;
 

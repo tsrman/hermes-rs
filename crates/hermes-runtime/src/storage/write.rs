@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use crate::paths::PathExt;
 use std::borrow::Cow;
 use std::collections::HashMap;

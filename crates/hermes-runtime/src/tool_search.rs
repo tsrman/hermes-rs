@@ -1068,6 +1068,7 @@ mod tests {
     use crate::tool_policy::ToolPolicy;
     use crate::web_tools::{Backend, WebSettings};
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn fixture() -> Value {
         serde_json::from_str(include_str!("../tests/fixtures/tool_search_cases.json")).unwrap()
     }
@@ -1097,6 +1098,7 @@ mod tests {
         }
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn names(tools: &[Value]) -> Vec<String> {
         tools
             .iter()
