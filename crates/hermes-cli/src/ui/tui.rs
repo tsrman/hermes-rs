@@ -89,6 +89,34 @@ impl Drop for TerminalGuard {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum TuiAction {
+    Turn(String),
+    Compress {
+        session_id: String,
+        focus: Option<String>,
+    },
+    ShellEscape(String),
+    Browser(String),
+}
+
+enum BackgroundOutcome {
+    Compress {
+        session_id: String,
+        result: Result<ManualCompress, String>,
+    },
+    ShellEscape {
+        command: String,
+        is_err: bool,
+        output: String,
+    },
+    Browser {
+        is_err: bool,
+        message: String,
+        cdp_update: Option<Option<String>>,
+    },
+}
+
 enum TurnMsg {
     Event(ChatEvent),
     Approval {
@@ -96,6 +124,7 @@ enum TurnMsg {
         reply: oneshot::Sender<ApprovalDecision>,
     },
     Finished(Result<u8, String>),
+    BackgroundDone(BackgroundOutcome),
 }
 
 struct ClarifyQuestion {
@@ -206,6 +235,7 @@ pub struct TuiApp {
     active_tools: HashMap<String, Instant>,
     active_tool_output: HashMap<String, (Vec<String>, String)>,
     turn_started: Option<Instant>,
+    background_status: Option<String>,
     turn_saved_session: Option<String>,
     turn_usage: Option<(u64, u64)>,
     turn_query: Option<String>,
@@ -237,6 +267,7 @@ impl TuiApp {
             active_tools: HashMap::new(),
             active_tool_output: HashMap::new(),
             turn_started: None,
+            background_status: None,
             turn_saved_session: None,
             turn_usage: None,
             turn_query: None,
@@ -254,7 +285,7 @@ impl TuiApp {
     }
 
     pub fn is_busy(&self) -> bool {
-        self.turn_started.is_some()
+        self.turn_started.is_some() || self.background_status.is_some()
     }
 
     fn scroll_feed_up(&mut self, lines: usize) {
@@ -413,7 +444,9 @@ impl TuiApp {
                 })
                 .collect();
             let needle = self.input[1..].to_ascii_lowercase();
-            for skill in hermes_runtime::context_refs::list_skill_commands(self.home.as_deref()) {
+            for skill in hermes_runtime::context_refs::cached_skill_commands_nonblocking(
+                self.home.as_deref(),
+            ) {
                 if needle.is_empty() || skill.name.starts_with(&needle) {
                     let slash_name = format!("/{}", skill.name);
                     if !items.iter().any(|p| p.replacement == slash_name) {
@@ -467,6 +500,7 @@ pub async fn run(home: Option<&Path>, state: &mut ReplState) -> Result<UiOutcome
 
     let mut app = TuiApp::new();
     app.home = home.map(Path::to_path_buf);
+    hermes_runtime::context_refs::prewarm_skill_commands(home);
     let stop_reader = Arc::new(AtomicBool::new(false));
     let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<TermEvent>();
     let stop_flag = Arc::clone(&stop_reader);
@@ -546,9 +580,15 @@ pub async fn run(home: Option<&Path>, state: &mut ReplState) -> Result<UiOutcome
                         turn_rx = None;
                         finish_turn(&mut app, state, res);
                     }
+                    Some(TurnMsg::BackgroundDone(outcome)) => {
+                        active_handle = None;
+                        turn_rx = None;
+                        finish_background(&mut app, state, home, outcome);
+                    }
                     None => {
                         active_handle = None;
                         turn_rx = None;
+                        app.background_status = None;
                     }
                 }
             }
@@ -556,7 +596,7 @@ pub async fn run(home: Option<&Path>, state: &mut ReplState) -> Result<UiOutcome
                 match maybe_ev {
                     Some(TermEvent::Key(key)) => {
                         dirty = true;
-                        if let Some(query) = handle_key_event(
+                        if let Some(action) = handle_key_event(
                             &mut app,
                             state,
                             home,
@@ -564,7 +604,28 @@ pub async fn run(home: Option<&Path>, state: &mut ReplState) -> Result<UiOutcome
                             &mut active_handle,
                             &mut turn_rx,
                         ).await {
-                            start_turn(home, &mut app, state, query, &mut active_handle, &mut turn_rx);
+                            match action {
+                                TuiAction::Turn(query) => {
+                                    start_turn(
+                                        home,
+                                        &mut app,
+                                        state,
+                                        query,
+                                        &mut active_handle,
+                                        &mut turn_rx,
+                                    );
+                                }
+                                other => {
+                                    start_background_action(
+                                        home,
+                                        &mut app,
+                                        state,
+                                        other,
+                                        &mut active_handle,
+                                        &mut turn_rx,
+                                    );
+                                }
+                            }
                         }
                     }
                     Some(TermEvent::Mouse(mouse)) if handle_mouse_event(&mut app, mouse) => {
@@ -899,7 +960,172 @@ fn start_turn(
     *active_handle = Some(handle);
 }
 
-/// Handle a keyboard event. Returns `Some(query)` when the user submits a prompt to send to the model.
+fn start_background_action(
+    home: Option<&Path>,
+    app: &mut TuiApp,
+    state: &ReplState,
+    action: TuiAction,
+    active_handle: &mut Option<JoinHandle<()>>,
+    turn_rx: &mut Option<mpsc::UnboundedReceiver<TurnMsg>>,
+) {
+    let (tx, rx) = mpsc::unbounded_channel::<TurnMsg>();
+    *turn_rx = Some(rx);
+    app.scroll_from_bottom = 0;
+
+    match action {
+        TuiAction::Compress { session_id, focus } => {
+            app.background_status = Some("Compressing session…".into());
+            let home_owned = home.map(Path::to_path_buf);
+            let request = state.request.clone();
+            let guard = Arc::clone(&state.guard);
+            let handle = tokio::spawn(async move {
+                let result = match home_owned.as_deref() {
+                    Some(home) => {
+                        chat::compress_session(
+                            home,
+                            &request,
+                            &session_id,
+                            focus.as_deref(),
+                            &guard,
+                        )
+                        .await
+                    }
+                    None => Err("Cannot compress: profile root is unavailable.".into()),
+                };
+                let _ = tx.send(TurnMsg::BackgroundDone(BackgroundOutcome::Compress {
+                    session_id,
+                    result,
+                }));
+            });
+            *active_handle = Some(handle);
+        }
+        TuiAction::ShellEscape(command) => {
+            app.background_status = Some(format!("Running !{command}…"));
+            let root = app.root.clone();
+            let handle = tokio::spawn(async move {
+                let cmd_clone = command.clone();
+                let (is_err, output) =
+                    tokio::task::spawn_blocking(move || format_shell_escape(&root, &cmd_clone))
+                        .await
+                        .unwrap_or_else(|e| (true, format!("Command task failed: {e}")));
+                let _ = tx.send(TurnMsg::BackgroundDone(BackgroundOutcome::ShellEscape {
+                    command,
+                    is_err,
+                    output,
+                }));
+            });
+            *active_handle = Some(handle);
+        }
+        TuiAction::Browser(argument) => {
+            app.background_status = Some("Running /browser…".into());
+            let home_owned = home.map(Path::to_path_buf);
+            let scope = state.scope.clone();
+            let configured = state.request.browser_cdp_url().map(str::to_owned);
+            let handle = tokio::spawn(async move {
+                let (is_err, message, cdp_update) = crate::browser::execute_slash_browser(
+                    home_owned.as_deref(),
+                    &scope,
+                    configured.as_deref(),
+                    &argument,
+                )
+                .await;
+                let _ = tx.send(TurnMsg::BackgroundDone(BackgroundOutcome::Browser {
+                    is_err,
+                    message,
+                    cdp_update,
+                }));
+            });
+            *active_handle = Some(handle);
+        }
+        TuiAction::Turn(_) => {}
+    }
+}
+
+fn finish_background(
+    app: &mut TuiApp,
+    state: &mut ReplState,
+    home: Option<&Path>,
+    outcome: BackgroundOutcome,
+) {
+    app.background_status = None;
+    app.scroll_from_bottom = 0;
+    match outcome {
+        BackgroundOutcome::Compress { session_id, result } => match result {
+            Ok(ManualCompress::Applied { archived }) => {
+                state.compressions = state.compressions.saturating_add(1);
+                if let Some(home) = home {
+                    if let Ok(transcript) = SessionStore::open_read_only(home)
+                        .and_then(|s| s.resume_display_transcript(&session_id))
+                    {
+                        let est = hermes_runtime::model_metadata::estimate_active_messages_tokens(
+                            &transcript.messages,
+                        );
+                        state.record_context(est, true);
+                    }
+                }
+                TuiApp::push_notice(
+                    state,
+                    NoticeKind::Info,
+                    format!(
+                        "Compressed session {session_id}: archived {archived} message(s) into a summary."
+                    ),
+                );
+            }
+            Ok(ManualCompress::Unchanged) => TuiApp::push_notice(
+                state,
+                NoticeKind::Info,
+                "Nothing to compress: conversation is short enough already.",
+            ),
+            Ok(ManualCompress::Skipped) => TuiApp::push_notice(
+                state,
+                NoticeKind::Warn,
+                "Compression skipped: summary failed or did not shorten the conversation.",
+            ),
+            Err(error) => {
+                TuiApp::push_notice(
+                    state,
+                    NoticeKind::Error,
+                    format!("Compression failed: {error}"),
+                );
+            }
+        },
+        BackgroundOutcome::ShellEscape {
+            command,
+            is_err,
+            output,
+        } => {
+            TuiApp::push_notice(
+                state,
+                if is_err {
+                    NoticeKind::Error
+                } else {
+                    NoticeKind::Info
+                },
+                format!("$ {command}\n{output}"),
+            );
+        }
+        BackgroundOutcome::Browser {
+            is_err,
+            message,
+            cdp_update,
+        } => {
+            if let Some(new_url) = cdp_update {
+                state.request.set_browser_cdp_url(new_url);
+            }
+            TuiApp::push_notice(
+                state,
+                if is_err {
+                    NoticeKind::Error
+                } else {
+                    NoticeKind::Info
+                },
+                message,
+            );
+        }
+    }
+}
+
+/// Handle a keyboard event. Returns `Some(TuiAction)` when the user submits a turn or background command.
 async fn handle_key_event(
     app: &mut TuiApp,
     state: &mut ReplState,
@@ -907,7 +1133,7 @@ async fn handle_key_event(
     key: KeyEvent,
     active_handle: &mut Option<JoinHandle<()>>,
     turn_rx: &mut Option<mpsc::UnboundedReceiver<TurnMsg>>,
-) -> Option<String> {
+) -> Option<TuiAction> {
     if matches!(key.kind, KeyEventKind::Release) {
         return None;
     }
@@ -940,6 +1166,14 @@ async fn handle_key_event(
             handle.abort();
             *turn_rx = None;
             app.modal = None;
+            if let Some(bg_label) = app.background_status.take() {
+                TuiApp::push_notice(
+                    state,
+                    NoticeKind::Warn,
+                    format!("Cancelled ({})", bg_label.trim_end_matches('…')),
+                );
+                return None;
+            }
             app.turn_started = None;
             app.active_tools.clear();
             app.active_tool_output.clear();
@@ -1145,23 +1379,12 @@ async fn handle_key_event(
                 record_prompt_history(home, &mut state.prompt_history, &text);
             }
             if let Some(shell_cmd) = text.strip_prefix('!').filter(|_| !text.contains('\n')) {
-                let (is_err, output) = format_shell_escape(&app.root, shell_cmd);
-                TuiApp::push_notice(
-                    state,
-                    if is_err {
-                        NoticeKind::Error
-                    } else {
-                        NoticeKind::Info
-                    },
-                    format!("$ {shell_cmd}\n{output}"),
-                );
-                app.scroll_from_bottom = 0;
-                return None;
+                return Some(TuiAction::ShellEscape(shell_cmd.to_owned()));
             }
             if let Some(cmd) = text.strip_prefix('/').filter(|_| !text.contains('\n')) {
                 return handle_slash_command(app, state, home, cmd).await;
             }
-            return Some(text);
+            return Some(TuiAction::Turn(text));
         }
         (KeyCode::Backspace, _) => app.backspace(),
         (KeyCode::Delete, _) => app.delete_char_forward(),
@@ -1909,7 +2132,7 @@ async fn handle_slash_command(
     state: &mut ReplState,
     home: Option<&Path>,
     command: &str,
-) -> Option<String> {
+) -> Option<TuiAction> {
     let (name, argument) = command
         .split_once(char::is_whitespace)
         .map_or((command, ""), |(n, r)| (n, r.trim()));
@@ -2080,14 +2303,14 @@ async fn handle_slash_command(
             resume_tui_target(app, state, home, argument);
         }
         "compress" | "compact" => {
-            let Some(home) = home else {
+            if home.is_none() {
                 TuiApp::push_notice(
                     state,
                     NoticeKind::Warn,
                     "Cannot compress: profile root is unavailable.",
                 );
                 return None;
-            };
+            }
             let Some(id) = state.session.clone() else {
                 TuiApp::push_notice(
                     state,
@@ -2096,59 +2319,17 @@ async fn handle_slash_command(
                 );
                 return None;
             };
-            let focus = (!argument.is_empty()).then_some(argument);
-            match chat::compress_session(home, &state.request, &id, focus, &state.guard).await {
-                Ok(ManualCompress::Applied { archived }) => {
-                    state.compressions = state.compressions.saturating_add(1);
-                    if let Ok(transcript) = SessionStore::open_read_only(home)
-                        .and_then(|s| s.resume_display_transcript(&id))
-                    {
-                        let est = hermes_runtime::model_metadata::estimate_active_messages_tokens(
-                            &transcript.messages,
-                        );
-                        state.record_context(est, true);
-                    }
-                    TuiApp::push_notice(
-                        state,
-                        NoticeKind::Info,
-                        format!(
-                            "Compressed session {id}: archived {archived} message(s) into a summary."
-                        ),
-                    );
-                }
-                Ok(ManualCompress::Unchanged) => TuiApp::push_notice(
-                    state,
-                    NoticeKind::Info,
-                    "Nothing to compress: conversation is short enough already.",
-                ),
-                Ok(ManualCompress::Skipped) => TuiApp::push_notice(
-                    state,
-                    NoticeKind::Warn,
-                    "Compression skipped: summary failed or did not shorten the conversation.",
-                ),
-                Err(error) => {
-                    TuiApp::push_notice(
-                        state,
-                        NoticeKind::Error,
-                        format!("Compression failed: {error}"),
-                    );
-                }
-            }
+            let focus = (!argument.is_empty()).then(|| argument.to_owned());
+            return Some(TuiAction::Compress {
+                session_id: id,
+                focus,
+            });
         }
         "browser" => {
-            let (is_err, msg) = crate::browser::handle_slash_browser(home, state, argument).await;
-            TuiApp::push_notice(
-                state,
-                if is_err {
-                    NoticeKind::Error
-                } else {
-                    NoticeKind::Info
-                },
-                msg,
-            );
+            return Some(TuiAction::Browser(argument.to_owned()));
         }
         "retry" => match state.unsaved.take() {
-            Some(previous) => return Some(previous),
+            Some(previous) => return Some(TuiAction::Turn(previous)),
             None => TuiApp::push_notice(
                 state,
                 NoticeKind::Info,
@@ -2163,7 +2344,7 @@ async fn handle_slash_command(
                     NoticeKind::Info,
                     format!("Running skill /{}...", inv.name),
                 );
-                return Some(inv.prompt);
+                return Some(TuiAction::Turn(inv.prompt));
             }
             TuiApp::push_notice(
                 state,
@@ -2566,9 +2747,13 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));
         }
+        let busy_label = app.background_status.as_deref().unwrap_or("Thinking…");
         lines.push(Line::from(vec![
             Span::styled(spinner_glyph, Style::default().fg(Color::Cyan)),
-            Span::styled(" Thinking…", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!(" {busy_label}"),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]));
         for thought_line in reasoning_preview {
             lines.push(Line::from(vec![
@@ -2917,7 +3102,24 @@ fn render_modal(
                 ApprovalAction::Clarify => "Clarify",
             };
             let is_command = matches!(request.action, ApprovalAction::RunCommand);
-            let mut lines = vec![
+            let keys_hint = if is_command {
+                "[y] Approve once   [s] Session   [a] Always (allowlist)   [n / Esc] Deny"
+            } else {
+                "[y] Approve once   [s] Session   [a] Always (config.yaml)   [n / Esc] Deny"
+            };
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .title(Span::styled(
+                    " Approval Required (↑/↓ scroll) ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            let inner = block.inner(rect);
+            frame.render_widget(block, rect);
+
+            let mut header_lines = vec![
                 Line::from(vec![
                     Span::styled("Action: ", Style::default().fg(Color::DarkGray)),
                     Span::styled(
@@ -2936,7 +3138,7 @@ fn render_modal(
                 ]),
             ];
             if let Some(why) = reason {
-                lines.push(Line::from(vec![
+                header_lines.push(Line::from(vec![
                     Span::styled("Flagged: ", Style::default().fg(Color::Red)),
                     Span::styled(
                         approval::sanitize_terminal_text(why),
@@ -2944,42 +3146,40 @@ fn render_modal(
                     ),
                 ]));
             }
-            lines.push(Line::from(""));
-            let preview = approval::sanitize_terminal_text(&request.content);
-            for l in preview.lines().take(200) {
-                lines.push(Line::from(Span::styled(
-                    format!("  {l}"),
-                    Style::default().fg(Color::White),
-                )));
-            }
-            lines.push(Line::from(""));
-            let keys_hint = if is_command {
-                "[y] Approve once   [s] Session   [a] Always (allowlist)   [n / Esc] Deny"
-            } else {
-                "[y] Approve once   [s] Session   [a] Always (config.yaml)   [n / Esc] Deny"
-            };
-            lines.push(Line::from(Span::styled(
+            header_lines.push(Line::from(Span::styled(
                 keys_hint,
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             )));
+            header_lines.push(Line::from(Span::styled(
+                "─".repeat(inner.width as usize),
+                Style::default().fg(Color::DarkGray),
+            )));
+            let header_height = (header_lines.len() as u16).min(inner.height);
+            let sections = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(header_height), Constraint::Min(0)])
+                .split(inner);
 
-            let widget = Paragraph::new(lines)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Yellow))
-                        .title(Span::styled(
-                            " Approval Required (↑/↓ scroll) ",
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD),
-                        )),
-                )
+            let header = Paragraph::new(header_lines).wrap(Wrap { trim: false });
+            frame.render_widget(header, sections[0]);
+
+            let preview = approval::sanitize_terminal_text(&request.content);
+            let preview_lines: Vec<Line<'static>> = preview
+                .lines()
+                .take(200)
+                .map(|l| {
+                    Line::from(Span::styled(
+                        format!("  {l}"),
+                        Style::default().fg(Color::White),
+                    ))
+                })
+                .collect();
+            let body = Paragraph::new(preview_lines)
                 .wrap(Wrap { trim: false })
                 .scroll((*scroll, 0));
-            frame.render_widget(widget, rect);
+            frame.render_widget(body, sections[1]);
         }
         ActiveModal::Clarify {
             questions,
@@ -3502,7 +3702,7 @@ mod tests {
             &mut rx,
         )
         .await;
-        assert_eq!(submitted.as_deref(), Some("draft text"));
+        assert_eq!(submitted, Some(TuiAction::Turn("draft text".into())));
         assert_eq!(
             state.prompt_history.last().map(String::as_str),
             Some("draft text")
@@ -4196,5 +4396,73 @@ mod tests {
         let screen3 = buffer_text(&terminal);
         assert!(!screen3.contains("row 4"), "{screen3}");
         assert!(screen3.contains("exit 0"), "{screen3}");
+    }
+
+    #[tokio::test]
+    async fn compress_clears_input_immediately_and_approval_modal_places_options_above_script() {
+        let dir =
+            std::env::temp_dir().join(format!("hsr-tui-compress-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let mut state = sample_state();
+        state.session = Some("sess-123".into());
+        let mut app = TuiApp::new();
+        app.input = "/compress focus on errors".into();
+        app.cursor = app.input.len();
+        let mut handle = None;
+        let mut rx = None;
+
+        let action = handle_key_event(
+            &mut app,
+            &mut state,
+            Some(&dir),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            app.input.is_empty(),
+            "composer input must clear immediately on /compress Enter"
+        );
+        assert_eq!(
+            action,
+            Some(TuiAction::Compress {
+                session_id: "sess-123".into(),
+                focus: Some("focus on errors".into()),
+            })
+        );
+
+        // Approval modal must render action options ABOVE the script body, even for long scripts.
+        let long_script: String = (1..=40)
+            .map(|i| format!("print('script_line_{i}')"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (reply_tx, _reply_rx) = oneshot::channel();
+        app.modal = Some(ActiveModal::Approval {
+            request: ApprovalRequest {
+                target: "/tmp/work".into(),
+                content: long_script,
+                action: ApprovalAction::RunCode,
+                timeout_secs: 60,
+            },
+            reason: None,
+            reply: Some(reply_tx),
+            scroll: 0,
+        });
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let screen = buffer_text(&terminal);
+        let options_pos = screen
+            .find("[y] Approve once")
+            .expect("approval options must be visible without scrolling");
+        let script_pos = screen
+            .find("script_line_1")
+            .expect("script body must be visible");
+        assert!(
+            options_pos < script_pos,
+            "approval options must appear above script text:\n{screen}"
+        );
     }
 }

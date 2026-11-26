@@ -141,7 +141,9 @@ impl Completer for SlashHelper {
             })
             .collect();
         let needle = before[1..].to_ascii_lowercase();
-        for skill in hermes_runtime::context_refs::list_skill_commands(self.home.as_deref()) {
+        for skill in
+            hermes_runtime::context_refs::cached_skill_commands_nonblocking(self.home.as_deref())
+        {
             if needle.is_empty() || skill.name.starts_with(&needle) {
                 let slash_name = format!("/{}", skill.name);
                 if !matches.iter().any(|p| p.replacement == slash_name) {
@@ -420,6 +422,7 @@ pub async fn run(
 ) -> Result<UiOutcome, String> {
     let styled = mode == ActiveUi::Inline && state.color;
     let tty = io::stdin().is_terminal() && io::stdout().is_terminal();
+    hermes_runtime::context_refs::prewarm_skill_commands(home);
 
     let mut editor: Lines = Editor::with_config(
         Config::builder()

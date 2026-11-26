@@ -35,11 +35,10 @@ jobs:
           rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt --component clippy
           rustup default "$RUST_VERSION"
       - name: Check and test hermes-gui
-        working-directory: crates/hermes-gui
         run: |
           cargo fmt --all -- --check
-          cargo clippy --all-targets --locked -- -D warnings
-          cargo test --locked
+          cargo clippy -p hermes-gui --all-targets --locked -- -D warnings
+          cargo test -p hermes-gui --locked
 
   build:
     needs: [checks]
@@ -75,10 +74,10 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          cargo build --manifest-path crates/hermes-gui/Cargo.toml --release --locked --target "$TARGET"
-          ldd "crates/hermes-gui/target/$TARGET/release/hsr-gui"
+          cargo build -p hermes-gui --release --locked --target "$TARGET"
+          ldd "target/$TARGET/release/hsr-gui"
           mkdir -p "$RUNNER_TEMP/dist" "$RUNNER_TEMP/stage"
-          cp "crates/hermes-gui/target/$TARGET/release/hsr-gui" "$RUNNER_TEMP/stage/hsr-gui"
+          cp "target/$TARGET/release/hsr-gui" "$RUNNER_TEMP/stage/hsr-gui"
           version="${GITHUB_REF_NAME#gui-v}"
           if [[ -z "$version" || "$version" == "$GITHUB_REF_NAME" ]]; then version="0.1.0"; fi
           archive="hsr-gui-$version-$TARGET.tar.gz"
@@ -90,11 +89,11 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          cargo build --manifest-path crates/hermes-gui/Cargo.toml --release --locked --target $env:TARGET
+          cargo build -p hermes-gui --release --locked --target $env:TARGET
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/dist" | Out-Null
           New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/stage" | Out-Null
-          Copy-Item "crates/hermes-gui/target/$env:TARGET/release/hsr-gui.exe" "$env:RUNNER_TEMP/stage/hsr-gui.exe"
+          Copy-Item "target/$env:TARGET/release/hsr-gui.exe" "$env:RUNNER_TEMP/stage/hsr-gui.exe"
           $version = if ($env:GITHUB_REF_NAME -like 'gui-v*') { $env:GITHUB_REF_NAME.Substring(5) } else { '0.1.0' }
           $archive = "hsr-gui-$version-$env:TARGET.zip"
           Compress-Archive -Path "$env:RUNNER_TEMP/stage/hsr-gui.exe" -DestinationPath "$env:RUNNER_TEMP/dist/$archive" -Force
@@ -137,11 +136,11 @@ jobs:
           TARGET: x86_64-unknown-linux-musl
           RUSTFLAGS: '-C target-feature=-crt-static'
         run: |
-          cargo test --manifest-path crates/hermes-gui/Cargo.toml --locked --target "$TARGET"
-          cargo build --manifest-path crates/hermes-gui/Cargo.toml --release --locked --target "$TARGET"
-          ldd "crates/hermes-gui/target/$TARGET/release/hsr-gui"
+          cargo test -p hermes-gui --locked --target "$TARGET"
+          cargo build -p hermes-gui --release --locked --target "$TARGET"
+          ldd "target/$TARGET/release/hsr-gui"
           mkdir -p "$RUNNER_TEMP/dist" "$RUNNER_TEMP/stage"
-          cp "crates/hermes-gui/target/$TARGET/release/hsr-gui" "$RUNNER_TEMP/stage/hsr-gui"
+          cp "target/$TARGET/release/hsr-gui" "$RUNNER_TEMP/stage/hsr-gui"
           version="${GITHUB_REF_NAME#gui-v}"
           if [[ -z "$version" || "$version" == "$GITHUB_REF_NAME" ]]; then version="0.1.0"; fi
           archive="hsr-gui-$version-$TARGET.tar.gz"
@@ -161,12 +160,20 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: gui-*
           path: ${{ runner.temp }}/dist/
           merge-multiple: true
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ${{ runner.temp }}/dist/hsr-gui-*.tar.gz
+            ${{ runner.temp }}/dist/hsr-gui-*.zip
       - name: Publish GUI release
         env:
           GH_TOKEN: ${{ github.token }}

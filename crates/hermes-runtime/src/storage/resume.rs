@@ -180,8 +180,16 @@ impl ResumeState {
                  last_activity_at = MAX(COALESCE(last_activity_at, 0), ?4),
                  message_count = ?5 + ?6, tool_call_count = COALESCE(?8, tool_call_count, 0) + ?7
              WHERE id = ?1",
-            params![self.id, turn.model, turn.system_prompt, ended_at,
-                    active_count, turn.messages.len(), tool_count, prior_tools],
+            params![
+                self.id,
+                turn.model,
+                turn.system_prompt,
+                ended_at,
+                active_count,
+                turn.messages.len() as i64,
+                tool_count as i64,
+                prior_tools
+            ],
         )?;
         release(&transaction, &self.root, &self.holder)?;
         transaction.commit()?;

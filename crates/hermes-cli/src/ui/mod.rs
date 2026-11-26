@@ -9,7 +9,7 @@ pub mod tui;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use hermes_runtime::config::{ResumeDisplaySettings, UiModeSetting};
 use hermes_runtime::storage::{Message, SessionStore};
@@ -568,7 +568,7 @@ pub struct ReplState {
     pub session: Option<String>,
     pub unsaved: Option<String>,
     pub scope: String,
-    pub guard: Mutex<CompactionGuard>,
+    pub guard: Arc<Mutex<CompactionGuard>>,
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub last_turn_input_tokens: u64,
@@ -639,7 +639,7 @@ impl ReplState {
             session,
             unsaved: None,
             scope: format!("repl-{}", std::process::id()),
-            guard: Mutex::new(CompactionGuard::new()),
+            guard: Arc::new(Mutex::new(CompactionGuard::new())),
             total_input_tokens: 0,
             total_output_tokens: 0,
             last_turn_input_tokens: 0,

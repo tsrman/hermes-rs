@@ -1496,7 +1496,7 @@ fn extract_sqlite(data: &[u8]) -> Result<String, String> {
                 "SELECT * FROM {quoted} LIMIT {SQLITE_PREVIEW_ROWS}"
             ))
             .map_err(|e| format!("SQLite read failed: {e}"))?;
-        let cols: Vec<String> = cur.column_names().iter().map(|s| (*s).to_owned()).collect();
+        let cols: Vec<String> = cur.column_names().map(str::to_owned).collect();
         let col_count = cols.len();
         let mut rows_out: Vec<Vec<String>> = Vec::new();
         let mut iter = cur

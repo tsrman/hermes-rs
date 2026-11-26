@@ -2,7 +2,7 @@
 
 A fast, standalone Rust implementation of [Hermes Agent](https://github.com/NousResearch/hermes-agent) — a single native CLI binary (`hsr`) with no Python runtime dependency, designed to live cleanly side-by-side with Python `hermes` using `~/.hsr` by default (override with `HSR_HOME` or `HERMES_HOME`) while staying drop-in compatible with existing `~/.hermes` profiles, `config.yaml`, `.env`, `auth.json`, skills, cron jobs, and SQLite `state.db` history.
 
-> Current release: **`v0.7.0`** (Linux x86_64/arm64 GNU & musl, macOS Apple Silicon & Intel, Windows x64)
+> Current releases: CLI **`v0.7.9`** (Linux x86_64/arm64 GNU & musl, macOS Apple Silicon & Intel, Windows x64) · Desktop GUI **`gui-v0.4.7`** (standalone `hsr-gui` for Linux GNU/musl & Windows x64)
 
 ## Highlights
 
@@ -18,7 +18,7 @@ A fast, standalone Rust implementation of [Hermes Agent](https://github.com/Nous
   - OpenAI-compatible Chat Completions (streaming & non-streaming), OpenAI Responses API, Anthropic Messages (API key & OAuth), AWS Bedrock (Converse REST + SigV4/Bearer + Guardrails + Mantle Responses), Google Vertex AI (Service Account RS256 JWT & ADC), NVIDIA NIM, 32 named key-based providers, and OAuth refresh (`openai-codex`, `nous`, `xai-oauth`, `qwen-oauth`, `minimax-oauth`).
   - Multimodal image input across OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and AWS Bedrock Converse.
 - **Built-in tools & MCP**:
-  - Workspace-scoped file tools (`read_file` with image detection, `search_files`, atomic `write_file` & `patch` on Linux/macOS), persistent local `terminal`, `process_manage`, optional Python `execute_code` kernel, `delegate_task` subagents (with nested depth, `list`/`steer`/`stop`/`continue`), `memory`, `todo_list`, `session_search`, `clarify`, `skills_list`/`skill_view`/`skill_manage`, `cronjob_manage`, `web_search`/`web_extract` (10 backends + keyless failover + website blocklist), `browser_cdp`, `vision_analyze`, `image_generate` (FAL.ai), `text_to_speech` (HTTP & local command), and `x_search` (xAI Responses).
+  - Workspace-scoped file tools (`read_file` with image detection and symlink/reparse checks, `search_files`, atomic `write_file` & `patch` on Linux, macOS, and Windows), persistent local `terminal` (Linux/macOS), `process_manage`, embedded Python `execute_code` kernel, `delegate_task` subagents (with nested depth, `list`/`steer`/`stop`/`continue`), `memory`, `todo_list`, `session_search`, `clarify`, `skills_list`/`skill_view`/`skill_manage`, `cronjob_manage`, `web_search`/`web_extract` (10 backends + keyless failover + website blocklist), `browser_cdp`, `vision_analyze`, `image_generate` (FAL.ai), `text_to_speech` (HTTP & local command), and `x_search` (xAI Responses).
   - Full MCP client (`stdio`, Streamable HTTP, and legacy `sse`) with cancellation (`notifications/cancelled`), session recovery, resources, prompts, media caching, disk spillover, and OAuth bearer tokens.
 - **Security & approvals**:
   - Dangerous-command detector, allow/deny policies, hardline safety floor, secret redaction before persistence, SSRF protection (`url_safety`), and configurable `security.website_blocklist`.
@@ -40,7 +40,7 @@ Download the archive and `.sha256` checksum for your platform from [Releases](ht
 **Linux / macOS:**
 
 ```bash
-tag=v0.7.0
+tag=v0.7.9
 target=x86_64-unknown-linux-gnu
 archive="hsr-${tag#v}-$target.tar.gz"
 url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
@@ -64,7 +64,7 @@ url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
 **Windows (PowerShell):**
 
 ```powershell
-$Tag = 'v0.7.0'
+$Tag = 'v0.7.9'
 $Archive = "hsr-$($Tag.Substring(1))-x86_64-pc-windows-msvc.zip"
 $Url = "https://github.com/tsrman/hermes-rs/releases/download/$Tag"
 Invoke-WebRequest "$Url/$Archive" -OutFile $Archive
@@ -78,7 +78,7 @@ Expand-Archive -LiteralPath $Archive -DestinationPath $InstallDir
 
 ### Build from Source
 
-The release build uses Rust `1.100.0`:
+Requires Rust `1.95+` (release builds use Rust `1.100.0`):
 
 ```bash
 cargo build --release --locked -p hermes-cli
@@ -149,7 +149,8 @@ hermes-rs/
 ├── crates/
 │   ├── hermes-core/     # Protocol primitives (UTF-8 chunk-safe SSE decoder)
 │   ├── hermes-runtime/  # Config, providers, OAuth, SQLite storage, compaction, tools, MCP, cron, turn loop
-│   └── hermes-cli/      # `hsr` executable, REPL/TUI, approvals, session owner, subcommands
+│   ├── hermes-cli/      # `hsr` executable, REPL/TUI, approvals, session owner, subcommands
+│   └── hermes-gui/      # Standalone GPUI desktop app (`hsr-gui`) with embedded owner & Python worker
 ├── compat/              # Local fixture model server, Python end-to-end compat suite, release packaging
 ├── docs/                # Extension interface docs and migration plans
 └── examples/            # Python SDK wrapper (`--events-json`) and MCP plugin example
@@ -158,14 +159,16 @@ hermes-rs/
 ## Development & Testing
 
 ```bash
-# Check formatting
+# Check formatting across all workspace crates (including hermes-gui)
 cargo fmt --all -- --check
 
-# Lint all workspace targets
-cargo clippy --workspace --all-targets --locked -- -D warnings
+# Lint and test CLI crates (default workspace members; requires loopback networking)
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
 
-# Run Rust unit and integration tests (requires loopback networking)
-cargo test --workspace --locked
+# Lint and test the desktop GUI crate (requires GPUI system libs on Linux)
+cargo clippy -p hermes-gui --all-targets --locked -- -D warnings
+cargo test -p hermes-gui --locked
 
 # Build CLI and run Python compatibility suite (requires loopback networking)
 cargo build --locked -p hermes-cli

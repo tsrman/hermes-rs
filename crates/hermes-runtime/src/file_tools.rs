@@ -15,6 +15,13 @@ pub(crate) mod directory;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod linux;
 mod search;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+mod windows;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use linux as platform;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+use windows as platform;
 
 pub(crate) use search::{search_schema, SEARCH_FILES};
 
@@ -56,7 +63,8 @@ pub enum ApprovalDecision {
 
 pub(crate) struct FileWorkspace<'a> {
     root: &'a Path,
-    profile: Option<PathBuf>,
+    /// Protected profile roots (active profile store plus sibling `~/.hermes` / `~/.hsr` homes).
+    protected_profiles: Vec<PathBuf>,
     /// Exact selected profile directory, whose `cache/spillover` and `cache/documents`
     /// subtrees are readable (read-only) by `read_file` for spilled MCP results and blobs.
     cache_home: Option<PathBuf>,
@@ -106,19 +114,43 @@ impl<'a> FileWorkspace<'a> {
     pub(crate) fn new(root: &'a Path, profile: Option<&Path>) -> Self {
         let cache_home =
             profile.map(|path| path.canonicalize().unwrap_or_else(|_| path.to_owned()));
-        let profile = cache_home.clone().map(|path| {
-            // Named profiles live under <root>/profiles/<name>. Protect the
-            // entire store, including the default and other named profiles.
-            match path.parent() {
+        let mut protected_profiles = Vec::new();
+        let mut push_profile = |path: PathBuf| {
+            let store = match path.parent() {
                 Some(parent) if parent.ends_with("profiles") => {
                     parent.parent().unwrap_or(&path).to_owned()
                 }
                 _ => path,
+            };
+            if let Ok(canon) = store.canonicalize() {
+                if !protected_profiles.contains(&canon) {
+                    protected_profiles.push(canon);
+                }
             }
-        });
+            if !protected_profiles.contains(&store) {
+                protected_profiles.push(store);
+            }
+        };
+        if let Some(active) = cache_home.clone() {
+            push_profile(active);
+        }
+        // Protect sibling Hermes/HSR profile homes even when the workspace is `$HOME`.
+        for var in ["HERMES_HOME", "HSR_HOME"] {
+            if let Some(val) = std::env::var_os(var).filter(|v| !v.is_empty()) {
+                push_profile(PathBuf::from(val));
+            }
+        }
+        if let Some(home) = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .filter(|v| !v.is_empty())
+        {
+            let home = PathBuf::from(home);
+            push_profile(home.join(".hermes"));
+            push_profile(home.join(".hsr"));
+        }
         Self {
             root,
-            profile,
+            protected_profiles,
             cache_home,
             observed: HashMap::new(),
             patch_failures: HashMap::new(),
@@ -368,7 +400,11 @@ impl<'a> FileWorkspace<'a> {
         }
         // File content reaches the model with credentials masked by a sentinel it cannot write
         // back as a usable key; a file known to hold credentials gets every pass.
-        let homes: Vec<&Path> = self.profile.iter().map(PathBuf::as_path).collect();
+        let homes: Vec<&Path> = self
+            .protected_profiles
+            .iter()
+            .map(PathBuf::as_path)
+            .collect();
         let content = redact_file_read(&content, is_secret_file_arg(path, &homes));
         if observe && data.len() <= WRITE_LIMIT {
             let hash = fingerprint(data.as_bytes());
@@ -434,6 +470,12 @@ impl<'a> FileWorkspace<'a> {
         if !requested.is_absolute() {
             return None;
         }
+        if requested
+            .components()
+            .any(|c| matches!(c, Component::ParentDir))
+        {
+            return None;
+        }
         let home = self.cache_home.as_ref()?;
         let cache = home.join("cache");
         let resolved = requested.canonicalize().ok()?;
@@ -442,10 +484,7 @@ impl<'a> FileWorkspace<'a> {
                 continue;
             };
             if let Ok(rel) = resolved.strip_prefix(&allowed) {
-                if !rel.as_os_str().is_empty()
-                    && !rel.components().any(protected_component)
-                    && !requested.components().any(protected_component)
-                {
+                if !rel.as_os_str().is_empty() && !rel.components().any(protected_component) {
                     return Some((allowed, resolved));
                 }
             }
@@ -458,9 +497,9 @@ impl<'a> FileWorkspace<'a> {
             .strip_prefix(root)
             .map_err(|_| "Path is outside the working directory")?;
         if self
-            .profile
-            .as_ref()
-            .is_some_and(|profile| path.starts_with(profile))
+            .protected_profiles
+            .iter()
+            .any(|profile| path.starts_with(profile))
             || relative.components().any(protected_component)
         {
             return Err(
@@ -483,90 +522,79 @@ impl<'a> FileWorkspace<'a> {
         A: FnMut(ApprovalRequest) -> F,
         F: Future<Output = ApprovalDecision>,
     {
-        let Some(seconds) =
-            timeout_secs.filter(|_| cfg!(any(target_os = "linux", target_os = "macos")))
-        else {
+        let Some(seconds) = timeout_secs else {
             return approval_error(ApprovalDecision::Unavailable);
         };
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        {
-            let plan = if tool == PATCH {
-                match self.prepare_patch(arguments) {
-                    Ok(Prepared::Plan(plan)) => *plan,
-                    Ok(Prepared::Done(answer)) => return answer,
-                    Err(error) => return json!({"error": error}),
-                }
+        let plan = if tool == PATCH {
+            match self.prepare_patch(arguments) {
+                Ok(Prepared::Plan(plan)) => *plan,
+                Ok(Prepared::Done(answer)) => return answer,
+                Err(error) => return json!({"error": error}),
+            }
+        } else {
+            match self.prepare_write(arguments) {
+                Ok(plan) => plan,
+                Err(error) => return json!({"error": error}),
+            }
+        };
+        let Some(target) = plan.target.path.to_str() else {
+            return json!({"error": "The target path must be UTF-8 to display it for approval"});
+        };
+        let created = plan.target.directories_to_create();
+        let request = ApprovalRequest {
+            target: if created.is_empty() {
+                target.to_owned()
             } else {
-                match self.prepare_write(arguments) {
-                    Ok(plan) => plan,
-                    Err(error) => return json!({"error": error}),
-                }
-            };
-            let Some(target) = plan.target.path.to_str() else {
-                return json!({"error": "The target path must be UTF-8 to display it for approval"});
-            };
-            let created = plan.target.directories_to_create();
-            let request = ApprovalRequest {
-                target: if created.is_empty() {
-                    target.to_owned()
-                } else {
-                    format!("{target} (creates directories: {})", created.join(", "))
-                },
-                content: plan.content.clone(),
-                action: if plan.before.is_some() {
-                    ApprovalAction::ReplaceFile
-                } else {
-                    ApprovalAction::CreateFile
-                },
-                timeout_secs: seconds,
-            };
-            let decision = request_approval(request, policy, approve).await;
-            if !matches!(decision, ApprovalDecision::Approved) {
-                return approval_error(decision);
-            }
-            match plan.target.commit(&plan.content, plan.before) {
-                Ok(()) => {
-                    let mut observation = Observation::new(fingerprint(plan.content.as_bytes()));
-                    observation.complete = true;
-                    self.observed.insert(plan.target.path.clone(), observation);
-                    if let Some((notes, diff, lint)) = plan.patch {
-                        let resolved = plan.target.path.display().to_string();
-                        let mut result = serde_json::Map::new();
-                        result.insert("success".into(), json!(true));
-                        if !notes.is_empty() {
-                            result.insert("note".into(), json!(notes.join("\n")));
-                        }
-                        result.insert("diff".into(), json!(diff));
-                        result.insert("files_modified".into(), json!([resolved]));
-                        result.insert("lint".into(), lint);
-                        result.insert("resolved_path".into(), json!(resolved));
-                        Value::Object(result)
-                    } else {
-                        let resolved = plan.target.path.display().to_string();
-                        let mut result = serde_json::Map::new();
-                        result.insert("bytes_written".into(), json!(plan.content.len()));
-                        result.insert("dirs_created".into(), json!(!created.is_empty()));
-                        result.insert("verified".into(), json!(true));
-                        if let Some(lint) = plan.lint {
-                            result.insert("lint".into(), lint);
-                        }
-                        result.insert("resolved_path".into(), json!(resolved));
-                        result.insert("files_modified".into(), json!([resolved]));
-                        Value::Object(result)
-                    }
-                }
-                Err(error) => json!({"error": error}),
-            }
+                format!("{target} (creates directories: {})", created.join(", "))
+            },
+            content: plan.content.clone(),
+            action: if plan.before.is_some() {
+                ApprovalAction::ReplaceFile
+            } else {
+                ApprovalAction::CreateFile
+            },
+            timeout_secs: seconds,
+        };
+        let decision = request_approval(request, policy, approve).await;
+        if !matches!(decision, ApprovalDecision::Approved) {
+            return approval_error(decision);
         }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        {
-            let _ = (tool, arguments, seconds, policy, approve);
-            approval_error(ApprovalDecision::Unavailable)
+        match plan.target.commit(&plan.content, plan.before) {
+            Ok(()) => {
+                let mut observation = Observation::new(fingerprint(plan.content.as_bytes()));
+                observation.complete = true;
+                self.observed.insert(plan.target.path.clone(), observation);
+                if let Some((notes, diff, lint)) = plan.patch {
+                    let resolved = plan.target.path.display().to_string();
+                    let mut result = serde_json::Map::new();
+                    result.insert("success".into(), json!(true));
+                    if !notes.is_empty() {
+                        result.insert("note".into(), json!(notes.join("\n")));
+                    }
+                    result.insert("diff".into(), json!(diff));
+                    result.insert("files_modified".into(), json!([resolved]));
+                    result.insert("lint".into(), lint);
+                    result.insert("resolved_path".into(), json!(resolved));
+                    Value::Object(result)
+                } else {
+                    let resolved = plan.target.path.display().to_string();
+                    let mut result = serde_json::Map::new();
+                    result.insert("bytes_written".into(), json!(plan.content.len()));
+                    result.insert("dirs_created".into(), json!(!created.is_empty()));
+                    result.insert("verified".into(), json!(true));
+                    if let Some(lint) = plan.lint {
+                        result.insert("lint".into(), lint);
+                    }
+                    result.insert("resolved_path".into(), json!(resolved));
+                    result.insert("files_modified".into(), json!([resolved]));
+                    Value::Object(result)
+                }
+            }
+            Err(error) => json!({"error": error}),
         }
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn prepare_write(&self, arguments: &str) -> Result<linux::WritePlan, String> {
+    fn prepare_write(&self, arguments: &str) -> Result<platform::WritePlan, String> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Arguments {
@@ -597,7 +625,7 @@ impl<'a> FileWorkspace<'a> {
                 );
             }
         }
-        Ok(linux::WritePlan {
+        Ok(platform::WritePlan {
             lint: Some(lint),
             target,
             content: args.content,
@@ -606,8 +634,7 @@ impl<'a> FileWorkspace<'a> {
         })
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn write_target(&self, path: &str) -> Result<linux::Target, String> {
+    fn write_target(&self, path: &str) -> Result<platform::Target, String> {
         let root = self
             .root
             .canonicalize()
@@ -627,6 +654,7 @@ impl<'a> FileWorkspace<'a> {
         ]
         .iter()
         .any(|directory| target.starts_with(directory))
+            || is_protected_windows_system_path(&target)
         {
             return Err("Refusing to write to a protected system path".into());
         }
@@ -640,10 +668,9 @@ impl<'a> FileWorkspace<'a> {
                 "Refusing to overwrite existing binary document '{path}' with plain text. Use appropriate libraries or utilities via the terminal to modify it."
             ));
         }
-        linux::Target::open(&root, &target)
+        platform::Target::open(&root, &target)
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     /// A patch: the plan for the write, or a finished answer (a miss, or an edit that is already
     /// in the file).
     fn prepare_patch(&mut self, arguments: &str) -> Result<Prepared, String> {
@@ -730,7 +757,7 @@ impl<'a> FileWorkspace<'a> {
             &format!("b/{path_text}"),
         );
         self.patch_failures.remove(&target.path);
-        Ok(Prepared::Plan(Box::new(linux::WritePlan {
+        Ok(Prepared::Plan(Box::new(platform::WritePlan {
             lint: None,
             target,
             content: written,
@@ -778,9 +805,8 @@ impl<'a> FileWorkspace<'a> {
 }
 
 /// What preparing a patch produced.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 enum Prepared {
-    Plan(Box<linux::WritePlan>),
+    Plan(Box<platform::WritePlan>),
     Done(Value),
 }
 
@@ -867,12 +893,39 @@ fn similar_files(path: &str, resolved: &Path) -> Value {
 }
 
 fn open_read(root: &Path, path: &Path) -> Result<std::fs::File, String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    return linux::Target::open(root, path)?.read_file();
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    platform::Target::open(root, path)?.read_file()
+}
+
+fn is_protected_windows_system_path(target: &Path) -> bool {
+    #[cfg(windows)]
     {
-        let _ = root;
-        std::fs::File::open(path).map_err(|error| error.to_string())
+        let raw = target.to_string_lossy().to_ascii_lowercase();
+        let trimmed = raw.strip_prefix(r"\\?\").unwrap_or(&raw);
+        let normalized = trimmed.replace('/', r"\");
+        let after_drive = normalized
+            .as_bytes()
+            .get(1)
+            .filter(|&&b| b == b':')
+            .map(|_| &normalized[2..])
+            .unwrap_or(&normalized);
+        [
+            r"\windows",
+            r"\program files",
+            r"\program files (x86)",
+            r"\programdata",
+        ]
+        .iter()
+        .any(|prefix| {
+            after_drive == *prefix
+                || after_drive
+                    .strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with('\\'))
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = target;
+        false
     }
 }
 
@@ -881,7 +934,15 @@ fn protected_component(component: Component<'_>) -> bool {
     (name != ".env.example" && (name == ".env" || name.starts_with(".env.")))
         || matches!(
             name.as_str(),
-            ".envrc" | ".git" | ".ssh" | ".aws" | "vault" | "mcp-tokens" | "browser-profile"
+            ".envrc"
+                | ".git"
+                | ".ssh"
+                | ".aws"
+                | ".hermes"
+                | ".hsr"
+                | "vault"
+                | "mcp-tokens"
+                | "browser-profile"
         )
 }
 
@@ -960,7 +1021,6 @@ pub(crate) fn patch_schema() -> Value {
         serde_json::from_str::<Value>(include_str!("schemas/patch.json")).unwrap_or_default()})
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg(test)]
 mod tests {
     use super::Observation;
@@ -1374,5 +1434,41 @@ mod limit_tests {
         let d2 = request_approval(req(), Some(&strict), &mut ask).await;
         assert_eq!(d2, ApprovalDecision::Denied);
         assert_eq!(prompts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn blocks_sibling_hermes_and_hsr_profile_stores_when_cwd_is_home() {
+        let fake_home = tempfile::tempdir().unwrap();
+        let hsr_dir = fake_home.path().join(".hsr");
+        let hermes_dir = fake_home.path().join(".hermes");
+        let spill_dir = hsr_dir.join("cache").join("spillover");
+        std::fs::create_dir_all(&spill_dir).unwrap();
+        std::fs::create_dir_all(&hermes_dir).unwrap();
+
+        std::fs::write(hermes_dir.join("auth.json"), r#"{"token":"secret"}"#).unwrap();
+        std::fs::write(hermes_dir.join("state.db"), "sqlite-bytes").unwrap();
+        std::fs::write(hsr_dir.join("auth.json"), r#"{"token":"secret2"}"#).unwrap();
+        let spill_file = spill_dir.join("call_1.txt");
+        std::fs::write(&spill_file, "ok spillover\n").unwrap();
+
+        let mut workspace = FileWorkspace::new(fake_home.path(), Some(&hsr_dir));
+
+        for blocked in [".hermes/auth.json", ".hermes/state.db", ".hsr/auth.json"] {
+            let res = workspace.read(&json!({"path": blocked}).to_string());
+            assert!(
+                res["error"].is_string(),
+                "expected {blocked} to be blocked, got: {res}"
+            );
+        }
+
+        // Spillover cache under active `.hsr` profile remains readable read-only.
+        let ok = workspace.read(&json!({"path": spill_file.display().to_string()}).to_string());
+        assert!(
+            ok["content"]
+                .as_str()
+                .unwrap_or("")
+                .contains("ok spillover"),
+            "expected spillover cache read to succeed, got: {ok}"
+        );
     }
 }

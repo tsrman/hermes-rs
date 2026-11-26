@@ -4,7 +4,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 
 use ring::digest::{self, Context, Digest};
-use rusqlite::{params, types::ValueRef, Connection, DatabaseName, OpenFlags, TransactionBehavior};
+use rusqlite::{params, types::ValueRef, Connection, OpenFlags, TransactionBehavior, MAIN_DB};
 use serde::Serialize;
 
 use super::{
@@ -86,7 +86,7 @@ pub(crate) fn write_verified_snapshot(
     let rebuild_fts = version < LEGACY_SCHEMA_VERSION || !fts_already_v3;
     let plan = HistoryPlan::capture(&snapshot, version)?;
     let before = history(&snapshot, &plan)?;
-    snapshot.backup(DatabaseName::Main, destination, None)?;
+    snapshot.backup(MAIN_DB, destination, None::<fn(rusqlite::backup::Progress)>)?;
     snapshot.commit()?;
     verify_snapshot(destination, version, rebuild_fts, &plan, &before)?;
     fs::File::open(destination)?.sync_all()?;

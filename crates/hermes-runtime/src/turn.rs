@@ -210,7 +210,7 @@ impl TurnHistory {
         let effective = match trigger {
             CompactionTrigger::Manual { .. } => {
                 if let Some(guard) = guard {
-                    guard.lock().unwrap().reset_for_manual();
+                    lock_unpoisoned(guard).reset_for_manual();
                 }
                 let Some(s) = settings.for_manual() else {
                     return CompactionOutcome::Unchanged;
@@ -222,7 +222,7 @@ impl TurnHistory {
                 if !settings.enabled() {
                     return CompactionOutcome::Unchanged;
                 }
-                if guard.is_some_and(|g| g.lock().unwrap().check_blocked(false).is_some()) {
+                if guard.is_some_and(|g| lock_unpoisoned(g).check_blocked(false).is_some()) {
                     return CompactionOutcome::Unchanged;
                 }
                 settings
@@ -231,7 +231,7 @@ impl TurnHistory {
                 if !settings.enabled() {
                     return CompactionOutcome::Unchanged;
                 }
-                if guard.is_some_and(|g| g.lock().unwrap().check_blocked(true).is_some()) {
+                if guard.is_some_and(|g| lock_unpoisoned(g).check_blocked(true).is_some()) {
                     return CompactionOutcome::Unchanged;
                 }
                 settings
@@ -267,7 +267,7 @@ impl TurnHistory {
         let summary_route = summarizer.unwrap_or(route);
         let Some(request) = effective.request(&summary_route.model, middle, focus) else {
             if let Some(guard) = guard {
-                guard.lock().unwrap().record_summary_failure(false);
+                lock_unpoisoned(guard).record_summary_failure(false);
             }
             return CompactionOutcome::Skipped;
         };
@@ -284,9 +284,7 @@ impl TurnHistory {
             Ok(result) => result,
             Err(error) => {
                 if let Some(guard) = guard {
-                    guard
-                        .lock()
-                        .unwrap()
+                    lock_unpoisoned(guard)
                         .record_summary_failure(is_timeout_provider_error(&error));
                 }
                 return CompactionOutcome::Skipped;
@@ -295,7 +293,7 @@ impl TurnHistory {
         if result.finish_reason.as_deref() != Some("stop") || !result.tool_calls.is_empty() {
             let truncated = result.finish_reason.as_deref() == Some("length");
             if let Some(guard) = guard {
-                guard.lock().unwrap().record_summary_failure(truncated);
+                lock_unpoisoned(guard).record_summary_failure(truncated);
             }
             return CompactionOutcome::Skipped;
         }
@@ -323,7 +321,7 @@ impl TurnHistory {
         };
         let Some(compaction) = CompactedHistory::new(range, &result.content, placement) else {
             if let Some(guard) = guard {
-                guard.lock().unwrap().record_summary_failure(false);
+                lock_unpoisoned(guard).record_summary_failure(false);
             }
             return CompactionOutcome::Skipped;
         };
@@ -332,7 +330,7 @@ impl TurnHistory {
         let new_history_bytes = messages_bytes(&replayed);
         if new_history_bytes >= old_history_bytes {
             if let Some(guard) = guard {
-                guard.lock().unwrap().record_ineffective();
+                lock_unpoisoned(guard).record_ineffective();
             }
             return CompactionOutcome::Skipped;
         }
@@ -378,7 +376,7 @@ impl TurnHistory {
         let new_prefix = prefix_bytes(&system, &self.env);
         if new_prefix + new_history_bytes >= old_prefix + old_history_bytes {
             if let Some(guard) = guard {
-                guard.lock().unwrap().record_ineffective();
+                lock_unpoisoned(guard).record_ineffective();
             }
             return CompactionOutcome::Skipped;
         }
@@ -386,7 +384,7 @@ impl TurnHistory {
             let still_over = query.is_some_and(|q| {
                 effective.over_threshold(new_prefix + new_history_bytes + q.len())
             });
-            guard.lock().unwrap().record_success(still_over);
+            lock_unpoisoned(guard).record_success(still_over);
         }
         self.system_prompt = Some(system);
         self.skills = skills;
@@ -574,6 +572,14 @@ fn summarize_tool_args(name: &str, raw_args: &str, keep_phone_numbers: bool) -> 
     collapse_and_clip(&raw, 76, keep_phone_numbers)
 }
 
+fn extract_error_headline(text: &str) -> Option<&str> {
+    if text.contains("Traceback (most recent call last):") {
+        text.lines().rev().find(|l| !l.trim().is_empty())
+    } else {
+        text.lines().find(|l| !l.trim().is_empty())
+    }
+}
+
 fn summarize_tool_result(
     name: &str,
     structured: &Value,
@@ -587,8 +593,8 @@ fn summarize_tool_result(
         .filter(|s| !s.is_empty());
 
     if let Some(err) = err_text {
-        let first_line = err.lines().find(|l| !l.trim().is_empty()).unwrap_or(err);
-        let clipped = collapse_and_clip(first_line, 180, keep_phone_numbers)?;
+        let headline = extract_error_headline(err).unwrap_or(err);
+        let clipped = collapse_and_clip(headline, 180, keep_phone_numbers)?;
         return if let Some(code) = structured.get("exit_code").and_then(Value::as_i64) {
             Some(format!("exit {code} · {clipped}"))
         } else {
@@ -610,7 +616,7 @@ fn summarize_tool_result(
                             .or_else(|| structured.get("output"))
                             .or_else(|| structured.get("stdout"))
                             .and_then(Value::as_str)
-                            .and_then(|s| s.lines().find(|l| !l.trim().is_empty()))
+                            .and_then(extract_error_headline)
                     })
                     .and_then(|l| collapse_and_clip(l, 180, keep_phone_numbers))
             } else {
@@ -893,7 +899,7 @@ where
         let result = loop {
             // Before the request goes out: once the steps of this turn have outgrown the threshold,
             // replace the early ones with a summary instead of waiting for the provider to refuse.
-            if squeezes < max_squeezes && guard.lock().unwrap().check_blocked(false).is_none() {
+            if squeezes < max_squeezes && lock_unpoisoned(guard).check_blocked(false).is_none() {
                 if let Some(settings) = options.compression.filter(|s| {
                     s.enabled() && s.over_threshold(messages_bytes(&sent) + messages_bytes(&tools))
                 }) {
@@ -983,7 +989,7 @@ where
                     if matches!(error, ProviderError::ContextOverflow)
                         && !emitted_text
                         && squeezes < max_squeezes
-                        && guard.lock().unwrap().check_blocked(true).is_none()
+                        && lock_unpoisoned(guard).check_blocked(true).is_none()
                     {
                         if let Some(settings) = options.compression.filter(|s| s.enabled()) {
                             let summarizer = options.summarizer;
@@ -1308,7 +1314,10 @@ where
     on_event(TurnEvent::IterationLimit(options.max_turns));
     messages.push(json!({"role": "user", "content": ITERATION_SUMMARY_REQUEST}));
     sent.push(json!({"role": "user", "content": ITERATION_SUMMARY_REQUEST}));
-    let request = chat_request(&route.model, &sent, &tools, options.prefill.unwrap_or(&[]));
+    let mut request = chat_request(&route.model, &sent, &tools, options.prefill.unwrap_or(&[]));
+    if !tools.is_empty() {
+        request["tool_choice"] = json!("none");
+    }
     // Keep the active route and tool definitions so the provider can reuse its prompt prefix.
     // Emit the summary only after verifying that the completion contains no tool calls.
     let summary = route
@@ -1316,7 +1325,7 @@ where
         .complete(&request, |_| {})
         .await
         .map_err(TurnError::Provider)?;
-    if summary.finish_reason.as_deref() != Some("stop")
+    if !matches!(summary.finish_reason.as_deref(), Some("stop" | "length"))
         || !summary.tool_calls.is_empty()
         || summary.content.trim().is_empty()
     {
@@ -1352,7 +1361,7 @@ async fn squeeze_turn(
     };
     let middle = &sent[range.clone()];
     let Some(request) = settings.request(&route.model, middle, None) else {
-        guard.lock().unwrap().record_summary_failure(false);
+        lock_unpoisoned(guard).record_summary_failure(false);
         return false;
     };
     // A configured summary route carries its own body fields; the main route's are left out.
@@ -1364,16 +1373,13 @@ async fn squeeze_turn(
     let reply = match reply {
         Ok(reply) => reply,
         Err(error) => {
-            guard
-                .lock()
-                .unwrap()
-                .record_summary_failure(is_timeout_provider_error(&error));
+            lock_unpoisoned(guard).record_summary_failure(is_timeout_provider_error(&error));
             return false;
         }
     };
     if reply.finish_reason.as_deref() != Some("stop") || !reply.tool_calls.is_empty() {
         let truncated = reply.finish_reason.as_deref() == Some("length");
-        guard.lock().unwrap().record_summary_failure(truncated);
+        lock_unpoisoned(guard).record_summary_failure(truncated);
         return false;
     }
     let head = &sent[..range.start];
@@ -1391,7 +1397,7 @@ async fn squeeze_turn(
         }
     };
     let Some(compaction) = CompactedHistory::new(range.clone(), &reply.content, persisted) else {
-        guard.lock().unwrap().record_summary_failure(false);
+        lock_unpoisoned(guard).record_summary_failure(false);
         return false;
     };
     let mut text = compaction.summary;
@@ -1416,13 +1422,17 @@ async fn squeeze_turn(
     candidate.extend(tail_copy);
     let new_bytes = messages_bytes(&candidate);
     if new_bytes >= old_bytes {
-        guard.lock().unwrap().record_ineffective();
+        lock_unpoisoned(guard).record_ineffective();
         return false;
     }
     *sent = candidate;
     let still_over = settings.over_threshold(new_bytes + messages_bytes(tools));
-    guard.lock().unwrap().record_success(still_over);
+    lock_unpoisoned(guard).record_success(still_over);
     true
+}
+
+fn lock_unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
 /// A chat request. An empty `tools` array is omitted, since providers reject it.
@@ -1579,5 +1589,15 @@ mod tests {
             let linked = read_file(directory.path(), r#"{"path":"env-link"}"#);
             assert!(linked["error"].is_string());
         }
+    }
+
+    #[test]
+    fn summarize_tool_result_extracts_python_traceback_exception_line() {
+        let payload = json!({
+            "exit_code": 1,
+            "output": "Traceback (most recent call last):\n  File \"<string>\", line 4, in <module>\nKeyError: 'Лист1'\n"
+        });
+        let summary = super::summarize_tool_result("execute_code", &payload, false, false).unwrap();
+        assert_eq!(summary, "exit 1 · KeyError: 'Лист1'");
     }
 }

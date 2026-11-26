@@ -330,7 +330,7 @@ impl Default for ChatSettings {
             custom_providers: Vec::new(),
             model_overrides: ModelOverrides::default(),
             api_max_attempts: 3,
-            max_turns: 16,
+            max_turns: 90,
             fallbacks: Vec::new(),
             prompt: PromptSettings::default(),
             compression: CompactionSettings::default(),

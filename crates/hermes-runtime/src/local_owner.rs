@@ -136,16 +136,224 @@ fn check_owner_directory(path: &Path) -> io::Result<bool> {
 fn check_owner_directory(path: &Path) -> io::Result<bool> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
-            if !metadata.is_dir() {
+            #[cfg(windows)]
+            let is_reparse = {
+                use std::os::windows::fs::MetadataExt;
+                const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+                metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            };
+            #[cfg(not(windows))]
+            let is_reparse = false;
+            if !metadata.is_dir() || metadata.file_type().is_symlink() || is_reparse {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    "local owner path is not a directory",
+                    "local owner path must be a non-symlink directory",
                 ));
             }
             Ok(true)
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(windows)]
+mod win_acl {
+    use std::ffi::c_void;
+    use std::io;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
+    use std::ptr;
+
+    type Handle = *mut c_void;
+    type Bool = i32;
+    type Dword = u32;
+
+    const TOKEN_QUERY: Dword = 0x0008;
+    const TOKEN_USER_CLASS: Dword = 1;
+    const SDDL_REVISION_1: Dword = 1;
+    const SE_FILE_OBJECT: Dword = 1;
+    const DACL_SECURITY_INFORMATION: Dword = 0x0000_0004;
+    const PROTECTED_DACL_SECURITY_INFORMATION: Dword = 0x8000_0000;
+    const ERROR_SUCCESS: Dword = 0;
+
+    #[repr(C)]
+    struct SidAndAttributes {
+        sid: *mut c_void,
+        attributes: Dword,
+    }
+
+    #[repr(C)]
+    struct TokenUser {
+        user: SidAndAttributes,
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetCurrentProcess() -> Handle;
+        fn CloseHandle(handle: Handle) -> Bool;
+        fn LocalFree(mem: *mut c_void) -> *mut c_void;
+    }
+
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn OpenProcessToken(
+            process_handle: Handle,
+            desired_access: Dword,
+            token_handle: *mut Handle,
+        ) -> Bool;
+        fn GetTokenInformation(
+            token_handle: Handle,
+            token_information_class: Dword,
+            token_information: *mut c_void,
+            token_information_length: Dword,
+            return_length: *mut Dword,
+        ) -> Bool;
+        fn ConvertSidToStringSidW(sid: *mut c_void, string_sid: *mut *mut u16) -> Bool;
+        fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            string_security_descriptor: *const u16,
+            string_sd_revision: Dword,
+            security_descriptor: *mut *mut c_void,
+            security_descriptor_size: *mut Dword,
+        ) -> Bool;
+        fn GetSecurityDescriptorDacl(
+            security_descriptor: *mut c_void,
+            dacl_present: *mut Bool,
+            dacl: *mut *mut c_void,
+            dacl_defaulted: *mut Bool,
+        ) -> Bool;
+        fn SetNamedSecurityInfoW(
+            object_name: *mut u16,
+            object_type: Dword,
+            security_info: Dword,
+            owner: *mut c_void,
+            group: *mut c_void,
+            dacl: *mut c_void,
+            sacl: *mut c_void,
+        ) -> Dword;
+    }
+
+    struct OwnedHandle(Handle);
+    impl Drop for OwnedHandle {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    CloseHandle(self.0);
+                }
+            }
+        }
+    }
+
+    struct LocalMem(*mut c_void);
+    impl Drop for LocalMem {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    LocalFree(self.0);
+                }
+            }
+        }
+    }
+
+    fn current_user_sid_string() -> io::Result<String> {
+        let mut raw_token: Handle = ptr::null_mut();
+        let ok = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut raw_token) };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let token = OwnedHandle(raw_token);
+
+        let mut needed: Dword = 0;
+        unsafe {
+            GetTokenInformation(token.0, TOKEN_USER_CLASS, ptr::null_mut(), 0, &mut needed);
+        }
+        if needed == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut buf = vec![0u8; needed as usize];
+        let ok = unsafe {
+            GetTokenInformation(
+                token.0,
+                TOKEN_USER_CLASS,
+                buf.as_mut_ptr().cast(),
+                needed,
+                &mut needed,
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let user = unsafe { &*(buf.as_ptr().cast::<TokenUser>()) };
+        let mut raw_sid_str: *mut u16 = ptr::null_mut();
+        let ok = unsafe { ConvertSidToStringSidW(user.user.sid, &mut raw_sid_str) };
+        if ok == 0 || raw_sid_str.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let _guard = LocalMem(raw_sid_str.cast());
+        let mut len = 0usize;
+        unsafe {
+            while *raw_sid_str.add(len) != 0 {
+                len += 1;
+            }
+            let slice = std::slice::from_raw_parts(raw_sid_str, len);
+            Ok(String::from_utf16_lossy(slice))
+        }
+    }
+
+    /// Restrict `path` with a protected DACL granting full access only to the current user SID
+    /// and `SYSTEM`, stripping inherited ACEs so custom `HSR_HOME` locations stay private.
+    pub(super) fn restrict_to_current_user(path: &Path, is_directory: bool) -> io::Result<()> {
+        let sid = current_user_sid_string()?;
+        let sddl = if is_directory {
+            format!("D:P(A;OICI;FA;;;{sid})(A;OICI;FA;;;SY)")
+        } else {
+            format!("D:P(A;;FA;;;{sid})(A;;FA;;;SY)")
+        };
+        let sddl_wide: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut raw_sd: *mut c_void = ptr::null_mut();
+        let ok = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl_wide.as_ptr(),
+                SDDL_REVISION_1,
+                &mut raw_sd,
+                ptr::null_mut(),
+            )
+        };
+        if ok == 0 || raw_sd.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let _sd_guard = LocalMem(raw_sd);
+
+        let mut dacl_present: Bool = 0;
+        let mut dacl: *mut c_void = ptr::null_mut();
+        let mut dacl_defaulted: Bool = 0;
+        let ok = unsafe {
+            GetSecurityDescriptorDacl(raw_sd, &mut dacl_present, &mut dacl, &mut dacl_defaulted)
+        };
+        if ok == 0 || dacl_present == 0 || dacl.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+
+        let mut path_wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let status = unsafe {
+            SetNamedSecurityInfoW(
+                path_wide.as_mut_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                dacl,
+                ptr::null_mut(),
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return Err(io::Error::from_raw_os_error(status as i32));
+        }
+        Ok(())
     }
 }
 
@@ -282,6 +490,12 @@ impl OwnerListener {
         #[cfg(not(unix))]
         {
             fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+            if !check_owner_directory(&directory).map_err(|e| e.to_string())? {
+                return Err("local owner directory is unavailable".into());
+            }
+            #[cfg(windows)]
+            win_acl::restrict_to_current_user(&directory, true)
+                .map_err(|e| format!("failed to secure local owner directory ACL: {e}"))?;
             let lock = File::options()
                 .read(true)
                 .write(true)
@@ -306,7 +520,12 @@ impl OwnerListener {
                 token: token.clone(),
             })
             .map_err(|e| e.to_string())?;
-            fs::write(&addr_path, payload).map_err(|e| e.to_string())?;
+            let tmp_path = directory.join(format!("{OWNER_ADDR_NAME}.tmp"));
+            fs::write(&tmp_path, payload).map_err(|e| e.to_string())?;
+            #[cfg(windows)]
+            win_acl::restrict_to_current_user(&tmp_path, false)
+                .map_err(|e| format!("failed to secure owner.addr ACL: {e}"))?;
+            fs::rename(&tmp_path, &addr_path).map_err(|e| e.to_string())?;
             let display_addr = format!("127.0.0.1:{port} ({})", addr_path.display());
             Ok(Self {
                 endpoint_path: addr_path,
@@ -687,13 +906,17 @@ impl TurnHandle {
     }
 }
 
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
 impl TurnEmitter {
     pub fn turn_id(&self) -> String {
-        self.turn.lock().unwrap().turn_id.clone()
+        lock_unpoisoned(&self.turn).turn_id.clone()
     }
 
     pub fn emit(&self, event: TurnStreamEvent) {
-        let mut guard = self.turn.lock().unwrap();
+        let mut guard = lock_unpoisoned(&self.turn);
         if guard.finished {
             return;
         }
@@ -714,7 +937,7 @@ impl TurnEmitter {
                 (!grants.is_empty()).then_some((sid, grants))
             });
             drop(guard);
-            let mut registry = self.hub.registry.lock().unwrap();
+            let mut registry = lock_unpoisoned(&self.hub.registry);
             if let Some((sid, grants)) = sid_and_grants {
                 registry
                     .session_grants
@@ -733,7 +956,7 @@ impl TurnEmitter {
         request: ApprovalRequest,
     ) -> oneshot::Receiver<ApprovalDecision> {
         let (tx, rx) = oneshot::channel();
-        let mut guard = self.turn.lock().unwrap();
+        let mut guard = lock_unpoisoned(&self.turn);
         if guard.finished {
             return rx;
         }
@@ -806,7 +1029,7 @@ impl TurnHub {
     }
 
     fn registry(&self) -> std::sync::MutexGuard<'_, TurnRegistry> {
-        let mut registry = self.registry.lock().unwrap();
+        let mut registry = lock_unpoisoned(&self.registry);
         registry.prune(Instant::now());
         registry
     }
@@ -817,7 +1040,7 @@ impl TurnHub {
         let mut out: Vec<ActiveTurnSummary> = guard
             .values()
             .map(|t| {
-                let st = t.lock().unwrap();
+                let st = lock_unpoisoned(t);
                 ActiveTurnSummary {
                     turn_id: st.turn_id.clone(),
                     session_id: st.session_id.clone(),
@@ -836,7 +1059,7 @@ impl TurnHub {
         let registry = self.registry();
         let guard = &registry.turns;
         guard.values().find_map(|t| {
-            let st = t.lock().unwrap();
+            let st = lock_unpoisoned(t);
             (!st.finished && st.session_id.as_deref() == Some(session_id))
                 .then(|| st.turn_id.clone())
         })
@@ -861,7 +1084,7 @@ impl TurnHub {
             .get(turn_id)
             .cloned()
             .ok_or_else(|| format!("Unknown turn_id '{turn_id}'"))?;
-        let st = turn.lock().unwrap();
+        let st = lock_unpoisoned(&turn);
         if after_seq > st.next_seq {
             return Err(format!("Invalid cursor {after_seq} for turn '{turn_id}'"));
         }
@@ -881,12 +1104,9 @@ impl TurnHub {
                 },
             }];
             if st.finished {
-                events.push(
-                    st.events
-                        .back()
-                        .expect("completed turn has a Done event")
-                        .clone(),
-                );
+                if let Some(done) = st.events.back().cloned() {
+                    events.push(done);
+                }
             }
             events
         } else {
@@ -908,7 +1128,7 @@ impl TurnHub {
             .get(turn_id)
             .cloned()
             .ok_or_else(|| format!("Unknown turn_id '{turn_id}'"))?;
-        let mut st = turn.lock().unwrap();
+        let mut st = lock_unpoisoned(&turn);
         if let Some(tx) = st.cancel_tx.take() {
             let _ = tx.send(());
         }
@@ -929,7 +1149,7 @@ impl TurnHub {
             .cloned()
             .ok_or_else(|| format!("Unknown turn_id '{turn_id}'"))?;
         let (request, sender, policy, session_id) = {
-            let mut st = turn.lock().unwrap();
+            let mut st = lock_unpoisoned(&turn);
             let matched = st
                 .pending_approval
                 .as_ref()
@@ -939,7 +1159,11 @@ impl TurnHub {
                     "No pending approval #{approval_id} for turn '{turn_id}'"
                 ));
             }
-            let (_, request, sender) = st.pending_approval.take().expect("matched approval");
+            let Some((_, request, sender)) = st.pending_approval.take() else {
+                return Err(format!(
+                    "No pending approval #{approval_id} for turn '{turn_id}'"
+                ));
+            };
             st.publish(TurnStreamEvent::ApprovalResolved { approval_id });
             (request, sender, st.policy.clone(), st.session_id.clone())
         };

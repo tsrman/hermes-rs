@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use hermes_runtime::context_refs::{complete_at_references, list_skill_commands};
+use hermes_runtime::context_refs::{cached_skill_commands_nonblocking, complete_at_references};
 
 use hermes_runtime::local_owner::{
     ActiveTurnSummary, ProfileEntry, SequencedTurnEvent, SessionSummary, TranscriptItem,
@@ -306,7 +306,7 @@ impl GuiState {
                 })
                 .collect();
             let skill_needle = &lower[1..];
-            for skill in list_skill_commands(Some(&self.active_profile)) {
+            for skill in cached_skill_commands_nonblocking(Some(&self.active_profile)) {
                 if skill_needle.is_empty() || skill.name.starts_with(skill_needle) {
                     let slash = format!("/{}", skill.name);
                     if !items.iter().any(|i| i.replacement == slash) {
@@ -713,10 +713,42 @@ fn summarize_tool_payload(content: &str) -> (ToolCardState, String) {
                 .is_some_and(|code| code != 0);
 
         if failed {
-            let reason = error_text
-                .map(|e| truncate_preview(e, 140))
-                .or_else(|| (!status.is_empty()).then(|| status.replace('_', " ")))
-                .unwrap_or_else(|| truncate_preview(content, 120));
+            fn pick_line(s: &str) -> &str {
+                if s.contains("Traceback (most recent call last):") {
+                    s.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or(s)
+                } else {
+                    s.lines().find(|l| !l.trim().is_empty()).unwrap_or(s)
+                }
+            }
+            let code = obj.get("exit_code").and_then(Value::as_i64);
+            let headline = error_text
+                .map(pick_line)
+                .or_else(|| {
+                    obj.get("traceback")
+                        .and_then(Value::as_str)
+                        .and_then(|tb| tb.lines().rev().find(|l| !l.trim().is_empty()))
+                })
+                .or_else(|| {
+                    obj.get("stderr")
+                        .or_else(|| obj.get("output"))
+                        .or_else(|| obj.get("stdout"))
+                        .and_then(Value::as_str)
+                        .map(pick_line)
+                });
+            let reason = if let Some(h) = headline.filter(|s| !s.trim().is_empty()) {
+                let clipped = truncate_preview(h, 160);
+                if let Some(c) = code {
+                    format!("exit {c} · {clipped}")
+                } else {
+                    clipped
+                }
+            } else if !status.is_empty() {
+                status.replace('_', " ")
+            } else if let Some(c) = code {
+                format!("exit {c}")
+            } else {
+                truncate_preview(content, 120)
+            };
             return (ToolCardState::Failed, reason);
         }
 
@@ -1036,6 +1068,7 @@ mod tests {
         st.insert_completion(&file_item);
         assert_eq!(st.composer_input.as_str(), "Review @file:src/lib.rs ");
 
+        let _ = hermes_runtime::context_refs::list_skill_commands(Some(&st.active_profile));
         st.composer_input.clear();
         st.composer_input.insert_str("/au");
         let (_, slash_items) = st.compute_completions(&work).expect("slash completions");

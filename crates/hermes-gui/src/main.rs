@@ -18,15 +18,15 @@ use gpui::WindowControlArea;
 use gpui::{
     div, prelude::*, px, rgb, size, App, Application, Bounds, ClipboardItem, Context,
     ExternalPaths, FocusHandle, HighlightStyle, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, PathPromptOptions, Pixels, Point, Rgba, SharedString, StyledText, TextLayout,
-    TitlebarOptions, Window, WindowBounds, WindowOptions,
+    MouseMoveEvent, PathPromptOptions, Pixels, Point, Rgba, ScrollHandle, ScrollWheelEvent,
+    SharedString, StyledText, TextLayout, TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 use hermes_runtime::config::profile_home;
 use hermes_runtime::local_owner::ApprovalScope;
 use hermes_runtime::turn::{ApprovalAction, ApprovalDecision};
 
 use crate::editor::TextBuffer;
-use crate::markdown::{parse_blocks, MdBlock};
+use crate::markdown::{parse_blocks, MdBlock, TableAlign};
 use crate::owner_client::{BackendUpdate, OwnerClient, ScopedUpdate};
 use crate::setup_state::{SetupDraft, SetupField, GUI_PROVIDER_PRESETS, GUI_WEB_BACKENDS};
 use crate::state::{FeedRow, GuiState, PendingClarify, ToolCardState};
@@ -53,6 +53,38 @@ struct InputLayoutSnapshot {
     masked: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct FeedTextKey {
+    row_idx: usize,
+    block_idx: usize,
+    sub_idx: usize,
+}
+
+#[derive(Clone)]
+struct FeedLayoutSnapshot {
+    text: String,
+    layout: TextLayout,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FeedTextSelection {
+    key: FeedTextKey,
+    anchor: usize,
+    focus: usize,
+    dragging: bool,
+}
+
+impl FeedTextSelection {
+    fn range(&self) -> Option<std::ops::Range<usize>> {
+        let (start, end) = if self.anchor <= self.focus {
+            (self.anchor, self.focus)
+        } else {
+            (self.focus, self.anchor)
+        };
+        (start < end).then_some(start..end)
+    }
+}
+
 struct HermesAppView {
     state: GuiState,
     setup: SetupDraft,
@@ -64,6 +96,10 @@ struct HermesAppView {
     input_target: InputTarget,
     input_layouts: HashMap<InputTarget, InputLayoutSnapshot>,
     dragging_input: Option<InputTarget>,
+    feed_layouts: HashMap<FeedTextKey, FeedLayoutSnapshot>,
+    feed_selection: Option<FeedTextSelection>,
+    feed_scroll: ScrollHandle,
+    feed_follow_bottom: bool,
 }
 
 impl HermesAppView {
@@ -72,6 +108,7 @@ impl HermesAppView {
             .ok()
             .flatten()
             .unwrap_or_else(|| PathBuf::from(".hsr"));
+        hermes_runtime::context_refs::prewarm_skill_commands(Some(&home));
         let (mut client, rx) = OwnerClient::new().expect("tokio runtime");
         client.connect_and_sync(home.clone());
         let focus_handle = cx.focus_handle();
@@ -116,6 +153,10 @@ impl HermesAppView {
             input_target: initial_target,
             input_layouts: HashMap::new(),
             dragging_input: None,
+            feed_layouts: HashMap::new(),
+            feed_selection: None,
+            feed_scroll: ScrollHandle::new(),
+            feed_follow_bottom: true,
         }
     }
 
@@ -291,6 +332,9 @@ impl HermesAppView {
 
     fn load_session(&mut self, id: String) {
         self.state.select_session(id.clone());
+        self.feed_selection = None;
+        self.feed_follow_bottom = true;
+        self.feed_scroll.scroll_to_bottom();
         self.input_target = InputTarget::Composer;
         self.client
             .load_session(self.state.active_profile.clone(), id);
@@ -299,6 +343,9 @@ impl HermesAppView {
     fn new_chat(&mut self) {
         self.client.change_view();
         self.state.start_new_chat();
+        self.feed_selection = None;
+        self.feed_follow_bottom = true;
+        self.feed_scroll.scroll_to_bottom();
         self.input_target = InputTarget::Composer;
     }
 
@@ -353,6 +400,7 @@ impl HermesAppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.feed_selection = None;
         self.input_target = target;
         window.focus(&self.focus_handle);
         let text_owned = self
@@ -379,27 +427,127 @@ impl HermesAppView {
         cx.notify();
     }
 
+    fn hit_test_feed(&self, key: FeedTextKey, position: Point<Pixels>) -> Option<(usize, usize)> {
+        let snap = self.feed_layouts.get(&key)?;
+        let raw = match snap.layout.index_for_position(position) {
+            Ok(i) | Err(i) => i,
+        };
+        let mut idx = raw.min(snap.text.len());
+        while idx > 0 && !snap.text.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        Some((idx, snap.text.len()))
+    }
+
+    fn handle_feed_mouse_down(
+        &mut self,
+        key: FeedTextKey,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dragging_input = None;
+        if let Some(buf) = self.active_buffer_mut() {
+            buf.clear_selection();
+        }
+        window.focus(&self.focus_handle);
+        let Some((idx, len)) = self.hit_test_feed(key, event.position) else {
+            return;
+        };
+        match event.click_count {
+            0 | 1 => {
+                if event.modifiers.shift {
+                    if let Some(prev) = self.feed_selection.filter(|s| s.key == key) {
+                        self.feed_selection = Some(FeedTextSelection {
+                            key,
+                            anchor: prev.anchor,
+                            focus: idx,
+                            dragging: true,
+                        });
+                        cx.notify();
+                        return;
+                    }
+                }
+                self.feed_selection = Some(FeedTextSelection {
+                    key,
+                    anchor: idx,
+                    focus: idx,
+                    dragging: true,
+                });
+            }
+            2 => {
+                if let Some(snap) = self.feed_layouts.get(&key) {
+                    let (start, end) = word_bounds_at(&snap.text, idx);
+                    self.feed_selection = Some(FeedTextSelection {
+                        key,
+                        anchor: start,
+                        focus: end,
+                        dragging: false,
+                    });
+                }
+            }
+            _ => {
+                self.feed_selection = Some(FeedTextSelection {
+                    key,
+                    anchor: 0,
+                    focus: len,
+                    dragging: false,
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    fn selected_feed_text(&self) -> Option<String> {
+        let sel = self.feed_selection?;
+        let range = sel.range()?;
+        let snap = self.feed_layouts.get(&sel.key)?;
+        snap.text.get(range).map(str::to_owned)
+    }
+
     fn handle_input_mouse_move(
         &mut self,
         event: &MouseMoveEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(target) = self.dragging_input else {
-            return;
-        };
-        if event.pressed_button != Some(MouseButton::Left) {
-            self.dragging_input = None;
+        if let Some(target) = self.dragging_input {
+            if event.pressed_button != Some(MouseButton::Left) {
+                self.dragging_input = None;
+                return;
+            }
+            let text_owned = self
+                .buffer_mut(target)
+                .map(|b| b.as_str().to_owned())
+                .unwrap_or_default();
+            let idx = self.hit_test_input(target, event.position, &text_owned);
+            if let Some(buf) = self.buffer_mut(target) {
+                buf.set_cursor(idx, true);
+                cx.notify();
+            }
             return;
         }
-        let text_owned = self
-            .buffer_mut(target)
-            .map(|b| b.as_str().to_owned())
-            .unwrap_or_default();
-        let idx = self.hit_test_input(target, event.position, &text_owned);
-        if let Some(buf) = self.buffer_mut(target) {
-            buf.set_cursor(idx, true);
-            cx.notify();
+        if let Some(mut sel) = self.feed_selection {
+            if !sel.dragging {
+                return;
+            }
+            if event.pressed_button != Some(MouseButton::Left) {
+                sel.dragging = false;
+                self.feed_selection = if sel.anchor == sel.focus {
+                    None
+                } else {
+                    Some(sel)
+                };
+                cx.notify();
+                return;
+            }
+            if let Some((idx, _)) = self.hit_test_feed(sel.key, event.position) {
+                if sel.focus != idx {
+                    sel.focus = idx;
+                    self.feed_selection = Some(sel);
+                    cx.notify();
+                }
+            }
         }
     }
 
@@ -809,6 +957,8 @@ impl HermesAppView {
         let final_query = format_prompt_with_attachments(&base_query, &attachments);
 
         self.state.feed.push(FeedRow::User(display_user));
+        self.feed_follow_bottom = true;
+        self.feed_scroll.scroll_to_bottom();
         self.state.streaming = true;
         self.state.status_message = "Starting turn...".into();
         self.client.start_turn(
@@ -921,6 +1071,12 @@ impl HermesAppView {
                 cx.write_to_clipboard(ClipboardItem::new_string(sel));
                 return;
             }
+            if let Some(sel) = self.selected_feed_text() {
+                cx.write_to_clipboard(ClipboardItem::new_string(sel));
+                self.state.status_message = "Copied selection to clipboard".into();
+                cx.notify();
+                return;
+            }
             if self.state.streaming {
                 if let Some(tid) = self.state.active_turn_id.clone() {
                     self.client
@@ -993,6 +1149,11 @@ impl HermesAppView {
                     _ => {}
                 }
             }
+        }
+
+        if key == "escape" && self.feed_selection.take().is_some() {
+            cx.notify();
+            return;
         }
 
         if key == "escape" && self.state.confirm_delete_session_id.take().is_some() {
@@ -1352,7 +1513,94 @@ fn render_masked_input(
     el
 }
 
-fn render_markdown_blocks(text: &str, cx: &mut Context<HermesAppView>) -> Vec<gpui::AnyElement> {
+fn word_bounds_at(text: &str, idx: usize) -> (usize, usize) {
+    let mut pos = idx.min(text.len());
+    while pos > 0 && !text.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut start = pos;
+    while start > 0 {
+        let prev = text[..start]
+            .char_indices()
+            .next_back()
+            .map_or(0, |(i, _)| i);
+        let ch = text[prev..start].chars().next().unwrap_or(' ');
+        if is_word(ch) {
+            start = prev;
+        } else {
+            break;
+        }
+    }
+    let mut end = pos;
+    while end < text.len() {
+        let ch = text[end..].chars().next().unwrap_or(' ');
+        if is_word(ch) {
+            end += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if start == end && end < text.len() {
+        end += text[end..].chars().next().map_or(0, char::len_utf8);
+    }
+    (start, end)
+}
+
+fn render_selectable_feed_text(
+    feed_layouts: &mut HashMap<FeedTextKey, FeedLayoutSnapshot>,
+    active_selection: Option<FeedTextSelection>,
+    key: FeedTextKey,
+    text: String,
+    cx: &mut Context<HermesAppView>,
+) -> gpui::AnyElement {
+    let highlight = active_selection
+        .filter(|sel| sel.key == key)
+        .and_then(|sel| sel.range())
+        .filter(|r| {
+            r.end <= text.len() && text.is_char_boundary(r.start) && text.is_char_boundary(r.end)
+        });
+    let styled = if let Some(range) = highlight {
+        StyledText::new(text.clone()).with_highlights([(
+            range,
+            HighlightStyle {
+                color: Some(rgb(0xffffff).into()),
+                background_color: Some(rgb(0x264f78).into()),
+                ..Default::default()
+            },
+        )])
+    } else {
+        StyledText::new(text.clone())
+    };
+    feed_layouts.insert(
+        key,
+        FeedLayoutSnapshot {
+            text,
+            layout: styled.layout().clone(),
+        },
+    );
+    div()
+        .w_full()
+        .min_w(px(0.0))
+        .cursor_text()
+        .child(styled)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |view, ev, window, cx| {
+                cx.stop_propagation();
+                view.handle_feed_mouse_down(key, ev, window, cx);
+            }),
+        )
+        .into_any_element()
+}
+
+fn render_markdown_blocks(
+    row_idx: usize,
+    text: &str,
+    feed_layouts: &mut HashMap<FeedTextKey, FeedLayoutSnapshot>,
+    active_selection: Option<FeedTextSelection>,
+    cx: &mut Context<HermesAppView>,
+) -> Vec<gpui::AnyElement> {
     let text_main = rgb(0xe6edf6);
     let text_dim = rgb(0x8e9bb0);
     let accent = rgb(0x4ea1ff);
@@ -1361,55 +1609,274 @@ fn render_markdown_blocks(text: &str, cx: &mut Context<HermesAppView>) -> Vec<gp
 
     parse_blocks(text)
         .into_iter()
-        .map(|block| match block {
+        .enumerate()
+        .map(|(block_idx, block)| match block {
             MdBlock::Heading { level, text } => {
-                let el = div()
-                    .w_full()
-                    .min_w(px(0.0))
-                    .text_color(accent)
-                    .child(SharedString::from(text));
+                let key = FeedTextKey {
+                    row_idx,
+                    block_idx,
+                    sub_idx: 0,
+                };
+                let el = div().w_full().min_w(px(0.0)).text_color(accent).child(
+                    render_selectable_feed_text(feed_layouts, active_selection, key, text, cx),
+                );
                 if level <= 2 {
                     el.text_base().into_any_element()
                 } else {
                     el.text_sm().into_any_element()
                 }
             }
-            MdBlock::Paragraph { text } => div()
-                .w_full()
-                .min_w(px(0.0))
-                .text_sm()
-                .text_color(text_main)
-                .child(SharedString::from(text))
-                .into_any_element(),
-            MdBlock::Bullet { text } => div()
-                .w_full()
-                .min_w(px(0.0))
-                .flex()
-                .flex_row()
-                .gap_2()
-                .text_sm()
-                .text_color(text_main)
-                .child(div().flex_shrink_0().text_color(accent).child("•"))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .child(SharedString::from(text)),
-                )
-                .into_any_element(),
-            MdBlock::Quote { text } => div()
-                .w_full()
-                .min_w(px(0.0))
-                .pl_3()
-                .border_l_2()
-                .border_color(accent)
-                .text_sm()
-                .text_color(text_dim)
-                .child(SharedString::from(text))
-                .into_any_element(),
+            MdBlock::Paragraph { text } => {
+                let key = FeedTextKey {
+                    row_idx,
+                    block_idx,
+                    sub_idx: 0,
+                };
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .text_sm()
+                    .text_color(text_main)
+                    .child(render_selectable_feed_text(
+                        feed_layouts,
+                        active_selection,
+                        key,
+                        text,
+                        cx,
+                    ))
+                    .into_any_element()
+            }
+            MdBlock::Bullet { text } => {
+                let key = FeedTextKey {
+                    row_idx,
+                    block_idx,
+                    sub_idx: 0,
+                };
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .text_sm()
+                    .text_color(text_main)
+                    .child(div().flex_shrink_0().text_color(accent).child("•"))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .child(render_selectable_feed_text(
+                                feed_layouts,
+                                active_selection,
+                                key,
+                                text,
+                                cx,
+                            )),
+                    )
+                    .into_any_element()
+            }
+            MdBlock::Quote { text } => {
+                let key = FeedTextKey {
+                    row_idx,
+                    block_idx,
+                    sub_idx: 0,
+                };
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .pl_3()
+                    .border_l_2()
+                    .border_color(accent)
+                    .text_sm()
+                    .text_color(text_dim)
+                    .child(render_selectable_feed_text(
+                        feed_layouts,
+                        active_selection,
+                        key,
+                        text,
+                        cx,
+                    ))
+                    .into_any_element()
+            }
+            MdBlock::Table {
+                headers,
+                alignments,
+                rows,
+            } => {
+                let mut tsv_lines = Vec::with_capacity(rows.len() + 1);
+                tsv_lines.push(headers.join("\t"));
+                for r in &rows {
+                    tsv_lines.push(r.join("\t"));
+                }
+                let tsv_copy = tsv_lines.join("\n");
+                let col_count = headers.len().max(1);
+
+                let header_cells: Vec<_> = headers
+                    .into_iter()
+                    .enumerate()
+                    .map(|(col_idx, cell)| {
+                        let key = FeedTextKey {
+                            row_idx,
+                            block_idx,
+                            sub_idx: col_idx,
+                        };
+                        let align = alignments.get(col_idx).copied().unwrap_or(TableAlign::Left);
+                        let mut cell_div = div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .px_2()
+                            .py_1()
+                            .flex()
+                            .flex_row()
+                            .text_xs()
+                            .text_color(accent);
+                        cell_div = match align {
+                            TableAlign::Left => cell_div.justify_start(),
+                            TableAlign::Center => cell_div.justify_center(),
+                            TableAlign::Right => cell_div.justify_end(),
+                        };
+                        if col_idx > 0 {
+                            cell_div = cell_div.border_l_1().border_color(border);
+                        }
+                        cell_div
+                            .child(render_selectable_feed_text(
+                                feed_layouts,
+                                active_selection,
+                                key,
+                                cell,
+                                cx,
+                            ))
+                            .into_any_element()
+                    })
+                    .collect();
+
+                let body_rows: Vec<_> = rows
+                    .into_iter()
+                    .enumerate()
+                    .map(|(r_idx, row_cells)| {
+                        let row_bg = if r_idx % 2 == 0 {
+                            rgb(0x141923)
+                        } else {
+                            rgb(0x181f2c)
+                        };
+                        let cells_ui: Vec<_> = row_cells
+                            .into_iter()
+                            .enumerate()
+                            .map(|(col_idx, cell)| {
+                                let key = FeedTextKey {
+                                    row_idx,
+                                    block_idx,
+                                    sub_idx: (r_idx + 1) * col_count + col_idx,
+                                };
+                                let align =
+                                    alignments.get(col_idx).copied().unwrap_or(TableAlign::Left);
+                                let mut cell_div = div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .px_2()
+                                    .py_1()
+                                    .flex()
+                                    .flex_row()
+                                    .text_xs()
+                                    .text_color(text_main);
+                                cell_div = match align {
+                                    TableAlign::Left => cell_div.justify_start(),
+                                    TableAlign::Center => cell_div.justify_center(),
+                                    TableAlign::Right => cell_div.justify_end(),
+                                };
+                                if col_idx > 0 {
+                                    cell_div = cell_div.border_l_1().border_color(border);
+                                }
+                                cell_div
+                                    .child(render_selectable_feed_text(
+                                        feed_layouts,
+                                        active_selection,
+                                        key,
+                                        cell,
+                                        cx,
+                                    ))
+                                    .into_any_element()
+                            })
+                            .collect();
+                        div()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .bg(row_bg)
+                            .border_t_1()
+                            .border_color(border)
+                            .flex()
+                            .flex_row()
+                            .children(cells_ui)
+                            .into_any_element()
+                    })
+                    .collect();
+
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .my_1()
+                    .rounded_md()
+                    .bg(rgb(0x141923))
+                    .border_1()
+                    .border_color(border)
+                    .overflow_hidden()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .bg(rgb(0x10141c))
+                            .border_b_1()
+                            .border_color(border)
+                            .flex()
+                            .flex_row()
+                            .justify_between()
+                            .items_center()
+                            .child(div().text_xs().text_color(text_dim).child("Table"))
+                            .child(
+                                div()
+                                    .px_2()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .bg(rgb(0x1d2432))
+                                    .text_xs()
+                                    .text_color(accent)
+                                    .child("Copy TSV")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |view, _, _, cx| {
+                                            cx.stop_propagation();
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                tsv_copy.clone(),
+                                            ));
+                                            view.state.status_message =
+                                                "Copied table to clipboard".into();
+                                            cx.notify();
+                                        }),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .bg(rgb(0x1f2838))
+                            .flex()
+                            .flex_row()
+                            .children(header_cells),
+                    )
+                    .children(body_rows)
+                    .into_any_element()
+            }
             MdBlock::CodeBlock { lang, code } => {
                 let copy_text = code.clone();
                 let header_label = lang.unwrap_or_else(|| "code".into());
+                let key = FeedTextKey {
+                    row_idx,
+                    block_idx,
+                    sub_idx: 0,
+                };
                 div()
                     .w_full()
                     .min_w(px(0.0))
@@ -1448,6 +1915,7 @@ fn render_markdown_blocks(text: &str, cx: &mut Context<HermesAppView>) -> Vec<gp
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |view, _, _, cx| {
+                                            cx.stop_propagation();
                                             cx.write_to_clipboard(ClipboardItem::new_string(
                                                 copy_text.clone(),
                                             ));
@@ -1464,7 +1932,13 @@ fn render_markdown_blocks(text: &str, cx: &mut Context<HermesAppView>) -> Vec<gp
                             .py_2()
                             .text_xs()
                             .text_color(rgb(0xcbd5e1))
-                            .child(SharedString::from(code)),
+                            .child(render_selectable_feed_text(
+                                feed_layouts,
+                                active_selection,
+                                key,
+                                code,
+                                cx,
+                            )),
                     )
                     .into_any_element()
             }
@@ -1676,29 +2150,52 @@ impl Render for HermesAppView {
             })
             .collect();
 
+        self.feed_layouts.clear();
+        let active_feed_sel = self.feed_selection;
         let feed_rows = self.state.feed.clone();
         let feed_ui: Vec<_> = feed_rows
             .iter()
-            .map(|row| match row {
-                FeedRow::User(text) => div()
-                    .w_full()
-                    .flex_shrink_0()
-                    .flex()
-                    .justify_end()
-                    .child(
-                        div()
-                            .max_w(px(720.0))
-                            .px_3()
-                            .py_2()
-                            .rounded_lg()
-                            .bg(bg_user)
-                            .text_color(text_main)
-                            .text_sm()
-                            .child(SharedString::from(text.clone())),
-                    )
-                    .into_any_element(),
+            .enumerate()
+            .map(|(row_idx, row)| match row {
+                FeedRow::User(text) => {
+                    let key = FeedTextKey {
+                        row_idx,
+                        block_idx: 0,
+                        sub_idx: 0,
+                    };
+                    div()
+                        .w_full()
+                        .flex_shrink_0()
+                        .flex()
+                        .justify_end()
+                        .child(
+                            div()
+                                .max_w(px(720.0))
+                                .px_3()
+                                .py_2()
+                                .rounded_lg()
+                                .bg(bg_user)
+                                .text_color(text_main)
+                                .text_sm()
+                                .child(render_selectable_feed_text(
+                                    &mut self.feed_layouts,
+                                    active_feed_sel,
+                                    key,
+                                    text.clone(),
+                                    cx,
+                                )),
+                        )
+                        .into_any_element()
+                }
                 FeedRow::Assistant(text) => {
-                    let blocks = render_markdown_blocks(text, cx);
+                    let copy_reply = text.clone();
+                    let blocks = render_markdown_blocks(
+                        row_idx,
+                        text,
+                        &mut self.feed_layouts,
+                        active_feed_sel,
+                        cx,
+                    );
                     div()
                         .w_full()
                         .flex_shrink_0()
@@ -1718,6 +2215,41 @@ impl Render for HermesAppView {
                                 .flex()
                                 .flex_col()
                                 .gap_1()
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .flex()
+                                        .flex_row()
+                                        .justify_between()
+                                        .items_center()
+                                        .child(div().text_xs().text_color(text_dim).child("Hermes"))
+                                        .child(
+                                            div()
+                                                .px_2()
+                                                .rounded_sm()
+                                                .cursor_pointer()
+                                                .bg(rgb(0x141923))
+                                                .border_1()
+                                                .border_color(border)
+                                                .text_xs()
+                                                .text_color(accent)
+                                                .child("Copy")
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(move |view, _, _, cx| {
+                                                        cx.stop_propagation();
+                                                        cx.write_to_clipboard(
+                                                            ClipboardItem::new_string(
+                                                                copy_reply.clone(),
+                                                            ),
+                                                        );
+                                                        view.state.status_message =
+                                                            "Copied response to clipboard".into();
+                                                        cx.notify();
+                                                    }),
+                                                ),
+                                        ),
+                                )
                                 .children(blocks),
                         )
                         .into_any_element()
@@ -1754,6 +2286,8 @@ impl Render for HermesAppView {
                             .map(|l| {
                                 div()
                                     .w_full()
+                                    .min_w(px(0.0))
+                                    .overflow_hidden()
                                     .text_xs()
                                     .text_color(text_dim)
                                     .child(SharedString::from(format!("┆ {l}")))
@@ -1763,6 +2297,8 @@ impl Render for HermesAppView {
                     } else if let Some(reason) = error_reason {
                         vec![div()
                             .w_full()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
                             .text_xs()
                             .text_color(rgb(0xff9b9b))
                             .child(SharedString::from(format!("↳ {reason}")))
@@ -1772,6 +2308,7 @@ impl Render for HermesAppView {
                     };
                     div()
                         .w_full()
+                        .min_w(px(0.0))
                         .flex_shrink_0()
                         .flex()
                         .justify_start()
@@ -1779,6 +2316,8 @@ impl Render for HermesAppView {
                             div()
                                 .w_full()
                                 .max_w(px(780.0))
+                                .min_w(px(0.0))
+                                .overflow_hidden()
                                 .px_3()
                                 .py_1()
                                 .rounded_md()
@@ -1795,6 +2334,8 @@ impl Render for HermesAppView {
                                 .child(
                                     div()
                                         .w_full()
+                                        .min_w(px(0.0))
+                                        .overflow_hidden()
                                         .text_xs()
                                         .text_color(col)
                                         .child(SharedString::from(line)),
@@ -1803,23 +2344,36 @@ impl Render for HermesAppView {
                         )
                         .into_any_element()
                 }
-                FeedRow::Notice { is_error, text } => div()
-                    .w_full()
-                    .flex_shrink_0()
-                    .flex()
-                    .justify_start()
-                    .child(
-                        div()
-                            .w_full()
-                            .max_w(px(780.0))
-                            .px_3()
-                            .py_1()
-                            .rounded_md()
-                            .text_xs()
-                            .text_color(if *is_error { red } else { text_dim })
-                            .child(SharedString::from(text.clone())),
-                    )
-                    .into_any_element(),
+                FeedRow::Notice { is_error, text } => {
+                    let key = FeedTextKey {
+                        row_idx,
+                        block_idx: 0,
+                        sub_idx: 0,
+                    };
+                    div()
+                        .w_full()
+                        .flex_shrink_0()
+                        .flex()
+                        .justify_start()
+                        .child(
+                            div()
+                                .w_full()
+                                .max_w(px(780.0))
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .text_xs()
+                                .text_color(if *is_error { red } else { text_dim })
+                                .child(render_selectable_feed_text(
+                                    &mut self.feed_layouts,
+                                    active_feed_sel,
+                                    key,
+                                    text.clone(),
+                                    cx,
+                                )),
+                        )
+                        .into_any_element()
+                }
             })
             .collect();
 
@@ -1867,15 +2421,6 @@ impl Render for HermesAppView {
                         .text_sm()
                         .text_color(amber)
                         .child(SharedString::from(title)),
-                )
-                .child(
-                    div()
-                        .p_2()
-                        .rounded_md()
-                        .bg(rgb(0x14161c))
-                        .text_xs()
-                        .text_color(text_main)
-                        .child(SharedString::from(preview)),
                 )
                 .child(
                     div()
@@ -1986,6 +2531,15 @@ impl Render for HermesAppView {
                         .text_xs()
                         .text_color(text_dim)
                         .child(SharedString::from(always_hint)),
+                )
+                .child(
+                    div()
+                        .p_2()
+                        .rounded_md()
+                        .bg(rgb(0x14161c))
+                        .text_xs()
+                        .text_color(text_main)
+                        .child(SharedString::from(preview)),
                 )
         });
 
@@ -2845,6 +3399,7 @@ impl Render for HermesAppView {
                 Some(
                     div()
                         .w_full()
+                        .min_w(px(0.0))
                         .flex_shrink_0()
                         .flex()
                         .justify_start()
@@ -2852,6 +3407,8 @@ impl Render for HermesAppView {
                             div()
                                 .w_full()
                                 .max_w(px(780.0))
+                                .min_w(px(0.0))
+                                .overflow_hidden()
                                 .px_3()
                                 .py_2()
                                 .rounded_md()
@@ -2864,6 +3421,7 @@ impl Render for HermesAppView {
                                 .child(
                                     div()
                                         .w_full()
+                                        .min_w(px(0.0))
                                         .text_xs()
                                         .text_color(accent)
                                         .child("Thinking…"),
@@ -2871,6 +3429,8 @@ impl Render for HermesAppView {
                                 .children(preview.into_iter().map(|line| {
                                     div()
                                         .w_full()
+                                        .min_w(px(0.0))
+                                        .overflow_hidden()
                                         .text_xs()
                                         .text_color(text_dim)
                                         .child(SharedString::from(format!("┆ {line}")))
@@ -2887,6 +3447,9 @@ impl Render for HermesAppView {
         };
 
         // Scrollable feed or Setup screen
+        if self.feed_follow_bottom {
+            self.feed_scroll.scroll_to_bottom();
+        }
         let main_body = if let Some(setup_el) = setup_view {
             setup_el.into_any_element()
         } else {
@@ -2896,6 +3459,19 @@ impl Render for HermesAppView {
                 .flex_1()
                 .min_h(px(0.0))
                 .overflow_y_scroll()
+                .track_scroll(&self.feed_scroll)
+                .on_scroll_wheel(cx.listener(|view, ev: &ScrollWheelEvent, _, _| {
+                    let dy = ev.delta.pixel_delta(px(20.0)).y;
+                    if dy > px(0.0) {
+                        view.feed_follow_bottom = false;
+                    } else if dy < px(0.0) {
+                        let max_y = view.feed_scroll.max_offset().height;
+                        let cur_y = view.feed_scroll.offset().y;
+                        if max_y <= px(0.0) || cur_y + dy <= -max_y + px(36.0) {
+                            view.feed_follow_bottom = true;
+                        }
+                    }
+                }))
                 .p_4()
                 .flex()
                 .flex_col()
@@ -3475,8 +4051,17 @@ impl Render for HermesAppView {
             .on_mouse_move(cx.listener(Self::handle_input_mouse_move))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|view, _, _, _| {
+                cx.listener(|view, _, _, cx| {
                     view.dragging_input = None;
+                    if let Some(mut sel) = view.feed_selection {
+                        sel.dragging = false;
+                        view.feed_selection = if sel.anchor == sel.focus {
+                            None
+                        } else {
+                            Some(sel)
+                        };
+                        cx.notify();
+                    }
                 }),
             )
             .on_drop(cx.listener(|view, paths: &ExternalPaths, _, cx| {

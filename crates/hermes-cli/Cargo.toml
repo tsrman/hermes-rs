@@ -1,7 +1,8 @@
 [package]
 name = "hermes-cli"
 version = "0.7.9"
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
 
 [[bin]]
 name = "hsr"

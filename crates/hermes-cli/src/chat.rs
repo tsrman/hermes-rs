@@ -1138,7 +1138,12 @@ where
         tokio::pin!(turn);
         loop {
             tokio::select! {
-                result = &mut turn => break result.map_err(|error| format!("turn failed: {error:?}"))?,
+                result = &mut turn => break result.map_err(|error| match error {
+                    hermes_runtime::turn::TurnError::InvalidIterationSummary => {
+                        "Iteration limit reached: the model did not return a text summary (it tried to call another tool or returned empty output). Send a follow-up message or raise agent.max_turns.".into()
+                    }
+                    other => format!("turn failed: {other:?}"),
+                })?,
                 _ = refresh.tick(), if request.resume.is_some() => {
                     if let Some(writer) = &writer {
                         block_in_place(|| writer.refresh()).map_err(|error| error.to_string())?;

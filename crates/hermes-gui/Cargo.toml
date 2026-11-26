@@ -1,9 +1,8 @@
-[workspace]
-
 [package]
 name = "hermes-gui"
 version = "0.4.7"
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
 
 [[bin]]
 name = "hsr-gui"

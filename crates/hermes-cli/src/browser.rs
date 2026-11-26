@@ -154,21 +154,38 @@ pub async fn handle_slash_browser(
     state: &mut ReplState,
     argument: &str,
 ) -> (bool, String) {
+    let configured = state.request.browser_cdp_url().map(str::to_owned);
+    let (is_err, msg, cdp_update) =
+        execute_slash_browser(home, &state.scope, configured.as_deref(), argument).await;
+    if let Some(new_url) = cdp_update {
+        state.request.set_browser_cdp_url(new_url);
+    }
+    (is_err, msg)
+}
+
+/// Run `/browser ...` without holding `&mut ReplState` across `.await` points.
+/// Returns `(is_error, message, optional_cdp_url_update)`.
+pub async fn execute_slash_browser(
+    home: Option<&Path>,
+    scope: &str,
+    configured_cdp_url: Option<&str>,
+    argument: &str,
+) -> (bool, String, Option<Option<String>>) {
     let mut tokens = argument.split_whitespace();
     let sub = tokens.next().unwrap_or("status").to_ascii_lowercase();
     match sub.as_str() {
         "status" => {
-            let st = browser_status(&state.scope, state.request.browser_cdp_url()).await;
-            (false, format_status_summary(&st))
+            let st = browser_status(scope, configured_cdp_url).await;
+            (false, format_status_summary(&st), None)
         }
         "disconnect" => {
-            let had = disconnect_browser(&state.scope).await;
-            state.request.set_browser_cdp_url(None);
-            if had {
-                (false, "Disconnected live browser session and disabled dynamic CDP tools for subsequent turns.".into())
+            let had = disconnect_browser(scope).await;
+            let msg = if had {
+                "Disconnected live browser session and disabled dynamic CDP tools for subsequent turns.".into()
             } else {
-                (false, "No live browser session was attached.".into())
-            }
+                "No live browser session was attached.".into()
+            };
+            (false, msg, Some(None))
         }
         "connect" => {
             let mut opts = BrowserConnectOptions::default();
@@ -191,17 +208,18 @@ pub async fn handle_slash_browser(
                                     i += 1;
                                 }
                                 Err(_) => {
-                                    return (true, format!("Invalid port value '{val}'."));
+                                    return (true, format!("Invalid port value '{val}'."), None);
                                 }
                             }
                         } else {
-                            return (true, "Missing port number after `--port`.".into());
+                            return (true, "Missing port number after `--port`.".into(), None);
                         }
                     }
                     other if other.starts_with("--") => {
                         return (
                             true,
                             format!("Unknown /browser connect flag '{other}'. Expected: --launch, --headless, --port <N>, --save."),
+                            None,
                         );
                     }
                     other => {
@@ -212,33 +230,34 @@ pub async fn handle_slash_browser(
                 }
                 i += 1;
             }
-            let configured = state.request.browser_cdp_url().map(str::to_owned);
-            match connect_browser(&state.scope, home, configured.as_deref(), opts).await {
+            match connect_browser(scope, home, configured_cdp_url, opts).await {
                 Ok(info) => {
-                    state.request.set_browser_cdp_url(Some(info.ws_url.clone()));
+                    let ws_url = info.ws_url.clone();
                     let mut saved = false;
                     if save {
                         if let Some(h) = home {
-                            if let Err(err) = set_config_value(h, "browser.cdp_url", &info.ws_url) {
+                            if let Err(err) = set_config_value(h, "browser.cdp_url", &ws_url) {
                                 return (
                                     true,
                                     format!(
                                         "{}\nWarning: failed saving browser.cdp_url: {err}",
                                         format_connect_summary(&info, false)
                                     ),
+                                    Some(Some(ws_url)),
                                 );
                             }
                             saved = true;
                         }
                     }
-                    (false, format_connect_summary(&info, saved))
+                    (false, format_connect_summary(&info, saved), Some(Some(ws_url)))
                 }
-                Err(err) => (true, format!("Browser connect failed: {err}")),
+                Err(err) => (true, format!("Browser connect failed: {err}"), None),
             }
         }
         other => (
             true,
             format!("Unknown /browser subcommand '{other}'. Usage: /browser [connect [url|port|--launch|--headless|--save] | status | disconnect]"),
+            None,
         ),
     }
 }

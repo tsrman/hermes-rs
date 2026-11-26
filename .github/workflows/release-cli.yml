@@ -39,8 +39,8 @@ jobs:
       - name: Check and test the workspace
         run: |
           cargo fmt --all -- --check
-          cargo clippy --workspace --all-targets --locked -- -D warnings
-          cargo test --workspace --locked
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo test --locked
           cargo build --locked -p hermes-cli
           python3 -m unittest discover -s compat -p 'test_*.py'
 
@@ -123,12 +123,20 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: cli-*
           path: ${{ runner.temp }}/dist/
           merge-multiple: true
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ${{ runner.temp }}/dist/hsr-*.tar.gz
+            ${{ runner.temp }}/dist/hsr-*.zip
       - name: Publish verified archives and confirm the download
         env:
           GH_TOKEN: ${{ github.token }}

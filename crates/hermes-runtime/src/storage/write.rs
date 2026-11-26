@@ -303,7 +303,7 @@ impl<'a> SessionWriter<'a> {
             insert_messages(&transaction, &id, &turn.messages, self.started_at, ended_at)?;
         transaction.execute(
             "UPDATE sessions SET message_count = ?2, tool_call_count = ?3 WHERE id = ?1",
-            params![id, turn.messages.len(), tool_call_count],
+            params![id, turn.messages.len() as i64, tool_call_count as i64],
         )?;
         transaction.commit()?;
         Ok(id)

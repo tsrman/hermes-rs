@@ -2,11 +2,12 @@
 //! `@git:N`, `@url:`), workspace `@` completion, `/<skill-name>` skill slash-command lookup,
 //! and `!<command>` local shell escape.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::redact::{is_secret_file_arg, redact_file_read};
 use crate::url_safety;
@@ -786,11 +787,22 @@ fn format_human_size(bytes: u64) -> String {
     }
 }
 
-/// Discover installed skills under `<profile>/skills/` as `/<skill-name>` slash commands.
-pub fn list_skill_commands(home: Option<&Path>) -> Vec<SkillCommandEntry> {
-    let Some(home) = home else {
-        return Vec::new();
-    };
+const SKILL_COMMANDS_CACHE_TTL: Duration = Duration::from_secs(30);
+
+struct CachedSkillCommands {
+    entries: Vec<SkillCommandEntry>,
+    loaded_at: Option<Instant>,
+    refreshing: bool,
+}
+
+static SKILL_COMMANDS_CACHE: LazyLock<Mutex<HashMap<PathBuf, CachedSkillCommands>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn cache_key(home: &Path) -> PathBuf {
+    home.canonicalize().unwrap_or_else(|_| home.to_path_buf())
+}
+
+fn scan_skill_commands(home: &Path) -> Vec<SkillCommandEntry> {
     let skills_root = home.join("skills");
     if !skills_root.is_dir() {
         return Vec::new();
@@ -824,6 +836,126 @@ pub fn list_skill_commands(home: Option<&Path>) -> Vec<SkillCommandEntry> {
         });
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
+    entries
+}
+
+fn spawn_skill_commands_refresh(key: PathBuf, home: PathBuf) {
+    let _ = std::thread::Builder::new()
+        .name("hsr-skill-scan".into())
+        .spawn(move || {
+            let scanned = scan_skill_commands(&home);
+            let mut cache = SKILL_COMMANDS_CACHE
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            cache.insert(
+                key,
+                CachedSkillCommands {
+                    entries: scanned,
+                    loaded_at: Some(Instant::now()),
+                    refreshing: false,
+                },
+            );
+        });
+}
+
+/// Warm the slash-command skill cache on a background thread so pressing `/` never blocks input.
+pub fn prewarm_skill_commands(home: Option<&Path>) {
+    let Some(home) = home else {
+        return;
+    };
+    let key = cache_key(home);
+    let mut cache = SKILL_COMMANDS_CACHE
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let should_spawn = match cache.get_mut(&key) {
+        Some(slot) => {
+            let fresh = slot
+                .loaded_at
+                .is_some_and(|t| t.elapsed() < SKILL_COMMANDS_CACHE_TTL);
+            if fresh || slot.refreshing {
+                false
+            } else {
+                slot.refreshing = true;
+                true
+            }
+        }
+        None => {
+            cache.insert(
+                key.clone(),
+                CachedSkillCommands {
+                    entries: Vec::new(),
+                    loaded_at: None,
+                    refreshing: true,
+                },
+            );
+            true
+        }
+    };
+    drop(cache);
+    if should_spawn {
+        spawn_skill_commands_refresh(key, home.to_path_buf());
+    }
+}
+
+/// Return cached installed skill commands immediately without performing disk I/O on the caller's
+/// thread. If the cache is cold or stale, triggers a background refresh for subsequent completions.
+pub fn cached_skill_commands_nonblocking(home: Option<&Path>) -> Vec<SkillCommandEntry> {
+    let Some(home) = home else {
+        return Vec::new();
+    };
+    let key = cache_key(home);
+    let mut cache = SKILL_COMMANDS_CACHE
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let (entries, should_spawn) = match cache.get_mut(&key) {
+        Some(slot) => {
+            let fresh = slot
+                .loaded_at
+                .is_some_and(|t| t.elapsed() < SKILL_COMMANDS_CACHE_TTL);
+            let spawn = !fresh && !slot.refreshing;
+            if spawn {
+                slot.refreshing = true;
+            }
+            (slot.entries.clone(), spawn)
+        }
+        None => {
+            cache.insert(
+                key.clone(),
+                CachedSkillCommands {
+                    entries: Vec::new(),
+                    loaded_at: None,
+                    refreshing: true,
+                },
+            );
+            (Vec::new(), true)
+        }
+    };
+    drop(cache);
+    if should_spawn {
+        spawn_skill_commands_refresh(key, home.to_path_buf());
+    }
+    entries
+}
+
+/// Discover installed skills under `<profile>/skills/` as `/<skill-name>` slash commands
+/// synchronously and refresh the in-memory completion cache.
+pub fn list_skill_commands(home: Option<&Path>) -> Vec<SkillCommandEntry> {
+    let Some(home) = home else {
+        return Vec::new();
+    };
+    let entries = scan_skill_commands(home);
+    let key = cache_key(home);
+    let mut cache = SKILL_COMMANDS_CACHE
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    cache.insert(
+        key,
+        CachedSkillCommands {
+            entries: entries.clone(),
+            loaded_at: Some(Instant::now()),
+            refreshing: false,
+        },
+    );
     entries
 }
 
