@@ -3035,8 +3035,14 @@ fn render_palette(
     palette: &[PaletteEntry],
     selected: usize,
 ) {
-    let visible = palette.len().min(8) as u16;
-    let height = visible + 2;
+    if palette.is_empty() {
+        return;
+    }
+    let visible_len = palette.len().min(8);
+    let sel = selected.min(palette.len() - 1);
+    let start = sel.saturating_add(1).saturating_sub(visible_len);
+    let end = (start + visible_len).min(palette.len());
+    let height = visible_len as u16 + 2;
     let width = feed_area.width.min(68);
     let rect = Rect {
         x: feed_area.x + 1,
@@ -3045,12 +3051,11 @@ fn render_palette(
         height,
     };
     frame.render_widget(Clear, rect);
-    let lines: Vec<Line<'static>> = palette
+    let lines: Vec<Line<'static>> = palette[start..end]
         .iter()
-        .take(visible as usize)
         .enumerate()
-        .map(|(i, cmd)| {
-            let is_sel = i == selected.min(palette.len() - 1);
+        .map(|(offset, cmd)| {
+            let is_sel = start + offset == sel;
             let style = if is_sel {
                 Style::default()
                     .fg(Color::Black)
@@ -3065,14 +3070,16 @@ fn render_palette(
             ))
         })
         .collect();
+    let header_title = if palette.len() > visible_len {
+        format!("{} ({}/{}) ", title.trim_end(), sel + 1, palette.len())
+    } else {
+        title.to_owned()
+    };
     let popup = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
-            .title(Span::styled(
-                title.to_owned(),
-                Style::default().fg(Color::Cyan),
-            )),
+            .title(Span::styled(header_title, Style::default().fg(Color::Cyan))),
     );
     frame.render_widget(popup, rect);
 }
@@ -4463,6 +4470,37 @@ mod tests {
         assert!(
             options_pos < script_pos,
             "approval options must appear above script text:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn palette_scrolls_viewport_to_keep_selected_item_visible() {
+        let palette: Vec<PaletteEntry> = (1..=15)
+            .map(|i| PaletteEntry {
+                replacement: format!("/cmd{i:02}"),
+                usage: format!("/cmd{i:02}"),
+                description: format!("Command {i}"),
+                at_start: None,
+            })
+            .collect();
+        let backend = TestBackend::new(80, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let area = Rect::new(0, 0, 80, 14);
+        terminal
+            .draw(|f| render_palette(f, area, " Commands ", &palette, 10))
+            .unwrap();
+        let screen = buffer_text(&terminal);
+        assert!(
+            screen.contains("/cmd11"),
+            "selected item must be visible:\n{screen}"
+        );
+        assert!(
+            screen.contains("(11/15)"),
+            "counter must reflect selection:\n{screen}"
+        );
+        assert!(
+            !screen.contains("/cmd01"),
+            "top items should scroll out:\n{screen}"
         );
     }
 }

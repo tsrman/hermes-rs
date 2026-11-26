@@ -2739,14 +2739,28 @@ impl Render for HermesAppView {
             self.state
                 .compute_completions(&self.workspace_root)
                 .map(|(title, items)| {
-                    let selected_idx = self.state.palette_index.min(items.len().saturating_sub(1));
+                    let total = items.len();
+                    let visible_len = total.min(10);
+                    let selected_idx = self.state.palette_index.min(total.saturating_sub(1));
+                    let start = selected_idx.saturating_add(1).saturating_sub(visible_len);
+                    let end = (start + visible_len).min(total);
+                    let header_title = if total > visible_len {
+                        format!("{title} ({}/{total})", selected_idx + 1)
+                    } else {
+                        title.to_owned()
+                    };
                     let rows: Vec<_> = items
                         .into_iter()
                         .enumerate()
+                        .skip(start)
+                        .take(end.saturating_sub(start))
                         .map(|(idx, item)| {
                             let is_sel = idx == selected_idx;
                             let item_clone = item.clone();
                             div()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .overflow_hidden()
                                 .px_2()
                                 .py_1()
                                 .rounded_sm()
@@ -2758,12 +2772,16 @@ impl Render for HermesAppView {
                                 .gap_3()
                                 .child(
                                     div()
+                                        .flex_shrink_0()
                                         .text_xs()
                                         .text_color(if is_sel { accent } else { text_main })
                                         .child(SharedString::from(item.display)),
                                 )
                                 .child(
                                     div()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .overflow_hidden()
                                         .text_xs()
                                         .text_color(text_dim)
                                         .child(SharedString::from(item.detail)),
@@ -2795,7 +2813,7 @@ impl Render for HermesAppView {
                             div()
                                 .text_xs()
                                 .text_color(accent)
-                                .child(SharedString::from(title)),
+                                .child(SharedString::from(header_title)),
                         )
                         .children(rows)
                 })
