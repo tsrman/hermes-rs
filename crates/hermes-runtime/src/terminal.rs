@@ -1,5 +1,6 @@
 //! Approved foreground commands on the local Linux and macOS CLI.
 
+use crate::paths::PathExt;
 use std::future::Future;
 
 use serde_json::{json, Value};
@@ -596,7 +597,7 @@ mod shell {
             .and_then(|value| value.as_str().map(PathBuf::from));
         if let Some(ended) = ended {
             let inside = ended
-                .canonicalize()
+                .canonical()
                 .ok()
                 .filter(|path| path.starts_with(&root))
                 .filter(|path| {
@@ -1300,7 +1301,7 @@ mod tests {
     async fn commands_see_the_toolchain_environment_and_remember_the_directory() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(directory.path().join("sub/deeper")).unwrap();
-        let root = directory.path().canonicalize().unwrap();
+        let root = directory.path().canonical().unwrap();
         let env = run(
             directory.path(),
             json!({"command": "echo $HOME; echo $OPENAI_API_KEY; command -v sh"}),
@@ -1479,7 +1480,7 @@ mod tests {
         assert!(!corpus.scenarios.is_empty());
         for scenario in corpus.scenarios {
             let directory = tempfile::tempdir().unwrap();
-            let root = directory.path().canonicalize().unwrap();
+            let root = directory.path().canonical().unwrap();
             let root_str = root.display().to_string();
             let session = format!("persistent-corpus-{}-{}", scenario.name, root_str);
             let settings = TerminalSettings {

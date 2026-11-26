@@ -1,5 +1,6 @@
 //! Profile-scoped and project-scoped parts of the saved CLI system prompt.
 
+use crate::paths::PathExt;
 use std::collections::{BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io::Read;
@@ -243,7 +244,7 @@ pub(crate) fn load_cli_context(
     model: &str,
     provider: &str,
 ) -> String {
-    let canonical = profile.and_then(|path| path.canonicalize().ok());
+    let canonical = profile.and_then(|path| path.canonical().ok());
     let cap = settings.context_file_max_chars;
     let soul = canonical.as_deref().and_then(|profile| {
         let path = profile.join("SOUL.md");
@@ -333,7 +334,7 @@ pub(crate) fn read_scoped_text(
     root: &Path,
     allow_markdown_link: bool,
 ) -> Option<String> {
-    let resolved = path.canonicalize().ok()?;
+    let resolved = path.canonical().ok()?;
     let relative = resolved.strip_prefix(root).ok()?;
     // Automatic project context can follow in-tree Markdown links, including shared
     // documentation. Profile files must resolve to their own fixed locations.
@@ -381,10 +382,10 @@ pub(crate) fn normalize_text(text: &str) -> String {
 }
 
 fn project_context(root: &Path, cap: usize) -> Option<String> {
-    let cwd = root.canonicalize().ok()?;
+    let cwd = root.canonical().ok()?;
     let git_root = system_prompt::git_root(&cwd);
     let root = git_root.as_deref().unwrap_or(&cwd);
-    let home = std::env::home_dir().and_then(|dir| dir.canonicalize().ok());
+    let home = std::env::home_dir().and_then(|dir| dir.canonical().ok());
     let broad_root = home.as_ref().is_none_or(|home| home.starts_with(root));
     let mut dirs = Vec::new();
     for dir in cwd.ancestors() {
@@ -468,7 +469,7 @@ fn cursor_context(cwd: &Path, root: &Path, cap: usize) -> Option<String> {
     let mut files = vec![(String::from(".cursorrules"), cwd.join(".cursorrules"))];
     let rules = cwd.join(".cursor/rules");
     if let Some(entries) = rules
-        .canonicalize()
+        .canonical()
         .ok()
         .filter(|path| path.starts_with(root))
         .and_then(|path| fs::read_dir(path).ok())

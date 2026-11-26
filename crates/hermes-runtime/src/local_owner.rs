@@ -1201,11 +1201,12 @@ impl TurnHub {
 
 pub fn discover_profiles(active_home: &Path) -> Vec<ProfileEntry> {
     let mut entries: Vec<ProfileEntry> = Vec::new();
-    let active_canon = fs::canonicalize(active_home).unwrap_or_else(|_| active_home.to_path_buf());
+    let active_canon =
+        crate::paths::canonical(active_home).unwrap_or_else(|_| active_home.to_path_buf());
     let mut seen: Vec<PathBuf> = Vec::new();
 
     let mut push_path = |name: String, path: PathBuf| {
-        let canon = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        let canon = crate::paths::canonical(&path).unwrap_or_else(|_| path.clone());
         if seen.contains(&canon) {
             return;
         }

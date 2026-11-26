@@ -1,5 +1,6 @@
 //! Inventory a profile and prepare a private, verified copy for the Linux CLI pilot.
 
+use crate::paths::PathExt;
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions, Permissions};
 use std::io;
@@ -83,7 +84,7 @@ pub fn migrate_profile(profile: &Path, destination: &Path) -> Result<ProfileRepo
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."))
-        .canonicalize()
+        .canonical()
         .map_err(|error| error.to_string())?;
     if parent.starts_with(&source) {
         return Err("the output directory must be outside the source profile".into());
@@ -112,7 +113,7 @@ pub fn migrate_profile(profile: &Path, destination: &Path) -> Result<ProfileRepo
         // SQLite's NOFOLLOW check also rejects the symlink in /proc/self/fd.
         let staged_path = staged
             .path()
-            .canonicalize()
+            .canonical()
             .map_err(|error| error.to_string())?;
         let database = NamedTempFile::new_in(&staged_path).map_err(|error| error.to_string())?;
         report.database = Some(
@@ -152,7 +153,7 @@ impl ProfileReport {
 }
 
 fn open_profile(profile: &Path) -> Result<(PathBuf, File), String> {
-    let path = profile.canonicalize().map_err(|error| error.to_string())?;
+    let path = profile.canonical().map_err(|error| error.to_string())?;
     let directory = open_directory(&path, &path)?;
     Ok((path, directory))
 }

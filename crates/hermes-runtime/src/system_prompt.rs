@@ -10,6 +10,7 @@
 //! probe line, Bot Mode and Bot Screen blocks, remote-backend environment text and plugin
 //! sections.
 
+use crate::paths::PathExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -411,7 +412,7 @@ fn platform_hint(gates: &PromptGates) -> String {
 // ---- workspace
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::home_dir().and_then(|dir| dir.canonicalize().ok())
+    std::env::home_dir().and_then(|dir| dir.canonical().ok())
 }
 
 pub(crate) fn git_root(cwd: &Path) -> Option<PathBuf> {
@@ -433,7 +434,7 @@ pub(crate) fn git_root(cwd: &Path) -> Option<PathBuf> {
 /// The nearest ancestor (up to six levels above) that looks like a project root; the home
 /// directory and the shared temp root never count.
 fn marker_root(cwd: &Path) -> Option<PathBuf> {
-    let skip = [home_dir(), std::env::temp_dir().canonicalize().ok()];
+    let skip = [home_dir(), std::env::temp_dir().canonical().ok()];
     cwd.ancestors().take(7).find_map(|dir| {
         let skipped = skip.iter().flatten().any(|path| path == dir);
         let marked = text()
@@ -487,7 +488,7 @@ fn coding_workspace(root: &Path, mode: CodingMode, has_tools: bool) -> Option<Ve
     if !has_tools || mode == CodingMode::Off {
         return None;
     }
-    let cwd = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let cwd = root.canonical().unwrap_or_else(|_| root.to_path_buf());
     let git = git_root(&cwd);
     let coding = mode == CodingMode::On
         || marker_root(&cwd).is_some()
@@ -572,7 +573,7 @@ fn snapshot(root: &Path, git: Option<&Path>) -> String {
         let common = probe.run(&["rev-parse", "--git-common-dir"]);
         if !git_dir.is_empty()
             && !common.is_empty()
-            && root.join(&git_dir).canonicalize().ok() != root.join(&common).canonicalize().ok()
+            && root.join(&git_dir).canonical().ok() != root.join(&common).canonical().ok()
         {
             let on_branch = if !head.is_empty() && head != "(detached)" {
                 format!(" on branch {head}")

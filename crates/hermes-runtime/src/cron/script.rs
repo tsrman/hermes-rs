@@ -70,10 +70,10 @@ pub fn validate_script_path_for_create(home: &Path, script: &str) -> Result<(), 
     }
     std::fs::create_dir_all(&dir)
         .map_err(|error| format!("cannot create scripts directory: {error}"))?;
-    let base = std::fs::canonicalize(&dir).unwrap_or_else(|_| normalize_lexical(&dir));
+    let base = crate::paths::canonical(&dir).unwrap_or_else(|_| normalize_lexical(&dir));
     let candidate = dir.join(raw);
     let resolved =
-        std::fs::canonicalize(&candidate).unwrap_or_else(|_| normalize_lexical(&base.join(raw)));
+        crate::paths::canonical(&candidate).unwrap_or_else(|_| normalize_lexical(&base.join(raw)));
     if !resolved.starts_with(&base) {
         return Err(format!(
             "Script path escapes the scripts directory via traversal: {}",
@@ -101,14 +101,14 @@ pub fn resolve_script_path(home: &Path, script_path: &str) -> Result<PathBuf, St
     let dir = scripts_dir(home);
     std::fs::create_dir_all(&dir)
         .map_err(|error| format!("cannot create scripts directory: {error}"))?;
-    let base = std::fs::canonicalize(&dir).unwrap_or_else(|_| normalize_lexical(&dir));
+    let base = crate::paths::canonical(&dir).unwrap_or_else(|_| normalize_lexical(&dir));
     let expanded = expand_tilde(script_path);
     let candidate = if expanded.is_absolute() {
         expanded
     } else {
         dir.join(expanded)
     };
-    let resolved = std::fs::canonicalize(&candidate).unwrap_or_else(|_| {
+    let resolved = crate::paths::canonical(&candidate).unwrap_or_else(|_| {
         if candidate.is_absolute() {
             normalize_lexical(&candidate)
         } else {
@@ -137,12 +137,12 @@ pub fn resolve_script_path(home: &Path, script_path: &str) -> Result<PathBuf, St
 
 fn expand_tilde(raw: &str) -> PathBuf {
     if raw == "~" {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home);
+        if let Some(home) = crate::paths::home_dir() {
+            return home;
         }
     } else if let Some(rest) = raw.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(rest);
+        if let Some(home) = crate::paths::home_dir() {
+            return home.join(rest);
         }
     }
     PathBuf::from(raw)
@@ -185,7 +185,7 @@ pub fn resolve_interpreter(interpreter: &str) -> Result<PathBuf, String> {
             ));
         }
     }
-    let canonical = std::fs::canonicalize(&expanded).unwrap_or_else(|_| expanded.clone());
+    let canonical = crate::paths::canonical(&expanded).unwrap_or_else(|_| expanded.clone());
     for candidate in [&expanded, &canonical] {
         let name = candidate
             .file_name()
@@ -273,7 +273,14 @@ fn script_argv(path: &Path, interpreter: Option<&str>) -> Result<(PathBuf, Vec<S
                 py_repr(&path.file_name().unwrap_or_default().to_string_lossy())
             ));
         };
-        return Ok((bash, vec![path.to_string_lossy().into_owned()]));
+        // bash on Windows takes the script path with `/`: backslashes are read as escapes.
+        let script = path.to_string_lossy();
+        let script = if cfg!(windows) {
+            script.replace('\\', "/")
+        } else {
+            script.into_owned()
+        };
+        return Ok((bash, vec![script]));
     }
     if let Some(interp) = interpreter.map(str::trim).filter(|s| !s.is_empty()) {
         let exe = resolve_interpreter(interp)?;

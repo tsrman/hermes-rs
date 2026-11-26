@@ -4,6 +4,7 @@
 //! Mirrors `tools/tts_tool.py`: per-provider character chunking without silent truncation,
 //! `MEDIA:` injection guard on `output_path`, and `MEDIA:<path>` delivery tag.
 
+use crate::paths::PathExt;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -241,11 +242,11 @@ fn resolve_output_path(
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(root);
         fs::create_dir_all(parent).map_err(|e| format!("Cannot create output directory: {e}"))?;
-        let canon_parent = parent.canonicalize().map_err(|e| e.to_string())?;
-        let canon_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let canon_parent = parent.canonical().map_err(|e| e.to_string())?;
+        let canon_root = root.canonical().unwrap_or_else(|_| root.to_path_buf());
         let in_root = canon_parent.starts_with(&canon_root);
         let in_profile = profile
-            .and_then(|p| p.canonicalize().ok())
+            .and_then(|p| p.canonical().ok())
             .is_some_and(|p| canon_parent.starts_with(&p));
         if !in_root && !in_profile {
             return Err(format!(

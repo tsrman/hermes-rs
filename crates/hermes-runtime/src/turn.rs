@@ -1532,7 +1532,11 @@ mod tests {
         let missing = read_file(directory.path(), r#"{"path": "config.yml"}"#);
         assert_eq!(missing["error"], "File not found: config.yml");
         assert_eq!(missing["not_found"], true);
-        assert_eq!(missing["similar_files"][0], "./config.yaml");
+        // The suggestion is `directory.join(name)`, so it uses the platform separator.
+        assert_eq!(
+            missing["similar_files"][0],
+            format!(".{}config.yaml", std::path::MAIN_SEPARATOR)
+        );
     }
 
     #[test]

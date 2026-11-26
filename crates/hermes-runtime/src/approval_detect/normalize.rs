@@ -85,7 +85,7 @@ fn path_str(path: &str) -> String {
 
 /// `Path.resolve(strict=False)` / `os.path.realpath`: resolve what exists, normalise the rest.
 fn resolve(path: &str) -> String {
-    if let Ok(real) = std::fs::canonicalize(path) {
+    if let Ok(real) = crate::paths::canonical(path) {
         return real.to_string_lossy().into_owned();
     }
     let mut out = PathBuf::new();

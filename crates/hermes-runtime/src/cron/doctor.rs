@@ -122,11 +122,11 @@ fn format_lateness(seconds: f64) -> String {
 
 fn script_health_issue(home: &Path, script: &str) -> Option<String> {
     let base_raw = scripts_dir(home);
-    let base = std::fs::canonicalize(&base_raw).unwrap_or(base_raw);
+    let base = crate::paths::canonical(&base_raw).unwrap_or(base_raw);
     let expanded = if let Some(rest) = script.strip_prefix("~/") {
-        std::env::var("HOME")
-            .map(|h| Path::new(&h).join(rest))
-            .unwrap_or_else(|_| Path::new(script).to_path_buf())
+        crate::paths::home_dir()
+            .map(|h| h.join(rest))
+            .unwrap_or_else(|| Path::new(script).to_path_buf())
     } else {
         Path::new(script).to_path_buf()
     };
@@ -135,7 +135,7 @@ fn script_health_issue(home: &Path, script: &str) -> Option<String> {
     } else {
         base.join(expanded)
     };
-    let resolved = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+    let resolved = crate::paths::canonical(&candidate).unwrap_or_else(|_| candidate.clone());
     if !resolved.starts_with(&base) {
         return Some(format!(
             "script resolves outside {}: {}",
@@ -298,9 +298,9 @@ pub fn doctor_issues_for_job(home: &Path, job: &Value, now: DateTime<Tz>) -> Vec
         .filter(|s| !s.is_empty())
     {
         let path = if let Some(rest) = workdir.strip_prefix("~/") {
-            std::env::var("HOME")
-                .map(|h| Path::new(&h).join(rest))
-                .unwrap_or_else(|_| Path::new(workdir).to_path_buf())
+            crate::paths::home_dir()
+                .map(|h| h.join(rest))
+                .unwrap_or_else(|| Path::new(workdir).to_path_buf())
         } else {
             Path::new(workdir).to_path_buf()
         };

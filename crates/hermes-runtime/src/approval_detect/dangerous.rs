@@ -271,7 +271,7 @@ fn is_verification_artifact_cleanup(command: &str) -> bool {
     }
     let operand = &argv[2];
     let resolve =
-        |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        |p: &std::path::Path| crate::paths::canonical(p).unwrap_or_else(|_| p.to_path_buf());
     let temp_dir = resolve(&std::env::temp_dir());
     let operand_path = std::path::Path::new(operand);
     let basename = operand_path

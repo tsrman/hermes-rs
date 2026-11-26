@@ -211,7 +211,10 @@ fn terminal_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFutur
 /// `process_manage` manages what `terminal(background=true)` starts, so it is offered with the
 /// terminal unless the tool-search bridge hides it.
 fn process_manage_offered(env: &ToolEnv) -> bool {
-    env.terminal && env.policy.allows(PROCESS_MANAGE) && !env.policy.is_deferred(PROCESS_MANAGE)
+    terminal::SUPPORTED
+        && env.terminal
+        && env.policy.allows(PROCESS_MANAGE)
+        && !env.policy.is_deferred(PROCESS_MANAGE)
 }
 
 fn process_manage_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFuture<'a, Value> {
@@ -779,8 +782,22 @@ mod tests {
             "write_file",
         ];
         for ours in offered_schemas(&env) {
-            let name = ours["function"]["name"].as_str().unwrap();
+            let name = ours["function"]["name"].as_str().unwrap().to_owned();
+            let name = name.as_str();
             if verbatim.contains(&name) {
+                // Outside Unix the execute_code description ends with the RustPython/Excel helper
+                // paragraph, which the reference (recorded on Linux) does not have.
+                let mut ours = ours;
+                if cfg!(not(unix)) && name == "execute_code" {
+                    let recorded_text = recorded
+                        .iter()
+                        .find(|tool| tool["function"]["name"] == "execute_code")
+                        .and_then(|tool| tool["function"]["description"].as_str())
+                        .unwrap();
+                    let text = ours["function"]["description"].as_str().unwrap();
+                    assert!(text.starts_with(recorded_text), "{name} differs");
+                    ours["function"]["description"] = json!(recorded_text);
+                }
                 assert!(recorded.iter().any(|tool| tool == &ours), "{name} differs");
             }
         }
@@ -826,7 +843,11 @@ mod tests {
                 "execute_code",
                 "memory",
                 "patch",
-                "process_manage",
+            ]
+            .into_iter()
+            // process_manage only exists where the terminal is supported (see `process_stub`).
+            .chain(terminal::SUPPORTED.then_some("process_manage"))
+            .chain([
                 "read_file",
                 "search_files",
                 "session_search",
@@ -837,7 +858,8 @@ mod tests {
                 "todo_list",
                 "web_search",
                 "write_file"
-            ]
+            ])
+            .collect::<Vec<_>>()
         );
         let config: serde_yaml::Value =
             serde_yaml::from_str("platform_toolsets: {cli: [file]}").unwrap();
@@ -850,6 +872,8 @@ mod tests {
         assert!(find("read_file", &env.policy).is_some());
     }
 
+    // process_manage and the terminal's background options exist only where the terminal is supported.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn background_commands_need_process_manage_to_be_offered() {
         let terminal_schema = |env: &ToolEnv| -> Value {

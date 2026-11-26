@@ -11,6 +11,7 @@
 //! Both backends also expose native pure-Rust Excel helpers (`xlsx_read`, `xlsx_write`) via
 //! `from hermes_tools import xlsx_read, xlsx_write`.
 
+use crate::paths::PathExt;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -905,7 +906,7 @@ pub(crate) fn call<'a>(
         let root = cx
             .options
             .root
-            .canonicalize()
+            .canonical()
             .unwrap_or_else(|_| cx.options.root.to_path_buf());
         let directory = crate::terminal::session_directory(&session, &root);
         let tools = sandbox_tools(&ToolEnv::from_options(cx.options));

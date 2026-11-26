@@ -85,6 +85,8 @@ fn legacy_config_version_under_34_suppresses_kawaii_personality() {
 fn profile_home_defaults_to_hsr_and_prefers_hsr_home_over_hermes_home() {
     let _guard = ENV_LOCK.lock().unwrap();
     let prev_home = std::env::var_os("HOME");
+    // Windows resolves the default profile root from USERPROFILE, not HOME.
+    let prev_userprofile = std::env::var_os("USERPROFILE");
     let prev_hsr = std::env::var_os("HSR_HOME");
     let prev_hermes = std::env::var_os("HERMES_HOME");
 
@@ -106,6 +108,7 @@ fn profile_home_defaults_to_hsr_and_prefers_hsr_home_over_hermes_home() {
     // 1. Neither HSR_HOME nor HERMES_HOME -> ~/.hsr
     unsafe {
         std::env::set_var("HOME", &fake_home);
+        std::env::set_var("USERPROFILE", &fake_home);
         std::env::remove_var("HSR_HOME");
         std::env::remove_var("HERMES_HOME");
     }
@@ -132,6 +135,10 @@ fn profile_home_defaults_to_hsr_and_prefers_hsr_home_over_hermes_home() {
         match prev_home {
             Some(v) => std::env::set_var("HOME", v),
             None => std::env::remove_var("HOME"),
+        }
+        match prev_userprofile {
+            Some(v) => std::env::set_var("USERPROFILE", v),
+            None => std::env::remove_var("USERPROFILE"),
         }
         match prev_hsr {
             Some(v) => std::env::set_var("HSR_HOME", v),

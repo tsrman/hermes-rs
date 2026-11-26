@@ -234,11 +234,7 @@ pub fn resolve_aws_auth(secrets: &HashMap<String, String>) -> Result<AwsAuth, St
     let profile = secret("AWS_PROFILE").unwrap_or_else(|| "default".to_owned());
     let creds_path = secret("AWS_SHARED_CREDENTIALS_FILE")
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .map(|h| PathBuf::from(h).join(".aws/credentials"))
-        });
+        .or_else(|| crate::paths::home_dir().map(|h| h.join(".aws/credentials")));
     if let Some(path) = creds_path {
         if let Some(auth) = load_aws_credentials_profile(&path, &profile) {
             return Ok(auth);

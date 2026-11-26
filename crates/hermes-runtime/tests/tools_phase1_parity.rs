@@ -164,7 +164,7 @@ fn base_options<'a>(
 #[tokio::test]
 async fn search_files_returns_absolute_paths_when_given_absolute_path_inside_workspace() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().canonicalize().unwrap();
+    let root = hermes_runtime::paths::canonical(dir.path()).unwrap();
     std::fs::create_dir_all(root.join("sub")).unwrap();
     std::fs::write(root.join("sub/note.txt"), "needle here\n").unwrap();
     let abs_sub = root.join("sub").display().to_string();
@@ -254,7 +254,7 @@ async fn write_file_and_patch_leave_no_temp_files_and_preserve_permissions() {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().canonicalize().unwrap();
+    let root = hermes_runtime::paths::canonical(dir.path()).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
 
@@ -337,7 +337,7 @@ async fn write_file_and_patch_leave_no_temp_files_and_preserve_permissions() {
 #[tokio::test]
 async fn delegate_task_supports_top_level_goal_continue_and_control_actions() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().canonicalize().unwrap();
+    let root = hermes_runtime::paths::canonical(dir.path()).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
 
@@ -463,7 +463,7 @@ async fn delegate_task_supports_top_level_goal_continue_and_control_actions() {
 #[tokio::test]
 async fn delegate_task_steer_appends_to_tool_result_and_stop_interrupts_child() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().canonicalize().unwrap();
+    let root = hermes_runtime::paths::canonical(dir.path()).unwrap();
     std::fs::write(root.join("data.txt"), "hello world\n").unwrap();
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -572,7 +572,7 @@ async fn delegate_task_steer_appends_to_tool_result_and_stop_interrupts_child() 
 #[tokio::test]
 async fn delegate_task_honors_max_spawn_depth_for_nested_subagents() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().canonicalize().unwrap();
+    let root = hermes_runtime::paths::canonical(dir.path()).unwrap();
 
     // Config parsing check for delegation.max_spawn_depth + .env fallback.
     let home = tempfile::tempdir().unwrap();
@@ -685,7 +685,7 @@ async fn delegate_task_honors_max_spawn_depth_for_nested_subagents() {
 #[tokio::test]
 async fn delegate_task_oneshot_refuses_continue_and_unknown_control_ids() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().canonicalize().unwrap();
+    let root = hermes_runtime::paths::canonical(dir.path()).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let outputs = Arc::new(Mutex::new(Vec::<Value>::new()));

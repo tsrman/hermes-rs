@@ -4,6 +4,7 @@
 //! Runs natively inside `hermes-runtime` on every platform (Windows, Linux GNU/musl, macOS) with
 //! zero external Python packages required.
 
+use crate::paths::PathExt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -28,7 +29,7 @@ fn resolve_workspace_path(
         return Err("path cannot be empty".into());
     }
     let canon_root = workspace_root
-        .canonicalize()
+        .canonical()
         .map_err(|e| format!("invalid workspace root: {e}"))?;
     let requested = Path::new(trimmed);
     let joined = if requested.is_absolute() {
@@ -55,7 +56,7 @@ fn resolve_workspace_path(
 
     let checked = if must_exist {
         normalized
-            .canonicalize()
+            .canonical()
             .map_err(|_| format!("file not found: {trimmed}"))?
     } else {
         // Canonicalize the deepest existing ancestor so symlinks cannot escape the workspace.
@@ -72,7 +73,7 @@ fn resolve_workspace_path(
             }
         }
         let mut resolved = ancestor
-            .canonicalize()
+            .canonical()
             .map_err(|e| format!("cannot resolve path parent for {trimmed}: {e}"))?;
         for part in suffix.into_iter().rev() {
             resolved.push(part);

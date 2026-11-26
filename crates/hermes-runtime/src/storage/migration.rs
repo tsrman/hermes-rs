@@ -89,7 +89,12 @@ pub(crate) fn write_verified_snapshot(
     snapshot.backup(MAIN_DB, destination, None::<fn(rusqlite::backup::Progress)>)?;
     snapshot.commit()?;
     verify_snapshot(destination, version, rebuild_fts, &plan, &before)?;
-    fs::File::open(destination)?.sync_all()?;
+    // Flushing needs write access on Windows (FlushFileBuffers), so a read-only handle is denied.
+    #[cfg(windows)]
+    let published = fs::OpenOptions::new().write(true).open(destination)?;
+    #[cfg(not(windows))]
+    let published = fs::File::open(destination)?;
+    published.sync_all()?;
     Ok(SnapshotReport {
         source_schema: version,
         target_schema: SCHEMA_VERSION,

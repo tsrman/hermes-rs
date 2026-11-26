@@ -306,7 +306,7 @@ async fn multimodal_image_blocks_translate_for_anthropic_responses_and_bedrock()
 #[tokio::test]
 async fn vision_analyze_supports_native_attachment_read_file_images_and_auxiliary_route() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().canonicalize().unwrap();
+    let root = hermes_runtime::paths::canonical(dir.path()).unwrap();
     std::fs::write(root.join("pixel.png"), TINY_PNG).unwrap();
 
     // 1. Native mode: both read_file(pixel.png) and vision_analyze(pixel.png) strip internal envelope
@@ -535,7 +535,7 @@ async fn image_generate_filters_fal_payload_downloads_image_and_returns_media_ta
 
     // End-to-end tool call against a local mock FAL server.
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().canonicalize().unwrap();
+    let root = hermes_runtime::paths::canonical(dir.path()).unwrap();
     let profile = tempfile::tempdir().unwrap();
 
     let fal_listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -663,7 +663,7 @@ async fn text_to_speech_chunks_guards_media_injection_and_supports_http_and_comm
     );
 
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().canonicalize().unwrap();
+    let root = hermes_runtime::paths::canonical(dir.path()).unwrap();
 
     // 1. OpenAI HTTP backend + MEDIA: injection refusal.
     let tts_listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -975,7 +975,7 @@ async fn x_search_validates_filters_retries_429_and_flags_degraded() {
     });
 
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().canonicalize().unwrap();
+    let root = hermes_runtime::paths::canonical(dir.path()).unwrap();
     let route = ModelRoute {
         provider: Provider::OpenAi(
             OpenAiProvider::new(

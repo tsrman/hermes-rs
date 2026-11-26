@@ -9,6 +9,7 @@
 //! ledger (`.curator_ledger.jsonl`) with content-addressed blobs under `.curator_backups/blobs/`.
 //! Not ported: usage statistics and the curator.
 
+use crate::paths::PathExt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
@@ -269,10 +270,10 @@ impl Skills<'_> {
         let Some(path) = expand_config_path(entry, self.home) else {
             return self.local_root();
         };
-        let resolved = path.canonicalize().unwrap_or_else(|_| path.clone());
+        let resolved = path.canonical().unwrap_or_else(|_| path.clone());
         let local = self
             .local_root()
-            .canonicalize()
+            .canonical()
             .unwrap_or_else(|_| self.local_root());
         if resolved == local {
             self.local_root()
@@ -361,7 +362,7 @@ impl Skills<'_> {
     /// when exactly one skill claims it.
     fn find(&self, name: &str) -> Option<PathBuf> {
         let local = self.local_root();
-        let local_resolved = local.canonicalize().unwrap_or(local);
+        let local_resolved = local.canonical().unwrap_or(local);
         let categorized = name.contains(['/', '\\']);
         let mut display: Vec<PathBuf> = Vec::new();
         for root in self.roots() {
@@ -370,7 +371,7 @@ impl Skills<'_> {
                     return Some(dir);
                 }
                 if categorized {
-                    if let Ok(resolved) = dir.canonicalize() {
+                    if let Ok(resolved) = dir.canonical() {
                         if resolved
                             .strip_prefix(&local_resolved)
                             .is_ok_and(|relative| relative.to_string_lossy() == name)
@@ -382,11 +383,12 @@ impl Skills<'_> {
                 if Self::frontmatter_name(&dir).as_deref() == Some(name) {
                     let key = dir
                         .join("SKILL.md")
-                        .canonicalize()
+                        .canonical()
                         .unwrap_or(dir.join("SKILL.md"));
-                    if !display.iter().any(|seen| {
-                        seen.join("SKILL.md").canonicalize().ok().as_ref() == Some(&key)
-                    }) {
+                    if !display
+                        .iter()
+                        .any(|seen| seen.join("SKILL.md").canonical().ok().as_ref() == Some(&key))
+                    {
                         display.push(dir);
                     }
                 }
@@ -399,15 +401,11 @@ impl Skills<'_> {
         let root = profile_root(self.home);
         let active = self
             .local_root()
-            .canonicalize()
+            .canonical()
             .unwrap_or_else(|_| self.local_root());
         let mut candidates: Vec<(String, PathBuf)> = Vec::new();
         let default_skills = root.join("skills");
-        if default_skills
-            .canonicalize()
-            .unwrap_or(default_skills.clone())
-            != active
-        {
+        if default_skills.canonical().unwrap_or(default_skills.clone()) != active {
             candidates.push(("default".into(), default_skills));
         }
         if let Ok(entries) = fs::read_dir(root.join("profiles")) {
@@ -416,9 +414,7 @@ impl Skills<'_> {
             for entry in entries {
                 let skills = entry.path().join("skills");
                 if !entry.path().is_dir()
-                    || skills
-                        .canonicalize()
-                        .is_ok_and(|resolved| resolved == active)
+                    || skills.canonical().is_ok_and(|resolved| resolved == active)
                 {
                     continue;
                 }
@@ -558,7 +554,7 @@ fn resolve_supporting_file(skill_dir: &Path, file_path: &str) -> Result<PathBuf,
         return Err(refusal(error));
     }
     let root = skill_dir
-        .canonicalize()
+        .canonical()
         .map_err(|error| refusal(format!("Path escapes allowed directory: {error}")))?;
     // Resolve through the deepest existing ancestor, so a symlinked parent cannot redirect.
     let mut existing = target.clone();
@@ -573,7 +569,7 @@ fn resolve_supporting_file(skill_dir: &Path, file_path: &str) -> Result<PathBuf,
         }
     }
     let mut resolved = existing
-        .canonicalize()
+        .canonical()
         .map_err(|error| refusal(format!("Path escapes allowed directory: {error}")))?;
     for part in tail.into_iter().rev() {
         resolved.push(part);
@@ -1057,7 +1053,7 @@ impl Skills<'_> {
                 ));
             }
         }
-        let resolved = match skill_dir.canonicalize() {
+        let resolved = match skill_dir.canonical() {
             Ok(resolved) => resolved,
             Err(error) => {
                 return refusal(format!(
@@ -1074,7 +1070,7 @@ impl Skills<'_> {
         }
         let mut containing: Option<PathBuf> = None;
         for root in self.roots() {
-            let root = root.canonicalize().unwrap_or(root);
+            let root = root.canonical().unwrap_or(root);
             if resolved == root {
                 return refusal(format!(
                     "Refusing to delete '{}': resolves to the skills root itself, which would remove every installed skill.",
@@ -1096,7 +1092,7 @@ impl Skills<'_> {
             return refusal(format!("Could not delete {}: {error}", skill_dir.display()));
         }
         if let Some(parent) = skill_dir.parent() {
-            let parent_resolved = parent.canonicalize().unwrap_or_else(|_| parent.to_owned());
+            let parent_resolved = parent.canonical().unwrap_or_else(|_| parent.to_owned());
             if parent_resolved != skills_root
                 && parent.exists()
                 && fs::read_dir(parent).is_ok_and(|mut entries| entries.next().is_none())
@@ -1863,7 +1859,8 @@ mod tests {
                 for root in roots {
                     text = text.replace(root, "<skills>");
                 }
-                json!(text)
+                // Windows paths use `\`; the reference output was recorded with `/`.
+                json!(crate::paths::forward_slashes_after(&text, "<skills>"))
             }
             Value::Array(items) => {
                 Value::Array(items.iter().map(|i| normalize(i, roots)).collect())
@@ -1910,7 +1907,7 @@ mod tests {
             };
             let roots = vec![
                 skills_dir.display().to_string(),
-                skills_dir.canonicalize().unwrap().display().to_string(),
+                skills_dir.canonical().unwrap().display().to_string(),
             ];
             for (index, step) in case["steps"].as_array().unwrap().iter().enumerate() {
                 let mut approve = |_request: ApprovalRequest| async { ApprovalDecision::Approved };

@@ -21,6 +21,14 @@ fn corpus() -> Value {
 
 fn normalize_cache_paths(text: &str, home: &std::path::Path) -> String {
     let text = text.replace(&home.display().to_string(), "<HOME>");
+    // Windows: JSON text doubles each backslash of the path, and the reference output uses `/`.
+    let text = if cfg!(windows) {
+        let escaped = home.display().to_string().replace('\\', "\\\\");
+        let text = text.replace(&escaped, "<HOME>").replace("\\\\", "\\");
+        hermes_runtime::paths::forward_slashes_after(&text, "<HOME>")
+    } else {
+        text
+    };
     let re = Regex::new(r"(img|audio|doc)_[0-9a-f]{12}").unwrap();
     re.replace_all(&text, "${1}_<HEX12>").into_owned()
 }

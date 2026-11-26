@@ -1,3 +1,4 @@
+use crate::paths::PathExt;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs;
@@ -327,7 +328,7 @@ fn open_database(path: &Path, flags: OpenFlags) -> Result<Connection, StorageErr
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."))
-        .canonicalize()?
+        .canonical()?
         .join(path.file_name().ok_or(StorageError::InvalidDatabaseFile)?);
     #[cfg(unix)]
     let path = resolved.as_path();

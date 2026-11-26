@@ -250,6 +250,8 @@ fn monitor_and_wake_gate_and_script_validation_match_reference_corpus() {
                 let actual = res
                     .unwrap_err()
                     .replace(&home.to_string_lossy().to_string(), "<HOME>");
+                // Windows joins the scripts directory with `\`; the reference output uses `/`.
+                let actual = hermes_runtime::paths::forward_slashes_after(&actual, "<HOME>");
                 assert_eq!(actual, expected, "{label}");
             }
         }
@@ -266,20 +268,27 @@ fn doctor_matches_reference_corpus() {
     let home = tmp.path();
     std::fs::create_dir_all(home.join("scripts")).unwrap();
     let home_str = home.to_string_lossy().to_string();
-    let canon_home = std::fs::canonicalize(home)
+    let canon_home = hermes_runtime::paths::canonical(home)
         .unwrap_or_else(|_| home.to_path_buf())
         .to_string_lossy()
         .to_string();
 
     for case in data["cases"].as_array().unwrap() {
         let label = case["label"].as_str().unwrap();
-        let raw_job = case["job"].to_string().replace("<HOME>", &home_str);
+        // The path is substituted into JSON text, so its backslashes (Windows) must be escaped.
+        let json_home = serde_json::to_string(&home_str).unwrap();
+        let raw_job = case["job"]
+            .to_string()
+            .replace("<HOME>", &json_home[1..json_home.len() - 1]);
         let job: Value = serde_json::from_str(&raw_job).unwrap();
         let actual: Vec<String> = doctor::doctor_issues_for_job(home, &job, now)
             .into_iter()
             .map(|s| {
-                s.replace(&canon_home, "<HOME>")
-                    .replace(&home_str, "<HOME>")
+                let s = s
+                    .replace(&canon_home, "<HOME>")
+                    .replace(&home_str, "<HOME>");
+                // Windows joins paths with `\`; the reference output uses `/`.
+                hermes_runtime::paths::forward_slashes_after(&s, "<HOME>")
             })
             .collect();
         let expected: Vec<String> = case["issues"]
@@ -309,7 +318,11 @@ async fn script_and_monitor_execution_and_ssrf_blocking() {
     std::fs::write(&state_file, "v1").unwrap();
     std::fs::write(
         home.join("scripts/mon.sh"),
-        format!("cat '{}'\n", state_file.display()),
+        // bash reads the path, so it is spelled with `/` on Windows too.
+        format!(
+            "cat '{}'\n",
+            state_file.display().to_string().replace('\\', "/")
+        ),
     )
     .unwrap();
     let job = manage::add_job_with_id(

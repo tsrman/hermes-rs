@@ -14,6 +14,9 @@ import sys
 import threading
 import time
 
+# MCP speaks UTF-8; Windows would otherwise decode stdin with the locale code page.
+sys.stdin.reconfigure(encoding="utf-8")
+
 TOOLS = [
     [
         {"name": "echo", "description": "Echo text.",

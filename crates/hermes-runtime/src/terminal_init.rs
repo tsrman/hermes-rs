@@ -227,7 +227,7 @@ pub(crate) fn with_init_files(
     auto_source_bashrc: bool,
     names: &[String],
 ) -> Vec<(String, String)> {
-    let home = std::env::var("HOME").ok();
+    let home = crate::paths::home_dir().map(|home| home.display().to_string());
     let files = resolved_files(explicit, auto_source_bashrc, home.as_deref());
     if files.is_empty() {
         return base;
@@ -320,10 +320,13 @@ mod tests {
             ),
             [home.path().join("custom.sh")]
         );
-        assert_eq!(
-            resolved_files(&[], true, Some(&home_text)),
-            [home.path().join(".profile"), home.path().join(".bashrc")]
-        );
+        // Windows sources no default rc files (see `resolved_files`), so the default list is empty there.
+        let defaults = if cfg!(windows) {
+            Vec::new()
+        } else {
+            vec![home.path().join(".profile"), home.path().join(".bashrc")]
+        };
+        assert_eq!(resolved_files(&[], true, Some(&home_text)), defaults);
         assert!(resolved_files(&[], false, Some(&home_text)).is_empty());
     }
 

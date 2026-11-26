@@ -1,5 +1,6 @@
 //! Discovery and read-only access to Markdown skills for one CLI turn.
 
+use crate::paths::PathExt;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1008,7 +1009,7 @@ fn serve_skill_file(dir: &Path, file_path: &str, label: &str) -> Value {
         return fail_with("Path traversal ('..') is not allowed.", hint);
     }
     let target = dir.join(file_path);
-    let inside = match (target.canonicalize(), dir.canonicalize()) {
+    let inside = match (target.canonical(), dir.canonical()) {
         (Ok(target), Ok(root)) => target.starts_with(root),
         _ => true,
     };
@@ -1261,7 +1262,7 @@ const SETUP_SKIPPED_NOTE: &str = "Required environment setup was skipped. Contin
 
 /// `~/…` for a directory under the user's home, else the path as is.
 fn display_home(home: &Path) -> String {
-    std::env::var_os("HOME")
+    crate::paths::home_dir()
         .and_then(|user| home.strip_prefix(user).ok().map(Path::to_owned))
         .map_or_else(
             || home.display().to_string(),
@@ -1401,9 +1402,9 @@ fn expand_path(value: &str) -> String {
         }
     }
     out.push_str(rest);
-    match (out.strip_prefix('~'), std::env::var("HOME")) {
-        (Some(tail), Ok(home)) if tail.is_empty() || tail.starts_with('/') => {
-            format!("{home}{tail}")
+    match (out.strip_prefix('~'), crate::paths::home_dir()) {
+        (Some(tail), Some(home)) if tail.is_empty() || tail.starts_with('/') => {
+            format!("{}{tail}", home.display())
         }
         _ => out,
     }
@@ -1450,8 +1451,8 @@ fn search_roots(
 ) -> Vec<(Tier, PathBuf)> {
     let mut candidates = Vec::new();
     if settings.project_discovery {
-        if let Ok(cwd) = cwd.canonicalize() {
-            let home = std::env::home_dir().and_then(|path| path.canonicalize().ok());
+        if let Ok(cwd) = cwd.canonical() {
+            let home = std::env::home_dir().and_then(|path| path.canonical().ok());
             if let Some(root) = crate::system_prompt::git_root(&cwd)
                 .as_deref()
                 .filter(|root| home.as_deref() != Some(*root))
@@ -1468,7 +1469,7 @@ fn search_roots(
             }
         }
     }
-    let profile = profile.and_then(|path| path.canonicalize().ok());
+    let profile = profile.and_then(|path| path.canonical().ok());
     let local = profile.as_ref().map(|home| home.join("skills"));
     if let Some(home) = &profile {
         candidates.push((Tier::Profile, home.join("skills"), true));
@@ -1492,7 +1493,7 @@ fn search_roots(
     candidates
         .into_iter()
         .filter_map(|(tier, path, implicit)| {
-            let resolved = path.canonicalize().ok()?;
+            let resolved = path.canonical().ok()?;
             if implicit && resolved != path {
                 return None;
             }
@@ -1506,7 +1507,7 @@ fn search_roots(
 }
 
 fn resolve_config_path(entry: &str, base: &Path) -> Option<PathBuf> {
-    expand_config_path(entry, base)?.canonicalize().ok()
+    expand_config_path(entry, base)?.canonical().ok()
 }
 
 /// A configured path with `$VAR` and `~` expanded and relative paths joined to `base`; it need
@@ -1742,7 +1743,11 @@ mod reference_tests {
 
     fn normalize(value: &Value, root: &str) -> Value {
         match value {
-            Value::String(text) => json!(text.replace(root, "<skills>")),
+            // Windows paths use `\`; the reference output was recorded with `/`.
+            Value::String(text) => json!(crate::paths::forward_slashes_after(
+                &text.replace(root, "<skills>"),
+                "<skills>"
+            )),
             Value::Array(items) => {
                 let mut items: Vec<Value> = items.iter().map(|i| normalize(i, root)).collect();
                 if !items.is_empty() && items.iter().all(Value::is_string) {
@@ -1772,12 +1777,17 @@ mod reference_tests {
                 skills_dir.join(relative)
             };
             fs::create_dir_all(target.parent().unwrap()).unwrap();
-            fs::write(target, text.as_str().unwrap()).unwrap();
+            let mut text = text.as_str().unwrap().to_owned();
+            if cfg!(windows) {
+                // `winonly` is the "another OS" skill: on Windows it is the Linux one that is foreign.
+                text = text.replace("platforms: [windows]", "platforms: [linux]");
+            }
+            fs::write(target, text).unwrap();
         }
         let config: Yaml = serde_yaml::from_str(fixture["config"].as_str().unwrap()).unwrap();
         let settings = SkillSettings::from_config(&config["skills"]);
         let catalog = SkillCatalog::load(Some(home.path()), home.path(), &settings, true, true);
-        let root = skills_dir.canonicalize().unwrap().display().to_string();
+        let root = skills_dir.canonical().unwrap().display().to_string();
         for case in fixture["cases"].as_array().unwrap() {
             let arguments = case["arguments"].to_string();
             let ours = match case["kind"].as_str().unwrap() {
@@ -1825,7 +1835,10 @@ mod reference_tests {
         )
         .unwrap();
         let config: Yaml = serde_yaml::from_str("demo: {flag: true, count: 0, on: yes}").unwrap();
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = crate::paths::home_dir()
+            .unwrap_or_default()
+            .display()
+            .to_string();
         let values = skill_config_values(&metadata, &config);
         assert_eq!(
             values,

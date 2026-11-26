@@ -121,6 +121,13 @@ fn website_policy_helpers_and_blocklist_match_reference_corpus() {
         .unwrap_or_else(|_| home.path().to_path_buf())
         .display()
         .to_string();
+    let home_str = hermes_runtime::paths::simplify(home_str.into())
+        .display()
+        .to_string();
+    // Windows spells the shared-file path with `\`; the reference output uses `/`.
+    let scrub = |text: &str| {
+        hermes_runtime::paths::forward_slashes_after(&text.replace(&home_str, "<HOME>"), "<HOME>")
+    };
 
     for case in wp["check_cases"].as_array().unwrap() {
         let url = case["url"].as_str().unwrap();
@@ -129,8 +136,8 @@ fn website_policy_helpers_and_blocklist_match_reference_corpus() {
                 "url": b.url,
                 "host": b.host,
                 "rule": b.rule,
-                "source": b.source.replace(&home_str, "<HOME>"),
-                "message": b.message.replace(&home_str, "<HOME>"),
+                "source": scrub(&b.source),
+                "message": scrub(&b.message),
             })
         });
         let actual_val = actual.unwrap_or(Value::Null);

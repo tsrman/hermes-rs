@@ -1,3 +1,4 @@
+use crate::paths::PathExt;
 use std::collections::HashMap;
 use std::future::Future;
 use std::io::Read;
@@ -112,8 +113,7 @@ impl Observation {
 
 impl<'a> FileWorkspace<'a> {
     pub(crate) fn new(root: &'a Path, profile: Option<&Path>) -> Self {
-        let cache_home =
-            profile.map(|path| path.canonicalize().unwrap_or_else(|_| path.to_owned()));
+        let cache_home = profile.map(|path| path.canonical().unwrap_or_else(|_| path.to_owned()));
         let mut protected_profiles = Vec::new();
         let mut push_profile = |path: PathBuf| {
             let store = match path.parent() {
@@ -122,7 +122,7 @@ impl<'a> FileWorkspace<'a> {
                 }
                 _ => path,
             };
-            if let Ok(canon) = store.canonicalize() {
+            if let Ok(canon) = store.canonical() {
                 if !protected_profiles.contains(&canon) {
                     protected_profiles.push(canon);
                 }
@@ -190,13 +190,9 @@ impl<'a> FileWorkspace<'a> {
             Ok(found) => found,
             Err(error) if error.contains("No such file") => {
                 // A path that does not exist: name similar files, but only inside the workspace.
-                let candidate = self
-                    .root
-                    .canonicalize()
-                    .map_err(|e| e.to_string())?
-                    .join(path);
+                let candidate = self.root.canonical().map_err(|e| e.to_string())?.join(path);
                 self.check_path(
-                    &self.root.canonicalize().map_err(|e| e.to_string())?,
+                    &self.root.canonical().map_err(|e| e.to_string())?,
                     &candidate,
                 )?;
                 return Ok(similar_files(path, &candidate));
@@ -443,15 +439,17 @@ impl<'a> FileWorkspace<'a> {
     }
 
     pub(crate) fn resolve(&self, path: &str) -> Result<(PathBuf, PathBuf), String> {
-        let root = self
-            .root
-            .canonicalize()
-            .map_err(|error| error.to_string())?;
+        let root = self.root.canonical().map_err(|error| error.to_string())?;
         let requested = root.join(path);
         self.check_path(&root, &requested)?;
-        let resolved = requested
-            .canonicalize()
-            .map_err(|error| error.to_string())?;
+        let resolved = requested.canonical().map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                // Windows words this differently; the read tool keys its "File not found" answer on it.
+                "No such file or directory (os error 2)".to_owned()
+            } else {
+                error.to_string()
+            }
+        })?;
         self.check_path(&root, &resolved)?;
         Ok((root, resolved))
     }
@@ -478,9 +476,9 @@ impl<'a> FileWorkspace<'a> {
         }
         let home = self.cache_home.as_ref()?;
         let cache = home.join("cache");
-        let resolved = requested.canonicalize().ok()?;
+        let resolved = requested.canonical().ok()?;
         for subdir in ["spillover", "documents"] {
-            let Ok(allowed) = cache.join(subdir).canonicalize() else {
+            let Ok(allowed) = cache.join(subdir).canonical() else {
                 continue;
             };
             if let Ok(rel) = resolved.strip_prefix(&allowed) {
@@ -635,10 +633,7 @@ impl<'a> FileWorkspace<'a> {
     }
 
     fn write_target(&self, path: &str) -> Result<platform::Target, String> {
-        let root = self
-            .root
-            .canonicalize()
-            .map_err(|error| error.to_string())?;
+        let root = self.root.canonical().map_err(|error| error.to_string())?;
         let target = root.join(path);
         self.check_path(&root, &target)?;
         if [
@@ -1162,7 +1157,11 @@ mod tests {
         assert_eq!(result["dirs_created"], false);
         let seen = shown.lock().unwrap().clone();
         assert!(
-            seen[0].contains("creates directories: new, new/deep"),
+            // The directory list is joined with the platform separator, as the reference does.
+            seen[0].contains(&format!(
+                "creates directories: new, new{}deep",
+                std::path::MAIN_SEPARATOR
+            )),
             "{seen:?}"
         );
         // Broken JSON is flagged by the syntax check, not refused.

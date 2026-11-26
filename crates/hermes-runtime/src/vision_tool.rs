@@ -2,9 +2,10 @@
 //! it natively to the main model via the multimodal tool-result envelope or analyze it via a
 //! configured `auxiliary.vision` route.
 
+use crate::paths::PathExt;
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -93,8 +94,9 @@ fn load_local_image(
 ) -> Result<LoadedImage, String> {
     let trimmed = raw_path.trim();
     let candidate = if let Some(rest) = trimmed.strip_prefix("~/") {
-        let home = std::env::var_os("HOME").ok_or("Cannot expand '~': HOME is not set")?;
-        PathBuf::from(home).join(rest)
+        let home =
+            crate::paths::home_dir().ok_or("Cannot expand '~': the home directory is not set")?;
+        home.join(rest)
     } else {
         let p = Path::new(trimmed);
         if p.is_absolute() {
@@ -104,17 +106,15 @@ fn load_local_image(
         }
     };
     let canonical = candidate
-        .canonicalize()
+        .canonical()
         .map_err(|e| format!("Image file not found ({trimmed}): {e}"))?;
-    let canon_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let canon_root = root.canonical().unwrap_or_else(|_| root.to_path_buf());
     let allowed_in_root = canonical.starts_with(&canon_root);
-    let allowed_in_cache = profile
-        .and_then(|p| p.canonicalize().ok())
-        .is_some_and(|p| {
-            canonical.starts_with(p.join("cache").join("images"))
-                || canonical.starts_with(p.join("cache").join("documents"))
-                || canonical.starts_with(p.join("cache").join("spillover"))
-        });
+    let allowed_in_cache = profile.and_then(|p| p.canonical().ok()).is_some_and(|p| {
+        canonical.starts_with(p.join("cache").join("images"))
+            || canonical.starts_with(p.join("cache").join("documents"))
+            || canonical.starts_with(p.join("cache").join("spillover"))
+    });
     if !allowed_in_root && !allowed_in_cache {
         return Err(format!(
             "Refusing to read image outside working directory or profile cache: {trimmed}"

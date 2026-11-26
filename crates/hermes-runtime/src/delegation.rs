@@ -8,6 +8,7 @@
 //! returns when all have finished; background dispatch and the `list`/`steer`/`stop`/`continue`
 //! actions are not ported.
 
+use crate::paths::PathExt;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1060,7 +1061,7 @@ pub(crate) fn call<'a>(
             let workspace = cx
                 .options
                 .root
-                .canonicalize()
+                .canonical()
                 .unwrap_or_else(|_| cx.options.root.to_path_buf())
                 .display()
                 .to_string();
@@ -1121,7 +1122,7 @@ pub(crate) fn call<'a>(
         let workspace = cx
             .options
             .root
-            .canonicalize()
+            .canonical()
             .unwrap_or_else(|_| cx.options.root.to_path_buf())
             .display()
             .to_string();

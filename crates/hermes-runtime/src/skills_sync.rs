@@ -8,6 +8,7 @@
 //! - Respecting `<profile>/.no-bundled-skills` opt-out and `<profile>/skills/.bundled_manifest`
 //!   so user edits and intentional deletions are never silently overwritten unless `force = true`.
 
+use crate::paths::PathExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
@@ -117,11 +118,11 @@ pub fn detect_sibling_skills_dir(home: &Path) -> Option<(PathBuf, usize)> {
     let user_home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)?;
-    let current_canon = home.canonicalize().ok();
+    let current_canon = home.canonical().ok();
     for candidate_root in [user_home.join(".hermes"), user_home.join(".hsr")] {
         if current_canon
             .as_ref()
-            .is_some_and(|cur| candidate_root.canonicalize().ok().as_ref() == Some(cur))
+            .is_some_and(|cur| candidate_root.canonical().ok().as_ref() == Some(cur))
         {
             continue;
         }

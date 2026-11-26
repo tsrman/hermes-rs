@@ -2,6 +2,7 @@
 //! `@git:N`, `@url:`), workspace `@` completion, `/<skill-name>` skill slash-command lookup,
 //! and `!<command>` local shell escape.
 
+use crate::paths::PathExt;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -572,10 +573,10 @@ fn resolve_scoped_path(root: &Path, raw: &str) -> Result<PathBuf, String> {
         root.join(candidate)
     };
     let canon_root = root
-        .canonicalize()
+        .canonical()
         .map_err(|e| format!("cannot resolve workspace root: {e}"))?;
     let canon_target = joined
-        .canonicalize()
+        .canonical()
         .map_err(|_| format!("path '{trimmed}' not found"))?;
     if !canon_target.starts_with(&canon_root) {
         return Err(format!("path '{trimmed}' is outside the workspace root"));
@@ -799,7 +800,7 @@ static SKILL_COMMANDS_CACHE: LazyLock<Mutex<HashMap<PathBuf, CachedSkillCommands
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn cache_key(home: &Path) -> PathBuf {
-    home.canonicalize().unwrap_or_else(|_| home.to_path_buf())
+    home.canonical().unwrap_or_else(|_| home.to_path_buf())
 }
 
 fn scan_skill_commands(home: &Path) -> Vec<SkillCommandEntry> {

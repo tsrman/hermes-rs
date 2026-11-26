@@ -5,6 +5,7 @@
 //! own `config.yaml`): then every assignment pass runs. Defense in depth, not a boundary:
 //! indirect reads (`sudo cat .env`, `$(cat .env)`) are not detected.
 
+use crate::paths::PathExt;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -228,11 +229,11 @@ fn under_hermes_home(path: &str, homes: &[&Path]) -> bool {
         Some(rest) => std::env::home_dir().map(|home| home.join(rest)),
         None => Some(std::path::PathBuf::from(path)),
     };
-    let Some(target) = expanded.map(|p| p.canonicalize().unwrap_or(p)) else {
+    let Some(target) = expanded.map(|p| crate::paths::canonical_lenient(&p)) else {
         return false;
     };
     homes.iter().any(|home| {
-        let base = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+        let base = home.canonical().unwrap_or_else(|_| home.to_path_buf());
         target.starts_with(&base)
     })
 }

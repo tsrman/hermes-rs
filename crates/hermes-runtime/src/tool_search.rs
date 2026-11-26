@@ -1104,6 +1104,9 @@ mod tests {
             .collect()
     }
 
+    // The fixture lists the Linux tool set, including terminal and process_manage, which Windows
+    // does not offer (see `process_stub`), so its tool counts and answers differ there by design.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn the_bridge_is_assembled_as_the_reference_assembles_it() {
         for case in fixture()["assemble"].as_array().unwrap() {
@@ -1121,6 +1124,9 @@ mod tests {
         }
     }
 
+    // The fixture lists the Linux tool set, including terminal and process_manage, which Windows
+    // does not offer (see `process_stub`), so its tool counts and answers differ there by design.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn searches_match_the_reference() {
         for case in fixture()["search"].as_array().unwrap() {
@@ -1137,6 +1143,9 @@ mod tests {
         }
     }
 
+    // The fixture lists the Linux tool set, including terminal and process_manage, which Windows
+    // does not offer (see `process_stub`), so its tool counts and answers differ there by design.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn descriptions_match_the_reference() {
         for case in fixture()["describe"].as_array().unwrap() {
@@ -1153,6 +1162,9 @@ mod tests {
         }
     }
 
+    // The fixture lists the Linux tool set, including terminal and process_manage, which Windows
+    // does not offer (see `process_stub`), so its tool counts and answers differ there by design.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn calls_resolve_as_the_reference_resolves_them() {
         for case in fixture()["call"].as_array().unwrap() {

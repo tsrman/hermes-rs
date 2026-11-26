@@ -2,6 +2,7 @@
 //! `shared_files`), ported from `tools/website_policy.py` and verified against
 //! `crates/hermes-runtime/tests/fixtures/web_remainder_cases.json`.
 
+use crate::paths::PathExt;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -240,9 +241,9 @@ impl WebsitePolicy {
                         expanded
                     } else if let Some(home_dir) = home {
                         let joined = home_dir.join(&expanded);
-                        joined.canonicalize().unwrap_or(joined)
+                        joined.canonical().unwrap_or(joined)
                     } else {
-                        expanded.canonicalize().unwrap_or(expanded)
+                        expanded.canonical().unwrap_or(expanded)
                     };
                     let source = resolved.display().to_string();
                     for norm in read_blocklist_file_rules(&resolved) {

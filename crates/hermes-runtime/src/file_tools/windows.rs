@@ -1,3 +1,4 @@
+use crate::paths::PathExt;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -264,7 +265,7 @@ fn inspect_existing_prefix(
     root: &Path,
     relative: &Path,
 ) -> Result<(PathBuf, Vec<OsString>), String> {
-    let root_canon = root.canonicalize().map_err(error)?;
+    let root_canon = root.canonical().map_err(error)?;
     let mut current = root.to_owned();
     let mut components = relative.components();
     let mut pending: Vec<OsString> = Vec::new();
@@ -281,7 +282,7 @@ fn inspect_existing_prefix(
                 if !meta.is_dir() {
                     return Err("A path component is not a directory".into());
                 }
-                let canon = current.canonicalize().map_err(error)?;
+                let canon = current.canonical().map_err(error)?;
                 if !canon.starts_with(&root_canon) {
                     return Err("Path is outside the working directory".into());
                 }
@@ -306,7 +307,7 @@ fn inspect_existing_prefix(
 /// Verify that every parent directory between `root` and `path` exists as a real non-reparse
 /// directory inside `root`.
 fn verify_existing_chain(root: &Path, path: &Path, require_file: bool) -> Result<(), String> {
-    let root_canon = root.canonicalize().map_err(error)?;
+    let root_canon = root.canonical().map_err(error)?;
     let relative = path
         .strip_prefix(root)
         .map_err(|_| "Path is outside the working directory")?;
@@ -328,12 +329,12 @@ fn verify_existing_chain(root: &Path, path: &Path, require_file: bool) -> Result
             return Err("A path component is not a directory".into());
         }
     }
-    let parent_canon = current.canonicalize().map_err(error)?;
+    let parent_canon = current.canonical().map_err(error)?;
     if !parent_canon.starts_with(&root_canon) {
         return Err("Path is outside the working directory".into());
     }
     if require_file {
-        let file_canon = path.canonicalize().map_err(error)?;
+        let file_canon = path.canonical().map_err(error)?;
         if !file_canon.starts_with(&root_canon) {
             return Err("Path is outside the working directory".into());
         }
@@ -344,7 +345,7 @@ fn verify_existing_chain(root: &Path, path: &Path, require_file: bool) -> Result
 /// Cross-process per-directory write lock stored in the OS temp directory so workspace directories
 /// stay clean.
 fn lock_directory(parent_dir: &Path) -> Result<File, String> {
-    let canon = parent_dir.canonicalize().map_err(error)?;
+    let canon = parent_dir.canonical().map_err(error)?;
     let hash = digest(&SHA256, canon.to_string_lossy().as_bytes());
     let mut hex = String::with_capacity(32);
     for byte in &hash.as_ref()[..16] {
