@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """Record the tool-search bridge (tool_search / tool_describe / tool_call) from the Python reference.
 
-Usage: create_tool_search_fixture.py <reference checkout> <registry.json> <cases.json>
+Usage: create_tool_search_fixture.py [--windows] <reference checkout> <registry.json> <cases.json>
 Run it with the reference interpreter. `registry.json` holds what the bridge reads from the
 registry (each tool's toolset, the core tool names, the GUI-surface toolsets); `cases.json` holds,
 for sample configurations over the tools the Rust CLI implements, the assembled bridge schemas,
 search and describe results, and the outcome of tool_call resolution and validation.
+
+With --windows the cases cover the tool set the Rust CLI offers on Windows, which has no
+process_manage (see `process_stub.rs`); the configurations and arguments stay the same.
+
+The Rust CLI checks deferred calls the way the reference does without jsonschema installed (required
+arguments only), so the script hides jsonschema from the reference whether or not it is installed.
 """
 
 import json
@@ -94,9 +100,17 @@ CALL_ARGS = [
 
 
 def main():
-    reference = Path(sys.argv[1]).resolve()
-    registry_out = Path(sys.argv[2]).resolve()
-    cases_out = Path(sys.argv[3]).resolve()
+    args = sys.argv[1:]
+    windows = "--windows" in args
+    args = [arg for arg in args if arg != "--windows"]
+    if len(args) != 3:
+        raise SystemExit(__doc__)
+    implemented = IMPLEMENTED - {"process_manage"} if windows else IMPLEMENTED
+    reference = Path(args[0]).resolve()
+    registry_out = Path(args[1]).resolve()
+    cases_out = Path(args[2]).resolve()
+    for module in ("jsonschema", "jsonschema.exceptions", "jsonschema.validators"):
+        sys.modules[module] = None
     home = tempfile.mkdtemp()
     os.environ["HERMES_HOME"] = home
     sys.path.insert(0, str(reference))
@@ -117,8 +131,8 @@ def main():
     enabled = sorted(_get_platform_tools({}, "cli"))
     all_defs = model_tools.get_tool_definitions(enabled_toolsets=enabled, quiet_mode=True,
                                                 skip_tool_search_assembly=True)
-    defs = [d for d in all_defs if d["function"]["name"] in IMPLEMENTED]
-    assert {d["function"]["name"] for d in defs} == IMPLEMENTED, "reference lacks some implemented tools"
+    defs = [d for d in all_defs if d["function"]["name"] in implemented]
+    assert {d["function"]["name"] for d in defs} == implemented, "reference lacks some implemented tools"
 
     def configure(raw):
         text = "" if raw is None else "tools:\n  tool_search: %s\n" % json.dumps(raw)

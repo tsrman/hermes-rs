@@ -1068,18 +1068,32 @@ mod tests {
     use crate::tool_policy::ToolPolicy;
     use crate::web_tools::{Backend, WebSettings};
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn fixture() -> Value {
-        serde_json::from_str(include_str!("../tests/fixtures/tool_search_cases.json")).unwrap()
+    /// The recorded cases, each with the tools hidden to reproduce the tool set it was recorded
+    /// over. The Windows cases lack process_manage, which Windows does not offer (see
+    /// `process_stub`); hiding it lets Linux and macOS check them too.
+    fn fixtures() -> Vec<(Value, &'static [&'static str])> {
+        let windows = include_str!("../tests/fixtures/tool_search_cases_windows.json");
+        let mut fixtures = vec![(
+            serde_json::from_str(windows).unwrap(),
+            &["process_manage"][..],
+        )];
+        if crate::terminal::SUPPORTED {
+            let unix = include_str!("../tests/fixtures/tool_search_cases.json");
+            fixtures.push((serde_json::from_str(unix).unwrap(), &[][..]));
+        }
+        fixtures
     }
 
-    /// Every implemented tool on, with the profile's `tools.tool_search` set as recorded.
-    fn env(raw: &Value) -> ToolEnv {
+    /// Every implemented tool on except `hidden`, with the profile's `tools.tool_search` set as
+    /// recorded.
+    fn env(raw: &Value, hidden: &[&str]) -> ToolEnv {
         let config: serde_yaml::Value = if raw.is_null() {
             serde_yaml::Value::Null
         } else {
             serde_yaml::from_str(&json!({"tools": {"tool_search": raw}}).to_string()).unwrap()
         };
+        // Exclude cronjob_manage from the 17-tool fixtures recorded before it was added.
+        let hidden: Vec<&str> = ["cronjob_manage"].iter().chain(hidden).copied().collect();
         ToolEnv {
             write_files: true,
             terminal: true,
@@ -1092,13 +1106,11 @@ mod tests {
                 extract: Backend::Tavily,
                 ..WebSettings::default()
             }),
-            // Exclude cronjob_manage from the 17-tool fixture recorded before it was added.
-            policy: ToolPolicy::from_config(&config).without_tools(&["cronjob_manage"]),
+            policy: ToolPolicy::from_config(&config).without_tools(&hidden),
             ..ToolEnv::default()
         }
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn names(tools: &[Value]) -> Vec<String> {
         tools
             .iter()
@@ -1106,89 +1118,93 @@ mod tests {
             .collect()
     }
 
-    // The fixture lists the Linux tool set, including terminal and process_manage, which Windows
-    // does not offer (see `process_stub`), so its tool counts and answers differ there by design.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn the_bridge_is_assembled_as_the_reference_assembles_it() {
-        for case in fixture()["assemble"].as_array().unwrap() {
-            let label = case["name"].as_str().unwrap();
-            let env = env(&case["config"]);
-            let mut ours = crate::tools::offered_schemas(&env);
-            crate::tools::sort_by_name(&mut ours);
-            crate::tools::append_bridge(&env, &mut ours);
-            let expected: Vec<Value> = case["tools"].as_array().unwrap().clone();
-            assert_eq!(names(&ours), names(&expected), "{label}: tool names");
-            if case["activated"] == json!(true) {
-                let count = ours.len();
-                assert_eq!(ours[count - 3..], expected[count - 3..], "{label}: bridge");
+        for (fixture, hidden) in fixtures() {
+            for case in fixture["assemble"].as_array().unwrap() {
+                let label = case["name"].as_str().unwrap();
+                let env = env(&case["config"], hidden);
+                let mut ours = crate::tools::offered_schemas(&env);
+                crate::tools::sort_by_name(&mut ours);
+                crate::tools::append_bridge(&env, &mut ours);
+                let expected: Vec<Value> = case["tools"].as_array().unwrap().clone();
+                assert_eq!(
+                    names(&ours),
+                    names(&expected),
+                    "{label} {hidden:?}: tool names"
+                );
+                if case["activated"] == json!(true) {
+                    let count = ours.len();
+                    assert_eq!(
+                        ours[count - 3..],
+                        expected[count - 3..],
+                        "{label} {hidden:?}: bridge"
+                    );
+                }
             }
         }
     }
 
-    // The fixture lists the Linux tool set, including terminal and process_manage, which Windows
-    // does not offer (see `process_stub`), so its tool counts and answers differ there by design.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn searches_match_the_reference() {
-        for case in fixture()["search"].as_array().unwrap() {
-            let env = env(&case["config"]);
-            let answer = match dispatch(&env, TOOL_SEARCH, &case["arguments"].to_string()) {
-                Some(Bridged::Done(answer)) => answer,
-                _ => panic!("tool_search answers itself"),
-            };
-            assert_eq!(
-                answer, case["result"],
-                "{} {}",
-                case["config"], case["arguments"]
-            );
+        for (fixture, hidden) in fixtures() {
+            for case in fixture["search"].as_array().unwrap() {
+                let env = env(&case["config"], hidden);
+                let answer = match dispatch(&env, TOOL_SEARCH, &case["arguments"].to_string()) {
+                    Some(Bridged::Done(answer)) => answer,
+                    _ => panic!("tool_search answers itself"),
+                };
+                assert_eq!(
+                    answer, case["result"],
+                    "{} {} {hidden:?}",
+                    case["config"], case["arguments"]
+                );
+            }
         }
     }
 
-    // The fixture lists the Linux tool set, including terminal and process_manage, which Windows
-    // does not offer (see `process_stub`), so its tool counts and answers differ there by design.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn descriptions_match_the_reference() {
-        for case in fixture()["describe"].as_array().unwrap() {
-            let env = env(&case["config"]);
-            let answer = match dispatch(&env, TOOL_DESCRIBE, &case["arguments"].to_string()) {
-                Some(Bridged::Done(answer)) => answer,
-                _ => panic!("tool_describe answers itself"),
-            };
-            assert_eq!(
-                answer, case["result"],
-                "{} {}",
-                case["config"], case["arguments"]
-            );
+        for (fixture, hidden) in fixtures() {
+            for case in fixture["describe"].as_array().unwrap() {
+                let env = env(&case["config"], hidden);
+                let answer = match dispatch(&env, TOOL_DESCRIBE, &case["arguments"].to_string()) {
+                    Some(Bridged::Done(answer)) => answer,
+                    _ => panic!("tool_describe answers itself"),
+                };
+                assert_eq!(
+                    answer, case["result"],
+                    "{} {} {hidden:?}",
+                    case["config"], case["arguments"]
+                );
+            }
         }
     }
 
-    // The fixture lists the Linux tool set, including terminal and process_manage, which Windows
-    // does not offer (see `process_stub`), so its tool counts and answers differ there by design.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn calls_resolve_as_the_reference_resolves_them() {
-        for case in fixture()["call"].as_array().unwrap() {
-            let env = env(&case["config"]);
-            let outcome = match dispatch(&env, TOOL_CALL, &case["arguments"].to_string()) {
-                Some(Bridged::Done(answer)) => answer,
-                Some(Bridged::Call { name, arguments }) => {
-                    json!({"call": name, "arguments": serde_json::from_str::<Value>(&arguments).unwrap()})
-                }
-                None => panic!("the bridge is active"),
-            };
-            assert_eq!(
-                outcome, case["outcome"],
-                "{} {}",
-                case["config"], case["arguments"]
-            );
+        for (fixture, hidden) in fixtures() {
+            for case in fixture["call"].as_array().unwrap() {
+                let env = env(&case["config"], hidden);
+                let outcome = match dispatch(&env, TOOL_CALL, &case["arguments"].to_string()) {
+                    Some(Bridged::Done(answer)) => answer,
+                    Some(Bridged::Call { name, arguments }) => {
+                        json!({"call": name, "arguments": serde_json::from_str::<Value>(&arguments).unwrap()})
+                    }
+                    None => panic!("the bridge is active"),
+                };
+                assert_eq!(
+                    outcome, case["outcome"],
+                    "{} {} {hidden:?}",
+                    case["config"], case["arguments"]
+                );
+            }
         }
     }
 
     #[test]
     fn nothing_deferred_means_no_bridge() {
-        let env = env(&json!({"defer": []}));
+        let env = env(&json!({"defer": []}), &[]);
         assert!(bridge_for(&env).is_empty());
         assert!(dispatch(&env, TOOL_SEARCH, "{}").is_none());
     }
