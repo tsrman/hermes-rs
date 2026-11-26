@@ -374,7 +374,15 @@ impl Skills<'_> {
                     if let Ok(resolved) = dir.canonical() {
                         if resolved
                             .strip_prefix(&local_resolved)
-                            .is_ok_and(|relative| relative.to_string_lossy() == name)
+                            .is_ok_and(|relative| {
+                                // `category/name` and `category\name` name the same skill on Windows.
+                                let (relative, name) = (relative.to_string_lossy(), name);
+                                if cfg!(windows) {
+                                    relative.replace('\\', "/") == name.replace('\\', "/")
+                                } else {
+                                    relative == name
+                                }
+                            })
                         {
                             return Some(dir);
                         }
