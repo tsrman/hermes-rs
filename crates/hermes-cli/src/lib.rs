@@ -17,6 +17,7 @@ mod setup;
 mod ui;
 
 #[derive(Parser)]
+#[command(name = "hsr", version)]
 struct Cli {
     #[arg(short = 'p', long, global = true)]
     profile: Option<String>,

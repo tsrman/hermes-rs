@@ -904,6 +904,39 @@ pub async fn run_doctor(home: &Path, args: DoctorArgs) -> Result<u8, String> {
                     });
                 }
 
+                if settings.provider == "custom" {
+                    if let (Some(url), Some(model)) =
+                        (settings.base_url.as_deref(), settings.model.as_deref())
+                    {
+                        if let Some((name, keys)) = hermes_runtime::config::custom_extra_body_source(
+                            &settings.custom_providers,
+                            url,
+                            model,
+                        ) {
+                            checks.push(DoctorCheck {
+                                name: "extra_body".into(),
+                                status: "ok",
+                                detail: format!(
+                                    "applied from providers.{name} (keys: {})",
+                                    keys.join(", ")
+                                ),
+                            });
+                        }
+                        for message in hermes_runtime::config::custom_endpoint_warnings(
+                            &settings.misplaced_keys,
+                            &settings.custom_providers,
+                            url,
+                            model,
+                        ) {
+                            checks.push(DoctorCheck {
+                                name: "endpoint".into(),
+                                status: "warn",
+                                detail: message,
+                            });
+                        }
+                    }
+                }
+
                 let (cred_ok, cred_detail) = check_provider_credentials(home, &settings);
                 if !cred_ok {
                     has_error = true;
