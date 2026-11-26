@@ -14,7 +14,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.95"
+rust-version = "1.100"
 
 # The approval detector compiles ~160 patterns on first use and scans every command with them.
 # Optimising the regex crates keeps that fast in debug builds too (tests, local runs); release is unchanged.

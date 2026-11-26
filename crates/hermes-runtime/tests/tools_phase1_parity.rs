@@ -248,6 +248,7 @@ async fn search_files_returns_absolute_paths_when_given_absolute_path_inside_wor
     assert_eq!(results[2]["matches"][0]["path"], json!("sub/note.txt"));
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn write_file_and_patch_leave_no_temp_files_and_preserve_permissions() {
     use std::os::unix::fs::PermissionsExt;
