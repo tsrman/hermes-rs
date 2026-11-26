@@ -204,6 +204,9 @@ pub struct ChatSettings {
     pub default_headers: Vec<(String, String)>,
     /// `providers` / `custom_providers` entries that may carry an `extra_body`.
     pub custom_providers: Vec<CustomProvider>,
+    /// Config keys that look like request-body or reasoning settings but are not read there
+    /// (see `misplaced_endpoint_keys`); reported as startup warnings.
+    pub misplaced_keys: Vec<String>,
     /// `model_overrides`: context windows by provider and model.
     pub model_overrides: ModelOverrides,
     pub api_max_attempts: u32,
@@ -328,6 +331,7 @@ impl Default for ChatSettings {
             delegation_route: AuxiliaryRoute::default(),
             default_headers: Vec::new(),
             custom_providers: Vec::new(),
+            misplaced_keys: Vec::new(),
             model_overrides: ModelOverrides::default(),
             api_max_attempts: 3,
             max_turns: 90,
@@ -635,6 +639,7 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
         crate::stall_guards::IntentAckContinuation::from_config(&config);
     settings.reasoning = crate::reasoning::ReasoningSettings::from_config(&config);
     settings.custom_providers = custom_providers(&config);
+    settings.misplaced_keys = misplaced_endpoint_keys(&config);
     settings.model_overrides = ModelOverrides::from_config(&config);
     let mut named_key_env = None;
     if let Some(model) = config.get("model") {
@@ -1614,27 +1619,126 @@ pub fn custom_extra_headers(entries: &[CustomProvider], base_url: &str) -> Vec<(
         .unwrap_or_default()
 }
 
-/// The `extra_body` for the `custom` provider at `base_url` running `model`: the first entry
-/// that names this model (or lists it in its catalog), else the first entry without a model.
+/// The entry whose `extra_body` applies to the `custom` provider at `base_url` running `model`:
+/// the first entry that names this model (or lists it in its catalog), else the first entry
+/// without a model.
+fn extra_body_entry<'a>(
+    entries: &'a [CustomProvider],
+    base_url: &str,
+    model: &str,
+) -> Option<&'a CustomProvider> {
+    let target = base_url.trim().trim_end_matches('/');
+    let model = model.trim().to_lowercase();
+    let mut fallback = None;
+    for entry in entries.iter().filter(|entry| entry.base_url == target) {
+        if entry.extra_body.is_none() || !entry.enabled {
+            continue;
+        }
+        if entry.model.is_empty() {
+            fallback.get_or_insert(entry);
+        } else if entry.catalog.contains(&model) || entry.model.to_lowercase() == model {
+            return Some(entry);
+        }
+    }
+    fallback
+}
+
+/// The `extra_body` for the `custom` provider at `base_url` running `model`.
 pub fn custom_extra_body(
     entries: &[CustomProvider],
     base_url: &str,
     model: &str,
 ) -> Option<serde_json::Map<String, serde_json::Value>> {
-    let target = base_url.trim().trim_end_matches('/');
-    let model = model.trim().to_lowercase();
-    let mut fallback = None;
-    for entry in entries.iter().filter(|entry| entry.base_url == target) {
-        let Some(extra_body) = entry.extra_body.as_ref().filter(|_| entry.enabled) else {
-            continue;
-        };
-        if entry.model.is_empty() {
-            fallback.get_or_insert(extra_body);
-        } else if entry.catalog.contains(&model) || entry.model.to_lowercase() == model {
-            return Some(extra_body.clone());
+    extra_body_entry(entries, base_url, model).and_then(|entry| entry.extra_body.clone())
+}
+
+/// The name of the entry supplying the applied `extra_body` and the top-level keys of that body
+/// (never the values).
+pub fn custom_extra_body_source(
+    entries: &[CustomProvider],
+    base_url: &str,
+    model: &str,
+) -> Option<(String, Vec<String>)> {
+    let entry = extra_body_entry(entries, base_url, model)?;
+    let keys = entry.extra_body.as_ref()?.keys().cloned().collect();
+    Some((entry.key.clone(), keys))
+}
+
+/// Keys the reference does not read but users expect to work: `extra_body`, `extras` and
+/// `api_kwargs` under `model:` or at the top level, and `reasoning.effort` / `model.reasoning_effort`.
+pub fn misplaced_endpoint_keys(config: &serde_yaml::Value) -> Vec<String> {
+    let mut found = Vec::new();
+    for key in ["extra_body", "extras", "api_kwargs"] {
+        if config
+            .get("model")
+            .is_some_and(|model| model.get(key).is_some())
+        {
+            found.push(format!("model.{key}"));
+        }
+        if config.get(key).is_some() {
+            found.push(key.to_owned());
         }
     }
-    fallback.cloned()
+    if config
+        .get("model")
+        .is_some_and(|model| model.get("reasoning_effort").is_some())
+    {
+        found.push("model.reasoning_effort".to_owned());
+    }
+    if config
+        .get("reasoning")
+        .is_some_and(|reasoning| reasoning.get("effort").is_some())
+    {
+        found.push("reasoning.effort".to_owned());
+    }
+    found
+}
+
+/// Warnings for a `custom` (or named custom) route whose configured request fields would not be
+/// sent. Names and URLs only; never keys or header values.
+pub fn custom_endpoint_warnings(
+    misplaced: &[String],
+    entries: &[CustomProvider],
+    base_url: &str,
+    model: &str,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let active = base_url.trim().trim_end_matches('/');
+    for key in misplaced {
+        if key == "reasoning.effort" || key == "model.reasoning_effort" {
+            warnings.push(format!(
+                "{key} is not used; set agent.reasoning_effort (or agent.reasoning_overrides) instead."
+            ));
+        } else {
+            warnings.push(format!(
+                "{key} in config.yaml is not sent to the endpoint; put it under providers.<name>.extra_body (or custom_providers[].extra_body) with a base_url equal to the active one ({active})."
+            ));
+        }
+    }
+    if extra_body_entry(entries, base_url, model).is_none() {
+        let unmatched: Vec<String> = entries
+            .iter()
+            .filter(|entry| entry.enabled && entry.extra_body.is_some())
+            .map(|entry| {
+                if entry.base_url == active {
+                    format!(
+                        "providers.{} ({}, model {})",
+                        entry.key, entry.base_url, entry.model
+                    )
+                } else {
+                    format!("providers.{} ({})", entry.key, entry.base_url)
+                }
+            })
+            .collect();
+        if !unmatched.is_empty() {
+            warnings.push(format!(
+                "extra_body of {} is not applied: the active base URL is {active} (model {}); an entry applies only when its base_url equals the active one and its model matches or is unset.",
+                unmatched.join(", "),
+                model.trim()
+            ));
+        }
+    }
+    warnings
 }
 
 #[cfg(test)]
@@ -1672,6 +1776,81 @@ mod expansion_tests {
 #[cfg(test)]
 mod custom_provider_tests {
     use super::*;
+
+    fn diagnostics(yaml: &str, url: &str, model: &str) -> Vec<String> {
+        let config: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        custom_endpoint_warnings(
+            &misplaced_endpoint_keys(&config),
+            &custom_providers(&config),
+            url,
+            model,
+        )
+    }
+
+    #[test]
+    fn misplaced_extra_body_is_reported_with_its_key() {
+        for key in ["extra_body", "extras", "api_kwargs"] {
+            let under_model = diagnostics(
+                &format!("model: {{default: m, {key}: {{a: 1}}}}\n"),
+                "http://h/v1",
+                "m",
+            );
+            assert_eq!(under_model.len(), 1, "{under_model:?}");
+            assert!(under_model[0].starts_with(&format!("model.{key} ")));
+            assert!(under_model[0].contains("providers.<name>.extra_body"));
+            assert!(under_model[0].contains("http://h/v1"));
+            let top = diagnostics(&format!("{key}: {{a: 1}}\n"), "http://h/v1", "m");
+            assert_eq!(top.len(), 1, "{top:?}");
+            assert!(top[0].starts_with(&format!("{key} ")));
+        }
+    }
+
+    #[test]
+    fn an_unmatched_entry_is_listed_against_the_active_url() {
+        let yaml = "providers:\n  polyus:\n    base_url: https://a/v1\n    api_key: SECRET\n    extra_body: {k: 1}\n  off:\n    enabled: false\n    base_url: https://b/v1\n    extra_body: {k: 2}\n";
+        let warnings = diagnostics(yaml, "http://127.0.0.1:18081/v1", "m");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("providers.polyus (https://a/v1)"));
+        assert!(warnings[0].contains("active base URL is http://127.0.0.1:18081/v1"));
+        assert!(!warnings[0].contains("off") && !warnings[0].contains("SECRET"));
+    }
+
+    #[test]
+    fn a_model_mismatch_on_the_active_url_is_reported() {
+        let yaml = "providers:\n  p:\n    base_url: https://a/v1\n    model: Qwen\n    extra_body: {k: 1}\n";
+        assert_eq!(
+            diagnostics(yaml, "https://a/v1/", "Qwen"),
+            Vec::<String>::new()
+        );
+        let warnings = diagnostics(yaml, "https://a/v1", "other");
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("providers.p (https://a/v1, model Qwen)"));
+    }
+
+    #[test]
+    fn reasoning_settings_point_to_the_agent_section() {
+        let warnings = diagnostics(
+            "reasoning: {effort: high}\nmodel: {reasoning_effort: low}\n",
+            "http://h/v1",
+            "m",
+        );
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings
+            .iter()
+            .all(|w| w.contains("agent.reasoning_effort")));
+    }
+
+    #[test]
+    fn correct_configs_are_silent() {
+        let ok = "providers:\n  p:\n    base_url: https://a/v1\n    extra_body: {k: 1}\nagent: {reasoning_effort: high}\n";
+        assert!(diagnostics(ok, "https://a/v1/", "m").is_empty());
+        let legacy = "custom_providers:\n  - {name: x, base_url: 'https://a/v1', model: m, extra_body: {k: 1}}\n";
+        assert!(diagnostics(legacy, "https://a/v1", "m").is_empty());
+        assert!(diagnostics("model: {default: m}\n", "https://a/v1", "m").is_empty());
+        let entries = custom_providers(&serde_yaml::from_str(ok).unwrap());
+        let source = custom_extra_body_source(&entries, "https://a/v1", "m");
+        assert_eq!(source, Some(("p".to_owned(), vec!["k".to_owned()])));
+    }
 
     fn entries(yaml: &str) -> Vec<CustomProvider> {
         custom_providers(&serde_yaml::from_str(yaml).unwrap())

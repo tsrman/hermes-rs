@@ -129,6 +129,24 @@ hsr profile check
 hsr sessions migrate --output /path/to/migrated-state.db
 ```
 
+### Custom Endpoints and `extra_body`
+
+Extra request fields for a `custom` endpoint (for example `chat_template_kwargs`) are read from the matching `providers.<name>.extra_body` (or `custom_providers[].extra_body`) entry, not from `model:` or the top level:
+
+```yaml
+model:
+  provider: custom
+  default: qwenflash
+  base_url: https://example.invalid/v1
+providers:
+  myendpoint:
+    base_url: https://example.invalid/v1
+    extra_body:
+      chat_template_kwargs: {enable_thinking: true}
+```
+
+An entry applies only when its `base_url` equals the active base URL (a trailing `/` is ignored), so overriding the URL with `--base-url`, `HERMES_BASE_URL` or a different `model.base_url` (for example a logging proxy) disables it. If the entry has a `model`, it must match the active model. Reasoning effort is set with `agent.reasoning_effort`. `hsr` warns at startup, and `hsr doctor` reports, when an `extra_body` is misplaced or not applied; `hsr --version` prints the build.
+
 ## CLI Commands
 
 | Command | Description |

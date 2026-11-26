@@ -102,11 +102,12 @@ class CliTest(unittest.TestCase):
         self.server.terminate()
         self.server.communicate(timeout=5)
 
-    def chat_with_profile(self, extra_config="", dotenv="", args=(), cwd=None, query="read the fixture"):
+    def chat_with_profile(self, extra_config="", dotenv="", args=(), cwd=None, query="read the fixture", model_extra=""):
         home = self.workdir / "hermes"
         home.mkdir(exist_ok=True)
         (home / "config.yaml").write_text(
             f"model:\n  default: primary\n  provider: custom\n  base_url: {self.base}/v1\n"
+            + model_extra
             + extra_config,
             encoding="utf-8",
         )
@@ -294,6 +295,49 @@ class CliTest(unittest.TestCase):
     def test_disabled_reasoning_sends_none(self):
         _, recorded = self.chat_with_profile(extra_config="agent:\n  reasoning_effort: false\n")
         self.assertEqual(recorded[0]["reasoning_effort"], "none")
+
+    def test_version_flag_prints_the_crate_version(self):
+        manifest = (ROOT / "crates" / "hermes-cli" / "Cargo.toml").read_text(encoding="utf-8")
+        version = next(
+            line.split('"')[1] for line in manifest.splitlines() if line.startswith("version =")
+        )
+        for flag in ("--version", "-V"):
+            result = subprocess.run([str(BINARY), flag], capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), f"hsr {version}")
+
+    def test_provider_entry_extra_body_reaches_the_request_without_warnings(self):
+        config = (f"providers:\n  myendpoint:\n    base_url: {self.base}/v1\n"
+                  "    extra_body: {chat_template_kwargs: {enable_thinking: true}}\n")
+        result, recorded = self.chat_with_profile(extra_config=config)
+        self.assertEqual(recorded[0]["chat_template_kwargs"], {"enable_thinking": True})
+        self.assertNotIn("Warning", result.stderr)
+
+    def test_an_entry_for_another_base_url_warns_and_adds_nothing(self):
+        config = ("providers:\n  polyus:\n    base_url: https://a.example.invalid/v1\n"
+                  "    api_key: synthetic-secret\n    extra_body: {chat_template_kwargs: {enable_thinking: true}}\n")
+        result, recorded = self.chat_with_profile(extra_config=config)
+        self.assertNotIn("chat_template_kwargs", recorded[0])
+        self.assertIn("Warning: extra_body of providers.polyus (https://a.example.invalid/v1) is not applied", result.stderr)
+        self.assertIn(f"active base URL is {self.base}/v1", result.stderr)
+        self.assertNotIn("synthetic-secret", result.stderr)
+
+    def test_model_extra_body_warns_that_it_is_not_sent(self):
+        body = "{chat_template_kwargs: {enable_thinking: true}}"
+        result, recorded = self.chat_with_profile(model_extra=f"  extra_body: {body}\n")
+        self.assertNotIn("chat_template_kwargs", recorded[0])
+        self.assertIn("Warning: model.extra_body in config.yaml is not sent", result.stderr)
+        self.assertIn("providers.<name>.extra_body", result.stderr)
+
+    def test_top_level_extra_body_warns_that_it_is_not_sent(self):
+        result, recorded = self.chat_with_profile(
+            extra_config="extra_body: {chat_template_kwargs: {enable_thinking: true}}\n")
+        self.assertNotIn("chat_template_kwargs", recorded[0])
+        self.assertIn("Warning: extra_body in config.yaml is not sent", result.stderr)
+
+    def test_reasoning_effort_outside_the_agent_section_warns(self):
+        result, _ = self.chat_with_profile(extra_config="reasoning: {effort: high}\n")
+        self.assertIn("Warning: reasoning.effort is not used; set agent.reasoning_effort", result.stderr)
 
     def test_the_endpoints_own_extra_body_wins_over_the_reasoning_effort(self):
         config = (f"providers:\n  p:\n    base_url: {self.base}/v1\n    model: primary\n"

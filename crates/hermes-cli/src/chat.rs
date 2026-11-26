@@ -710,6 +710,18 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
                     .body
                     .extend(settings.reasoning.custom_fields(model, &base_url));
             }
+            for message in hermes_runtime::config::custom_endpoint_warnings(
+                &settings.misplaced_keys,
+                &settings.custom_providers,
+                &base_url,
+                model,
+            ) {
+                if args.events_json {
+                    startup_warnings.push(message);
+                } else {
+                    eprintln!("Warning: {message}");
+                }
+            }
             let mut body = extras.body;
             if let Some(own) = hermes_runtime::config::custom_extra_body(
                 &settings.custom_providers,
