@@ -1743,11 +1743,12 @@ mod reference_tests {
 
     fn normalize(value: &Value, root: &str) -> Value {
         match value {
-            // Windows paths use `\`; the reference output was recorded with `/`.
-            Value::String(text) => json!(crate::paths::forward_slashes_after(
-                &text.replace(root, "<skills>"),
-                "<skills>"
-            )),
+            // Windows paths use `\` (as the reference would there); the recording uses `/`.
+            Value::String(text) => json!(if cfg!(windows) {
+                text.replace(root, "<skills>").replace('\\', "/")
+            } else {
+                text.replace(root, "<skills>")
+            }),
             Value::Array(items) => {
                 let mut items: Vec<Value> = items.iter().map(|i| normalize(i, root)).collect();
                 if !items.is_empty() && items.iter().all(Value::is_string) {

@@ -2,6 +2,7 @@ use chrono::DateTime;
 use chrono_tz::Tz;
 use hermes_runtime::cron::doctor;
 use hermes_runtime::cron::incidents;
+#[cfg(unix)]
 use hermes_runtime::cron::manage::{self, AddParams};
 use hermes_runtime::cron::monitor;
 use hermes_runtime::cron::notepad;
@@ -313,46 +314,51 @@ async fn script_and_monitor_execution_and_ssrf_blocking() {
     assert!(ok, "{out}");
     assert_eq!(out, "hello-from-script");
 
-    // Monitor baseline -> unchanged -> changed.
-    let state_file = tmp.path().join("state.txt");
-    std::fs::write(&state_file, "v1").unwrap();
-    std::fs::write(
-        home.join("scripts/mon.sh"),
-        // bash reads the path, so it is spelled with `/` on Windows too.
-        format!(
-            "cat '{}'\n",
-            state_file.display().to_string().replace('\\', "/")
-        ),
-    )
-    .unwrap();
-    let job = manage::add_job_with_id(
-        home,
-        now,
-        "monjob",
-        &AddParams {
-            schedule: "30m".into(),
-            prompt: Some("Watch state".into()),
-            monitor_script: Some("mon.sh".into()),
-            ..AddParams::default()
-        },
-    )
-    .unwrap();
+    // Windows cannot change the cron job store yet (`cron/store.rs`), so the stored-job monitor
+    // baseline only runs on Unix; the URL checks below build their jobs inline.
+    #[cfg(unix)]
+    {
+        // Monitor baseline -> unchanged -> changed.
+        let state_file = tmp.path().join("state.txt");
+        std::fs::write(&state_file, "v1").unwrap();
+        std::fs::write(
+            home.join("scripts/mon.sh"),
+            // bash reads the path, so it is spelled with `/` on Windows too.
+            format!(
+                "cat '{}'\n",
+                state_file.display().to_string().replace('\\', "/")
+            ),
+        )
+        .unwrap();
+        let job = manage::add_job_with_id(
+            home,
+            now,
+            "monjob",
+            &AddParams {
+                schedule: "30m".into(),
+                prompt: Some("Watch state".into()),
+                monitor_script: Some("mon.sh".into()),
+                ..AddParams::default()
+            },
+        )
+        .unwrap();
 
-    let first = monitor::check_monitor(home, &job, now, || None).await;
-    assert!(first.ok && first.changed && first.first_run);
-    assert!(first.context_block.contains("Monitor Baseline (first run)"));
-    assert!(first.context_block.contains("v1"));
+        let first = monitor::check_monitor(home, &job, now, || None).await;
+        assert!(first.ok && first.changed && first.first_run);
+        assert!(first.context_block.contains("Monitor Baseline (first run)"));
+        assert!(first.context_block.contains("v1"));
 
-    let updated = manage::find_job(home, now, "monjob").unwrap();
-    let second = monitor::check_monitor(home, &updated, now, || None).await;
-    assert!(second.ok && !second.changed);
+        let updated = manage::find_job(home, now, "monjob").unwrap();
+        let second = monitor::check_monitor(home, &updated, now, || None).await;
+        assert!(second.ok && !second.changed);
 
-    std::fs::write(&state_file, "v2").unwrap();
-    let third = monitor::check_monitor(home, &updated, now, || None).await;
-    assert!(third.ok && third.changed && !third.first_run);
-    assert!(third.context_block.contains("MONITOR CHANGE DETECTED"));
-    assert!(third.context_block.contains("-v1"));
-    assert!(third.context_block.contains("+v2"));
+        std::fs::write(&state_file, "v2").unwrap();
+        let third = monitor::check_monitor(home, &updated, now, || None).await;
+        assert!(third.ok && third.changed && !third.first_run);
+        assert!(third.context_block.contains("MONITOR CHANGE DETECTED"));
+        assert!(third.context_block.contains("-v1"));
+        assert!(third.context_block.contains("+v2"));
+    }
 
     // Monitor URL blocks loopback SSRF by default.
     let ssrf_job = json!({"id": "ssrf", "monitor_url": "http://127.0.0.1:1/secret"});

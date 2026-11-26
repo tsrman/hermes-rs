@@ -242,7 +242,7 @@ async fn search_files_returns_absolute_paths_when_given_absolute_path_inside_wor
 
     let results = tool_outputs.lock().unwrap();
     assert_eq!(results.len(), 3);
-    let expected_abs = root.join("sub/note.txt").display().to_string();
+    let expected_abs = root.join("sub").join("note.txt").display().to_string();
     assert_eq!(results[0]["matches"][0]["path"], json!(expected_abs));
     assert_eq!(results[1]["files"][0], json!(expected_abs));
     assert_eq!(results[2]["matches"][0]["path"], json!("sub/note.txt"));

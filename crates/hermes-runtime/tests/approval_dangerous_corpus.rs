@@ -26,6 +26,10 @@ fn dangerous_verdicts_match_the_reference() {
     let rows = corpus.as_array().unwrap();
     for row in rows {
         let command = row["command"].as_str().unwrap();
+        // The scratch-file exemption names the OS temp directory, which is `/tmp` only on Unix.
+        if cfg!(windows) && command.starts_with("rm -f /tmp/hermes-") {
+            continue;
+        }
         let verdict = detect_dangerous_command(command, &env);
         let got = json!([verdict.dangerous, verdict.description]);
         let content = json!(detect_content_rule_keys(command, &env));

@@ -1859,8 +1859,12 @@ mod tests {
                 for root in roots {
                     text = text.replace(root, "<skills>");
                 }
-                // Windows paths use `\`; the reference output was recorded with `/`.
-                json!(crate::paths::forward_slashes_after(&text, "<skills>"))
+                // Windows paths use `\` (as the reference would there); the recording uses `/`.
+                json!(if cfg!(windows) {
+                    text.replace('\\', "/")
+                } else {
+                    text
+                })
             }
             Value::Array(items) => {
                 Value::Array(items.iter().map(|i| normalize(i, roots)).collect())
