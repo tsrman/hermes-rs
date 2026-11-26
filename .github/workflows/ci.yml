@@ -60,7 +60,7 @@ jobs:
         run: |
           cargo clippy --all-targets --locked -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked
+          cargo test --locked --no-fail-fast
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   gui-linux:
