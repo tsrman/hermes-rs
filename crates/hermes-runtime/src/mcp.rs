@@ -453,7 +453,7 @@ async fn finish(
 
 /// A server reached over stdio, Streamable HTTP, or legacy HTTP+SSE.
 enum Transport {
-    Stdio(Connection),
+    Stdio(Box<Connection>),
     Http(HttpConnection),
     Sse(SseConnection),
 }
@@ -1305,7 +1305,7 @@ impl McpClients {
                 Transport::Sse(SseConnection::connect(config, url).await?)
             }
             Some(url) => Transport::Http(HttpConnection::new(config, url)?),
-            None => Transport::Stdio(spawn_stdio(config)?),
+            None => Transport::Stdio(Box::new(spawn_stdio(config)?)),
         };
         // On error the transport drops here, which stops a stdio child's process group.
         let discovered = handshake(&mut transport, config).await?;

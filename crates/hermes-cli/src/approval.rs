@@ -207,7 +207,8 @@ mod terminal {
         if unsafe { libc::tcflush(tty.as_raw_fd(), libc::TCIFLUSH) } != 0 {
             return Err(io::Error::last_os_error());
         }
-        let tty = AsyncFd::new(tty)?;
+        // SAFETY: `tty` is an owned `std::fs::File` whose fd remains valid for the `AsyncFd` lifetime.
+        let tty = unsafe { AsyncFd::register(tty) }?;
         let (action, preview) = match request.action {
             ApprovalAction::CreateFile => ("Create file", "New file content"),
             ApprovalAction::ReplaceFile => ("Replace file", "New file content"),
@@ -350,7 +351,8 @@ mod terminal {
         if unsafe { libc::tcflush(tty.as_raw_fd(), libc::TCIFLUSH) } != 0 {
             return Err(io::Error::last_os_error());
         }
-        let tty = AsyncFd::new(tty)?;
+        // SAFETY: `tty` is an owned `std::fs::File` whose fd remains valid for the `AsyncFd` lifetime.
+        let tty = unsafe { AsyncFd::register(tty) }?;
         let mut pending = Vec::new();
         let mut answers = Map::new();
         for question in &questions {
