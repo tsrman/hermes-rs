@@ -88,12 +88,15 @@ jobs:
         shell: pwsh
         env:
           TARGET: ${{ matrix.target }}
+          WINDOWS_CERT_PFX_B64: ${{ secrets.WINDOWS_CERT_PFX_B64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
           cargo build -p hermes-gui --release --locked --target $env:TARGET
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/dist" | Out-Null
           New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/stage" | Out-Null
           Copy-Item "target/$env:TARGET/release/hsr-gui.exe" "$env:RUNNER_TEMP/stage/hsr-gui.exe"
+          & .github/scripts/sign-windows.ps1 "$env:RUNNER_TEMP/stage/hsr-gui.exe"
           $version = if ($env:GITHUB_REF_NAME -like 'gui-v*') { $env:GITHUB_REF_NAME.Substring(5) } else { '0.1.0' }
           $archive = "hsr-gui-$version-$env:TARGET.zip"
           Compress-Archive -Path "$env:RUNNER_TEMP/stage/hsr-gui.exe" -DestinationPath "$env:RUNNER_TEMP/dist/$archive" -Force

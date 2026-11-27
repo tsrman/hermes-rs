@@ -93,6 +93,8 @@ jobs:
         shell: pwsh
         env:
           TARGET: ${{ matrix.target }}
+          WINDOWS_CERT_PFX_B64: ${{ secrets.WINDOWS_CERT_PFX_B64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
           python -m compat.package_cli_release $env:TARGET "$env:RUNNER_TEMP/dist"
           $archive = Get-ChildItem "$env:RUNNER_TEMP/dist/*.zip"

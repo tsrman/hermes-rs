@@ -69,6 +69,13 @@ def package(target, output):
                    env=build_env, check=True)
     executable = "hsr.exe" if windows else "hsr"
     binary = Path(metadata["target_directory"]) / target / "release" / executable
+    if windows and os.environ.get("WINDOWS_CERT_PFX_B64"):
+        repo_root = Path(__file__).resolve().parent.parent
+        sign_script = repo_root / ".github" / "scripts" / "sign-windows.ps1"
+        subprocess.run(
+            ["pwsh", "-NoProfile", "-File", str(sign_script), str(binary)],
+            check=True,
+        )
     output.mkdir(parents=True, exist_ok=True)
     extension = "zip" if windows else "tar.gz"
     archive = output / f"hsr-{version}-{target}.{extension}"
