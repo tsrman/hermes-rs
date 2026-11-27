@@ -43,9 +43,10 @@ use crate::ui::clipboard::{self, ClipboardRead};
 use crate::ui::markdown::render_markdown_lines;
 use crate::ui::{
     active_at_token, build_context_bar, format_context_length, format_duration_ms,
-    format_shell_escape, format_skills_list, format_tokens_compact, load_resumed_session,
-    match_slash_commands, parse_stderr_event, record_prompt_history, short_model_label, ActiveUi,
-    FeedEntry, NoticeKind, ParsedStderr, ReplState, ToolStatus, UiOutcome, HELP_TEXT,
+    format_running_elapsed, format_shell_escape, format_skills_list, format_tokens_compact,
+    load_resumed_session, match_slash_commands, parse_stderr_event, record_prompt_history,
+    short_model_label, ActiveUi, FeedEntry, NoticeKind, ParsedStderr, ReplState, ToolStatus,
+    UiOutcome, HELP_TEXT,
 };
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -2646,7 +2647,13 @@ fn render_feed(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ReplStat
                     (ToolStatus::Succeeded, Some(s)) => (Some(s), None),
                     (ToolStatus::Succeeded, None) => (None, None),
                 };
-                let dur = elapsed_ms.map(format_duration_ms);
+                let dur = match status {
+                    ToolStatus::Running => app
+                        .active_tools
+                        .get(name)
+                        .map(|started| format_running_elapsed(started.elapsed())),
+                    _ => elapsed_ms.map(format_duration_ms),
+                };
                 let meta = match (inline_status, dur) {
                     (Some(st), Some(d)) => format!("{st} · {d}"),
                     (Some(st), None) => st,
@@ -4014,6 +4021,30 @@ mod tests {
         )
         .await;
         assert!(state.session.is_none());
+
+        // Running tool cards show live elapsed duration alongside `running…`.
+        app.active_tools.insert(
+            "terminal".into(),
+            Instant::now()
+                .checked_sub(Duration::from_secs(125))
+                .unwrap_or_else(Instant::now),
+        );
+        state.feed_entries.push(FeedEntry::Tool {
+            name: "terminal".into(),
+            detail: Some("sleep 240".into()),
+            status: ToolStatus::Running,
+            summary: None,
+            elapsed_ms: None,
+        });
+        let mut terminal = Terminal::new(TestBackend::new(96, 20)).unwrap();
+        terminal.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let running_rendered = buffer_text(&terminal);
+        assert!(
+            running_rendered.contains("terminal · sleep 240 (running… · 2m 05s)"),
+            "missing live elapsed time on running tool card:\n{running_rendered}"
+        );
+        app.active_tools.clear();
+        state.feed_entries.pop();
 
         // Tool cards show command/code detail, exit code, duration, and error line on failure.
         state.feed_entries.push(FeedEntry::Tool {

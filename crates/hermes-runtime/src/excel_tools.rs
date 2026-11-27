@@ -19,7 +19,7 @@ const HARD_MAX_ROWS: usize = 50_000;
 
 /// Resolve a user/script path safely inside `workspace_root`, rejecting `..` escapes and
 /// credential/secret files.
-fn resolve_workspace_path(
+pub(crate) fn resolve_workspace_path(
     workspace_root: &Path,
     raw: &str,
     must_exist: bool,

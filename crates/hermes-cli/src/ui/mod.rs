@@ -1149,10 +1149,28 @@ pub fn profile_display_name(home: Option<&Path>) -> String {
 }
 
 pub fn format_duration_ms(ms: u64) -> String {
-    if ms < 1000 {
+    if ms < 1_000 {
         format!("{ms}ms")
-    } else {
+    } else if ms < 60_000 {
         format!("{:.1}s", ms as f64 / 1000.0)
+    } else {
+        format_running_elapsed(std::time::Duration::from_millis(ms))
+    }
+}
+
+pub fn format_running_elapsed(dur: std::time::Duration) -> String {
+    let total_secs = dur.as_secs();
+    if total_secs < 60 {
+        format!("{total_secs}s")
+    } else if total_secs < 3_600 {
+        format!("{}m {:02}s", total_secs / 60, total_secs % 60)
+    } else {
+        format!(
+            "{}h {:02}m {:02}s",
+            total_secs / 3_600,
+            (total_secs % 3_600) / 60,
+            total_secs % 60
+        )
     }
 }
 

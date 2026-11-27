@@ -27,6 +27,7 @@ rust-stemmers = "1.2.0"
 ignore = "0.4"
 calamine = { version = "0.38", features = ["chrono"] }
 rust_xlsxwriter = "0.104"
+zip = { version = "9.8.2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 rustpython-vm = { version = "0.6", default-features = false, features = ["compiler", "encodings", "freeze-stdlib", "gc", "importlib", "stdio"] }

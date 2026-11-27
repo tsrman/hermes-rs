@@ -592,7 +592,7 @@ mod _hermes_bridge {
 }
 
 fn bootstrap_source(tools: &[&str]) -> String {
-    const STUBS: [(&str, &str); 9] = [
+    const STUBS: [(&str, &str); 13] = [
         ("web_search", "def web_search(query, limit=5):\n    return _call('web_search', {'query': query, 'limit': limit})\n"),
         ("web_extract", "def web_extract(urls, char_limit=None):\n    return _call('web_extract', {'urls': urls, 'char_limit': char_limit})\n"),
         ("read_file", "def read_file(path, offset=1, limit=2000):\n    return _call('read_file', {'path': path, 'offset': offset, 'limit': limit})\n"),
@@ -602,10 +602,24 @@ fn bootstrap_source(tools: &[&str]) -> String {
         ("terminal", "def terminal(command, timeout=None, workdir=None):\n    return _call('terminal', {'command': command, 'timeout': timeout, 'workdir': workdir})\n"),
         ("xlsx_read", "def xlsx_read(path, sheet=None, max_rows=5000):\n    return _call('xlsx_read', {'path': path, 'sheet': sheet, 'max_rows': max_rows})\n"),
         ("xlsx_write", "def xlsx_write(path, sheets):\n    return _call('xlsx_write', {'path': path, 'sheets': sheets})\n"),
+        ("docx_read", "def docx_read(path, max_paragraphs=5000):\n    return _call('docx_read', {'path': path, 'max_paragraphs': max_paragraphs})\n"),
+        ("docx_write", "def docx_write(path, content=None, title=None, subtitle=None, blocks=None, author=None):\n    return _call('docx_write', {'path': path, 'content': content, 'title': title, 'subtitle': subtitle, 'blocks': blocks, 'author': author})\n"),
+        ("pptx_read", "def pptx_read(path, max_slides=200):\n    return _call('pptx_read', {'path': path, 'max_slides': max_slides})\n"),
+        ("pptx_write", "def pptx_write(path, slides, title=None, author=None, theme=None):\n    return _call('pptx_write', {'path': path, 'slides': slides, 'title': title, 'author': author, 'theme': theme})\n"),
     ];
     let stubs: String = STUBS
         .iter()
-        .filter(|(name, _)| *name == "xlsx_read" || *name == "xlsx_write" || tools.contains(name))
+        .filter(|(name, _)| {
+            matches!(
+                *name,
+                "xlsx_read"
+                    | "xlsx_write"
+                    | "docx_read"
+                    | "docx_write"
+                    | "pptx_read"
+                    | "pptx_write"
+            ) || tools.contains(name)
+        })
         .map(|(_, src)| *src)
         .collect();
     let mut export_names: Vec<&str> = vec![
@@ -614,6 +628,10 @@ fn bootstrap_source(tools: &[&str]) -> String {
         "retry",
         "xlsx_read",
         "xlsx_write",
+        "docx_read",
+        "docx_write",
+        "pptx_read",
+        "pptx_write",
     ];
     for t in tools {
         if !export_names.contains(t) {
@@ -1308,6 +1326,10 @@ mod tests {
                     let val = match tool.as_str() {
                         "xlsx_write" => crate::excel_tools::xlsx_write(dir, &args),
                         "xlsx_read" => crate::excel_tools::xlsx_read(dir, &args),
+                        "docx_write" => crate::office_tools::docx_write(dir, &args),
+                        "docx_read" => crate::office_tools::docx_read(dir, &args),
+                        "pptx_write" => crate::office_tools::pptx_write(dir, &args),
+                        "pptx_read" => crate::office_tools::pptx_read(dir, &args),
                         other => json!({"error": format!("unexpected {other}")}),
                     };
                     assert!(kernel.send_tool_reply(val));
@@ -1359,6 +1381,29 @@ print(avg, wb["sheets"]["Data"][1])
         assert_eq!(p2["status"], "ok", "{p2}");
         let out2 = p2["stdout"].as_str().unwrap();
         assert!(out2.contains("25") && out2.contains("Mean"), "{p2}");
+
+        // Cell 3: bridges docx_write / docx_read and pptx_write / pptx_read
+        let code3 = r##"
+from hermes_tools import docx_write, docx_read, pptx_write, pptx_read
+
+d_res = docx_write("brief.docx", "# Отчёт\n\n- **Итог**: готово\n", title="Бриф")
+assert d_res["status"] == "ok", d_res
+d_read = docx_read("brief.docx")
+assert "Бриф" in d_read["paragraphs"], d_read
+
+p_res = pptx_write("deck.pptx", [
+    {"title": "План Q4", "subtitle": "Обзор"},
+    {"title": "Цели", "bullets": ["Запуск", "Рост"], "notes": "Показать демо"},
+])
+assert p_res["status"] == "ok", p_res
+p_read = pptx_read("deck.pptx")
+assert p_read["slide_count"] == 2, p_read
+assert p_read["slides"][1]["notes"] == "Показать демо", p_read
+print("OFFICE_OK")
+"##;
+        let p3 = run_test_cell(&mut kernel, code3, dir.path(), deadline).await;
+        assert_eq!(p3["status"], "ok", "{p3}");
+        assert!(p3["stdout"].as_str().unwrap().contains("OFFICE_OK"), "{p3}");
         kernel.shutdown();
     }
 

@@ -30,6 +30,7 @@ pub mod mcp;
 pub mod mcp_media;
 pub mod memory_tool;
 pub mod model_metadata;
+mod office_tools;
 pub mod paths;
 #[cfg(unix)]
 pub mod process;

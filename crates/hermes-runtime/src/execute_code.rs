@@ -45,6 +45,7 @@ use crate::excel_tools;
 use crate::file_tools::{
     approval_error, request_approval, ApprovalAction, ApprovalDecision, ApprovalRequest,
 };
+use crate::office_tools;
 use crate::redact::{redact_with, Mode};
 use crate::tools::{BoxFuture, ToolContext, ToolEnv};
 
@@ -110,7 +111,7 @@ pub(crate) fn schema(tools: &[&str]) -> Value {
         }
         #[cfg(not(unix))]
         text.push_str(
-            "\n\nBuilt-in RustPython + Excel helpers (no system Python required): `from hermes_tools import xlsx_read, xlsx_write`. xlsx_read(path, sheet=None, max_rows=5000) reads .xlsx/.xls/.xlsb/.ods sheets into lists of rows; xlsx_write(path, sheets) writes .xlsx workbooks (with formulas like '=SUM(B2:B10)', bold headers, and autofit).",
+            "\n\nBuilt-in RustPython + Office helpers (no system Python or Office required): `from hermes_tools import xlsx_read, xlsx_write, docx_read, docx_write, pptx_read, pptx_write`.\n- xlsx_read(path, sheet=None, max_rows=5000) / xlsx_write(path, sheets): read .xlsx/.xls/.xlsb/.ods sheets or write .xlsx workbooks (formulas like '=SUM(B2:B10)', bold headers, autofit).\n- docx_read(path, max_paragraphs=5000) / docx_write(path, content=None, title=None, subtitle=None, blocks=None, author=None): read .docx paragraphs & tables or create formatted Word .docx documents from Markdown (`content`) or structured `blocks` (heading, paragraph, bullets, numbered, table, quote, code, rule, page_break).\n- pptx_read(path, max_slides=200) / pptx_write(path, slides, title=None, author=None, theme='corporate'): read .pptx slides/tables/notes or create formatted 16:9 PowerPoint .pptx decks from `slides` dicts (title, subtitle, layout='title'|'content'|'section', bullets, body, table, left/right columns, notes; themes: 'corporate', 'dark', 'minimal').",
         );
         function["description"] = Value::String(text);
     }
@@ -121,7 +122,7 @@ pub(crate) fn schema(tools: &[&str]) -> Value {
 /// helpers and one function per tool the script may call.
 #[cfg(unix)]
 fn kernel_source(tools: &[&str]) -> String {
-    const STUBS: [(&str, &str); 9] = [
+    const STUBS: [(&str, &str); 13] = [
         ("web_search", "def web_search(query, limit=5):\n    return _call('web_search', {'query': query, 'limit': limit})\n"),
         ("web_extract", "def web_extract(urls, char_limit=None):\n    return _call('web_extract', {'urls': urls, 'char_limit': char_limit})\n"),
         ("read_file", "def read_file(path, offset=1, limit=2000):\n    return _call('read_file', {'path': path, 'offset': offset, 'limit': limit})\n"),
@@ -131,10 +132,24 @@ fn kernel_source(tools: &[&str]) -> String {
         ("terminal", "def terminal(command, timeout=None, workdir=None):\n    return _call('terminal', {'command': command, 'timeout': timeout, 'workdir': workdir})\n"),
         ("xlsx_read", "def xlsx_read(path, sheet=None, max_rows=5000):\n    return _call('xlsx_read', {'path': path, 'sheet': sheet, 'max_rows': max_rows})\n"),
         ("xlsx_write", "def xlsx_write(path, sheets):\n    return _call('xlsx_write', {'path': path, 'sheets': sheets})\n"),
+        ("docx_read", "def docx_read(path, max_paragraphs=5000):\n    return _call('docx_read', {'path': path, 'max_paragraphs': max_paragraphs})\n"),
+        ("docx_write", "def docx_write(path, content=None, title=None, subtitle=None, blocks=None, author=None):\n    return _call('docx_write', {'path': path, 'content': content, 'title': title, 'subtitle': subtitle, 'blocks': blocks, 'author': author})\n"),
+        ("pptx_read", "def pptx_read(path, max_slides=200):\n    return _call('pptx_read', {'path': path, 'max_slides': max_slides})\n"),
+        ("pptx_write", "def pptx_write(path, slides, title=None, author=None, theme=None):\n    return _call('pptx_write', {'path': path, 'slides': slides, 'title': title, 'author': author, 'theme': theme})\n"),
     ];
     let stubs: String = STUBS
         .iter()
-        .filter(|(name, _)| *name == "xlsx_read" || *name == "xlsx_write" || tools.contains(name))
+        .filter(|(name, _)| {
+            matches!(
+                *name,
+                "xlsx_read"
+                    | "xlsx_write"
+                    | "docx_read"
+                    | "docx_write"
+                    | "pptx_read"
+                    | "pptx_write"
+            ) || tools.contains(name)
+        })
         .map(|(_, source)| *source)
         .collect();
     let exports = [
@@ -143,6 +158,10 @@ fn kernel_source(tools: &[&str]) -> String {
         "retry",
         "xlsx_read",
         "xlsx_write",
+        "docx_read",
+        "docx_write",
+        "pptx_read",
+        "pptx_write",
     ]
     .iter()
     .chain(tools.iter())
@@ -571,12 +590,20 @@ async fn dispatch_sandbox_tool(
         );
     }
 
-    // Native pure-Rust Excel helpers available in every execute_code session.
+    // Native pure-Rust Office (Excel/Word/PowerPoint) helpers available in every execute_code session.
     if name == "xlsx_read" {
         *calls += 1;
         return Ok(excel_tools::xlsx_read(workspace_root, raw_args));
     }
-    if name == "xlsx_write" {
+    if name == "docx_read" {
+        *calls += 1;
+        return Ok(office_tools::docx_read(workspace_root, raw_args));
+    }
+    if name == "pptx_read" {
+        *calls += 1;
+        return Ok(office_tools::pptx_read(workspace_root, raw_args));
+    }
+    if matches!(name, "xlsx_write" | "docx_write" | "pptx_write") {
         *calls += 1;
         if !cx.options.can_write_files() {
             return Ok(approval_error(ApprovalDecision::Unavailable));
@@ -584,10 +611,15 @@ async fn dispatch_sandbox_tool(
         let Some(timeout_secs) = cx.options.approval_timeout_secs else {
             return Ok(approval_error(ApprovalDecision::Unavailable));
         };
+        let default_name = match name {
+            "docx_write" => "document.docx",
+            "pptx_write" => "presentation.pptx",
+            _ => "workbook.xlsx",
+        };
         let target = raw_args
             .get("path")
             .and_then(Value::as_str)
-            .unwrap_or("workbook.xlsx")
+            .unwrap_or(default_name)
             .to_owned();
         let action = if workspace_root.join(&target).exists() {
             ApprovalAction::ReplaceFile
@@ -610,12 +642,23 @@ async fn dispatch_sandbox_tool(
         if !matches!(decision, ApprovalDecision::Approved) {
             return Ok(approval_error(decision));
         }
-        return Ok(excel_tools::xlsx_write(workspace_root, raw_args));
+        return Ok(match name {
+            "docx_write" => office_tools::docx_write(workspace_root, raw_args),
+            "pptx_write" => office_tools::pptx_write(workspace_root, raw_args),
+            _ => excel_tools::xlsx_write(workspace_root, raw_args),
+        });
     }
 
     if !allowed_tools.contains(&name) {
         let mut names = allowed_tools.to_vec();
-        names.extend(["xlsx_read", "xlsx_write"]);
+        names.extend([
+            "xlsx_read",
+            "xlsx_write",
+            "docx_read",
+            "docx_write",
+            "pptx_read",
+            "pptx_write",
+        ]);
         names.sort_unstable();
         return Ok(json!({"error": format!(
             "Tool '{name}' is not available in execute_code. Available: {}",

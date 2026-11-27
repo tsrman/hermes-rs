@@ -197,6 +197,7 @@ pub struct GuiState {
     pub live_reasoning: Vec<String>,
     pub live_reasoning_partial: String,
     pub active_turn_id: Option<String>,
+    pub active_tool_starts: std::collections::HashMap<String, std::time::Instant>,
     pub last_seq: u64,
     pub streaming: bool,
     pub loading_session: bool,
@@ -228,6 +229,7 @@ impl GuiState {
             live_reasoning: Vec::new(),
             live_reasoning_partial: String::new(),
             active_turn_id: None,
+            active_tool_starts: std::collections::HashMap::new(),
             last_seq: 0,
             streaming: false,
             loading_session: false,
@@ -370,6 +372,7 @@ impl GuiState {
         self.feed.clear();
         self.attachments.clear();
         self.active_turn_id = None;
+        self.active_tool_starts.clear();
         self.last_seq = 0;
         self.streaming = false;
         self.pending_approval = None;
@@ -524,6 +527,8 @@ impl GuiState {
             TurnStreamEvent::ToolStarted { name, detail } => {
                 self.live_reasoning.clear();
                 self.live_reasoning_partial.clear();
+                self.active_tool_starts
+                    .insert(name.clone(), std::time::Instant::now());
                 self.feed.push(FeedRow::Tool {
                     name,
                     detail,
@@ -561,6 +566,7 @@ impl GuiState {
                 succeeded,
                 summary,
             } => {
+                self.active_tool_starts.remove(&name);
                 let target_state = if succeeded {
                     ToolCardState::Succeeded
                 } else {
@@ -635,6 +641,7 @@ impl GuiState {
                 self.pending_approval = None;
                 self.pending_clarify = None;
                 self.active_turn_id = None;
+                self.active_tool_starts.clear();
                 self.status_message = if cancelled {
                     "Turn cancelled.".into()
                 } else if exit_code == 0 {

@@ -540,7 +540,7 @@ impl<'a> ZipArchive<'a> {
         })
     }
 
-    fn contains(&self, name: &str) -> bool {
+    pub(crate) fn contains(&self, name: &str) -> bool {
         self.entries.contains_key(name)
     }
 
@@ -588,7 +588,7 @@ impl<'a> ZipArchive<'a> {
 // ── Lightweight XML Parser ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-enum XmlNode {
+pub(crate) enum XmlNode {
     Element {
         name: String,
         attrs: Vec<(String, String)>,
@@ -598,14 +598,14 @@ enum XmlNode {
 }
 
 impl XmlNode {
-    fn local_name(&self) -> &str {
+    pub(crate) fn local_name(&self) -> &str {
         match self {
             XmlNode::Element { name, .. } => name.rsplit(':').next().unwrap_or(name),
             XmlNode::Text(_) => "",
         }
     }
 
-    fn attr(&self, target: &str) -> Option<&str> {
+    pub(crate) fn attr(&self, target: &str) -> Option<&str> {
         let XmlNode::Element { attrs, .. } = self else {
             return None;
         };
@@ -615,14 +615,14 @@ impl XmlNode {
             .map(|(_, v)| v.as_str())
     }
 
-    fn children(&self) -> &[XmlNode] {
+    pub(crate) fn children(&self) -> &[XmlNode] {
         match self {
             XmlNode::Element { children, .. } => children,
             XmlNode::Text(_) => &[],
         }
     }
 
-    fn collect_text(&self) -> String {
+    pub(crate) fn collect_text(&self) -> String {
         let mut out = String::new();
         self.push_text_into(&mut out);
         out
@@ -640,7 +640,7 @@ impl XmlNode {
     }
 }
 
-fn find_descendants<'a>(node: &'a XmlNode, local: &str, out: &mut Vec<&'a XmlNode>) {
+pub(crate) fn find_descendants<'a>(node: &'a XmlNode, local: &str, out: &mut Vec<&'a XmlNode>) {
     if let XmlNode::Element { children, .. } = node {
         if node.local_name() == local {
             out.push(node);
@@ -704,7 +704,7 @@ struct OpenTag {
     attrs: Vec<(String, String)>,
 }
 
-fn parse_xml(bytes: &[u8], part: &str) -> Result<XmlNode, String> {
+pub(crate) fn parse_xml(bytes: &[u8], part: &str) -> Result<XmlNode, String> {
     let text = std::str::from_utf8(bytes)
         .map_err(|_| format!("Malformed XML in {part}: invalid UTF-8"))?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -1120,7 +1120,7 @@ fn extract_notebook(data: &[u8], display_path: &str) -> Result<String, String> {
 
 // ── DOCX Extractor ─────────────────────────────────────────────────────────────────────────────
 
-fn collect_docx_paragraph(node: &XmlNode, buf: &mut String) {
+pub(crate) fn collect_docx_paragraph(node: &XmlNode, buf: &mut String) {
     let XmlNode::Element { children, .. } = node else {
         return;
     };
@@ -1354,7 +1354,7 @@ fn extract_xlsx(data: &[u8]) -> Result<String, String> {
 
 // ── PPTX Extractor ─────────────────────────────────────────────────────────────────────────────
 
-fn slide_number(name: &str) -> Option<usize> {
+pub(crate) fn slide_number(name: &str) -> Option<usize> {
     let rest = name.strip_prefix("ppt/slides/slide")?;
     let digits = rest.strip_suffix(".xml")?;
     digits.parse().ok()

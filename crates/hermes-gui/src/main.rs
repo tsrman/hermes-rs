@@ -17,16 +17,17 @@ use std::time::Duration;
 use gpui::WindowControlArea;
 use gpui::{
     div, prelude::*, px, rgb, size, App, Application, Bounds, ClipboardItem, Context,
-    ExternalPaths, FocusHandle, HighlightStyle, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, PathPromptOptions, Pixels, Point, Rgba, ScrollHandle, ScrollWheelEvent,
-    SharedString, StyledText, TextLayout, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    ExternalPaths, FocusHandle, FontStyle, FontWeight, HighlightStyle, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, PathPromptOptions, Pixels, Point, Rgba, ScrollHandle,
+    ScrollWheelEvent, SharedString, StrikethroughStyle, StyledText, TextLayout, TitlebarOptions,
+    UnderlineStyle, Window, WindowBounds, WindowOptions,
 };
 use hermes_runtime::config::profile_home;
 use hermes_runtime::local_owner::ApprovalScope;
 use hermes_runtime::turn::{ApprovalAction, ApprovalDecision};
 
 use crate::editor::TextBuffer;
-use crate::markdown::{parse_blocks, MdBlock, TableAlign};
+use crate::markdown::{parse_blocks, parse_inline, InlineStyle, MdBlock, TableAlign};
 use crate::owner_client::{BackendUpdate, OwnerClient, ScopedUpdate};
 use crate::setup_state::{SetupDraft, SetupField, GUI_PROVIDER_PRESETS, GUI_WEB_BACKENDS};
 use crate::state::{FeedRow, GuiState, PendingClarify, ToolCardState};
@@ -115,19 +116,28 @@ impl HermesAppView {
 
         // Poll backend events smoothly every 40ms so streaming deltas, approvals, and clarify
         // modals appear immediately while keeping GPUI's event loop responsive.
-        cx.spawn(async move |this, cx| loop {
-            cx.background_executor()
-                .timer(Duration::from_millis(40))
-                .await;
-            let keep_running = this
-                .update(cx, |view, cx| {
-                    if view.drain_updates() {
-                        cx.notify();
-                    }
-                })
-                .is_ok();
-            if !keep_running {
-                break;
+        cx.spawn(async move |this, cx| {
+            let mut last_timer_tick = std::time::Instant::now();
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(40))
+                    .await;
+                let keep_running = this
+                    .update(cx, |view, cx| {
+                        let updated = view.drain_updates();
+                        let timer_tick = !view.state.active_tool_starts.is_empty()
+                            && last_timer_tick.elapsed() >= Duration::from_secs(1);
+                        if timer_tick {
+                            last_timer_tick = std::time::Instant::now();
+                        }
+                        if updated || timer_tick {
+                            cx.notify();
+                        }
+                    })
+                    .is_ok();
+                if !keep_running {
+                    break;
+                }
             }
         })
         .detach();
@@ -1004,18 +1014,22 @@ impl HermesAppView {
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
+        let key_char = event.keystroke.key_char.as_deref();
         let mods = &event.keystroke.modifiers;
         let primary = mods.control || mods.platform;
+        let primary_letter = if primary && !mods.alt {
+            shortcut_letter(key, key_char)
+        } else {
+            None
+        };
 
-        if (mods.alt && key.eq_ignore_ascii_case("f4"))
-            || (primary && key.eq_ignore_ascii_case("q"))
-        {
+        if (mods.alt && key.eq_ignore_ascii_case("f4")) || primary_letter == Some('q') {
             window.remove_window();
             cx.quit();
             return;
         }
 
-        if primary && key.eq_ignore_ascii_case("v") {
+        if primary_letter == Some('v') {
             if let Some(item) = cx.read_from_clipboard() {
                 if let Some(text) = item.text() {
                     if let Some(buf) = self.active_buffer_mut() {
@@ -1033,7 +1047,7 @@ impl HermesAppView {
             return;
         }
 
-        if primary && key.eq_ignore_ascii_case("u") {
+        if primary_letter == Some('u') {
             if let Some(buf) = self.active_buffer_mut() {
                 buf.clear();
             }
@@ -1045,7 +1059,7 @@ impl HermesAppView {
             return;
         }
 
-        if primary && key.eq_ignore_ascii_case("p") && self.input_target == InputTarget::Composer {
+        if primary_letter == Some('p') && self.input_target == InputTarget::Composer {
             if self.state.composer_input.is_empty() {
                 self.state.composer_input.insert_char('/');
                 self.state.palette_index = 0;
@@ -1055,7 +1069,8 @@ impl HermesAppView {
             return;
         }
 
-        if primary && key.eq_ignore_ascii_case("a") {
+        if primary_letter == Some('a') {
+            self.feed_selection = None;
             if let Some(buf) = self.active_buffer_mut() {
                 buf.select_all();
                 cx.notify();
@@ -1063,7 +1078,7 @@ impl HermesAppView {
             return;
         }
 
-        if primary && key.eq_ignore_ascii_case("c") {
+        if primary_letter == Some('c') {
             let selected = self
                 .active_buffer_mut()
                 .and_then(|buf| buf.selected_text().map(str::to_owned));
@@ -1086,7 +1101,7 @@ impl HermesAppView {
             return;
         }
 
-        if primary && key.eq_ignore_ascii_case("x") {
+        if primary_letter == Some('x') {
             let selected = self
                 .active_buffer_mut()
                 .and_then(|buf| buf.selected_text().map(str::to_owned));
@@ -1286,12 +1301,57 @@ impl HermesAppView {
     }
 }
 
+/// Map a Ctrl/Cmd shortcut keystroke to its physical Latin letter across English and Russian
+/// (ЙЦУКЕН) layouts as well as ASCII control codes emitted by some platforms.
+fn shortcut_letter(key: &str, key_char: Option<&str>) -> Option<char> {
+    let mut chars = key.chars();
+    if let (Some(ch), None) = (chars.next(), chars.next()) {
+        if ch.is_ascii_alphabetic() {
+            return Some(ch.to_ascii_lowercase());
+        }
+        let mapped = match ch {
+            'ф' | 'Ф' => Some('a'),
+            'с' | 'С' => Some('c'),
+            'м' | 'М' => Some('v'),
+            'ч' | 'Ч' => Some('x'),
+            'г' | 'Г' => Some('u'),
+            'з' | 'З' => Some('p'),
+            'й' | 'Й' => Some('q'),
+            'я' | 'Я' => Some('z'),
+            _ => None,
+        };
+        if mapped.is_some() {
+            return mapped;
+        }
+    }
+    if let Some(s) = key_char {
+        let mut kc = s.chars();
+        if let (Some(ch), None) = (kc.next(), kc.next()) {
+            let mapped = match ch {
+                '\x01' => Some('a'),
+                '\x03' => Some('c'),
+                '\x10' => Some('p'),
+                '\x11' => Some('q'),
+                '\x15' => Some('u'),
+                '\x16' => Some('v'),
+                '\x18' => Some('x'),
+                '\x1a' => Some('z'),
+                _ => None,
+            };
+            if mapped.is_some() {
+                return mapped;
+            }
+        }
+    }
+    None
+}
+
 /// Extract insertable text from a GPUI keystroke.
 ///
 /// On Windows, `gpui 0.2.2` maps `VK_SPACE` via `parse_immutable` to `key = "space"` with
 /// `key_char = None`, so `"space"` must be handled explicitly alongside `key_char`.
 fn text_from_keystroke<'a>(
-    key: &str,
+    key: &'a str,
     key_char: Option<&'a str>,
     control: bool,
     alt: bool,
@@ -1303,7 +1363,16 @@ fn text_from_keystroke<'a>(
     if key == "space" {
         return Some(" ");
     }
-    key_char.filter(|s| !s.is_empty())
+    if let Some(s) = key_char.filter(|s| !s.is_empty() && !s.chars().all(char::is_control)) {
+        return Some(s);
+    }
+    let mut chars = key.chars();
+    if let (Some(ch), None) = (chars.next(), chars.next()) {
+        if !ch.is_control() {
+            return Some(key);
+        }
+    }
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1547,30 +1616,143 @@ fn word_bounds_at(text: &str, idx: usize) -> (usize, usize) {
     (start, end)
 }
 
-fn render_selectable_feed_text(
+fn format_running_elapsed(dur: Duration) -> String {
+    let total_secs = dur.as_secs();
+    if total_secs < 60 {
+        format!("{total_secs}s")
+    } else if total_secs < 3_600 {
+        format!("{}m {:02}s", total_secs / 60, total_secs % 60)
+    } else {
+        format!(
+            "{}h {:02}m {:02}s",
+            total_secs / 3_600,
+            (total_secs % 3_600) / 60,
+            total_secs % 60
+        )
+    }
+}
+
+fn inline_style_to_highlight(style: InlineStyle) -> HighlightStyle {
+    match style {
+        InlineStyle::Bold => HighlightStyle {
+            color: Some(rgb(0xffffff).into()),
+            font_weight: Some(FontWeight::BOLD),
+            ..Default::default()
+        },
+        InlineStyle::Italic => HighlightStyle {
+            font_style: Some(FontStyle::Italic),
+            ..Default::default()
+        },
+        InlineStyle::BoldItalic => HighlightStyle {
+            color: Some(rgb(0xffffff).into()),
+            font_weight: Some(FontWeight::BOLD),
+            font_style: Some(FontStyle::Italic),
+            ..Default::default()
+        },
+        InlineStyle::Code => HighlightStyle {
+            color: Some(rgb(0x93c5fd).into()),
+            background_color: Some(rgb(0x10141c).into()),
+            ..Default::default()
+        },
+        InlineStyle::Strikethrough => HighlightStyle {
+            color: Some(rgb(0x8e9bb0).into()),
+            strikethrough: Some(StrikethroughStyle {
+                thickness: px(1.0),
+                color: Some(rgb(0x8e9bb0).into()),
+            }),
+            ..Default::default()
+        },
+        InlineStyle::Link => HighlightStyle {
+            color: Some(rgb(0x4ea1ff).into()),
+            underline: Some(UnderlineStyle {
+                thickness: px(1.0),
+                color: Some(rgb(0x4ea1ff).into()),
+                wavy: false,
+            }),
+            ..Default::default()
+        },
+    }
+}
+
+/// Merge non-overlapping inline Markdown highlight spans with an optional active selection range
+/// into strictly sorted, non-overlapping highlight runs safe for `StyledText::with_highlights`.
+fn merge_highlights_with_selection(
+    text_len: usize,
+    base: &[(std::ops::Range<usize>, InlineStyle)],
+    selection: Option<std::ops::Range<usize>>,
+) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+    let mut points = Vec::with_capacity(base.len() * 2 + 4);
+    for (r, _) in base {
+        if r.start < r.end && r.end <= text_len {
+            points.push(r.start);
+            points.push(r.end);
+        }
+    }
+    if let Some(ref sel) = selection {
+        if sel.start < sel.end && sel.end <= text_len {
+            points.push(sel.start);
+            points.push(sel.end);
+        }
+    }
+    if points.is_empty() {
+        return Vec::new();
+    }
+    points.sort_unstable();
+    points.dedup();
+
+    let mut merged = Vec::new();
+    for pair in points.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if a >= b {
+            continue;
+        }
+        let base_style = base
+            .iter()
+            .find(|(r, _)| r.start <= a && b <= r.end)
+            .map(|(_, s)| inline_style_to_highlight(*s));
+        let in_sel = selection
+            .as_ref()
+            .is_some_and(|sel| sel.start <= a && b <= sel.end);
+        match (base_style, in_sel) {
+            (Some(mut hs), true) => {
+                hs.color = Some(rgb(0xffffff).into());
+                hs.background_color = Some(rgb(0x264f78).into());
+                merged.push((a..b, hs));
+            }
+            (Some(hs), false) => merged.push((a..b, hs)),
+            (None, true) => merged.push((
+                a..b,
+                HighlightStyle {
+                    color: Some(rgb(0xffffff).into()),
+                    background_color: Some(rgb(0x264f78).into()),
+                    ..Default::default()
+                },
+            )),
+            (None, false) => {}
+        }
+    }
+    merged
+}
+
+fn render_selectable_feed_text_styled(
     feed_layouts: &mut HashMap<FeedTextKey, FeedLayoutSnapshot>,
     active_selection: Option<FeedTextSelection>,
     key: FeedTextKey,
     text: String,
+    inline_spans: &[(std::ops::Range<usize>, InlineStyle)],
     cx: &mut Context<HermesAppView>,
 ) -> gpui::AnyElement {
-    let highlight = active_selection
+    let selection = active_selection
         .filter(|sel| sel.key == key)
         .and_then(|sel| sel.range())
         .filter(|r| {
             r.end <= text.len() && text.is_char_boundary(r.start) && text.is_char_boundary(r.end)
         });
-    let styled = if let Some(range) = highlight {
-        StyledText::new(text.clone()).with_highlights([(
-            range,
-            HighlightStyle {
-                color: Some(rgb(0xffffff).into()),
-                background_color: Some(rgb(0x264f78).into()),
-                ..Default::default()
-            },
-        )])
-    } else {
+    let highlights = merge_highlights_with_selection(text.len(), inline_spans, selection);
+    let styled = if highlights.is_empty() {
         StyledText::new(text.clone())
+    } else {
+        StyledText::new(text.clone()).with_highlights(highlights)
     };
     feed_layouts.insert(
         key,
@@ -1592,6 +1774,34 @@ fn render_selectable_feed_text(
             }),
         )
         .into_any_element()
+}
+
+fn render_selectable_feed_text(
+    feed_layouts: &mut HashMap<FeedTextKey, FeedLayoutSnapshot>,
+    active_selection: Option<FeedTextSelection>,
+    key: FeedTextKey,
+    text: String,
+    cx: &mut Context<HermesAppView>,
+) -> gpui::AnyElement {
+    render_selectable_feed_text_styled(feed_layouts, active_selection, key, text, &[], cx)
+}
+
+fn render_selectable_markdown_inline(
+    feed_layouts: &mut HashMap<FeedTextKey, FeedLayoutSnapshot>,
+    active_selection: Option<FeedTextSelection>,
+    key: FeedTextKey,
+    raw: &str,
+    cx: &mut Context<HermesAppView>,
+) -> gpui::AnyElement {
+    let parsed = parse_inline(raw);
+    render_selectable_feed_text_styled(
+        feed_layouts,
+        active_selection,
+        key,
+        parsed.plain,
+        &parsed.spans,
+        cx,
+    )
 }
 
 fn render_markdown_blocks(
@@ -1618,7 +1828,13 @@ fn render_markdown_blocks(
                     sub_idx: 0,
                 };
                 let el = div().w_full().min_w(px(0.0)).text_color(accent).child(
-                    render_selectable_feed_text(feed_layouts, active_selection, key, text, cx),
+                    render_selectable_markdown_inline(
+                        feed_layouts,
+                        active_selection,
+                        key,
+                        &text,
+                        cx,
+                    ),
                 );
                 if level <= 2 {
                     el.text_base().into_any_element()
@@ -1637,16 +1853,16 @@ fn render_markdown_blocks(
                     .min_w(px(0.0))
                     .text_sm()
                     .text_color(text_main)
-                    .child(render_selectable_feed_text(
+                    .child(render_selectable_markdown_inline(
                         feed_layouts,
                         active_selection,
                         key,
-                        text,
+                        &text,
                         cx,
                     ))
                     .into_any_element()
             }
-            MdBlock::Bullet { text } => {
+            MdBlock::Bullet { indent, text } => {
                 let key = FeedTextKey {
                     row_idx,
                     block_idx,
@@ -1655,6 +1871,7 @@ fn render_markdown_blocks(
                 div()
                     .w_full()
                     .min_w(px(0.0))
+                    .pl(px(f32::from(indent) * 14.0))
                     .flex()
                     .flex_row()
                     .gap_2()
@@ -1665,11 +1882,50 @@ fn render_markdown_blocks(
                         div()
                             .flex_1()
                             .min_w(px(0.0))
-                            .child(render_selectable_feed_text(
+                            .child(render_selectable_markdown_inline(
                                 feed_layouts,
                                 active_selection,
                                 key,
-                                text,
+                                &text,
+                                cx,
+                            )),
+                    )
+                    .into_any_element()
+            }
+            MdBlock::OrderedItem {
+                indent,
+                number,
+                text,
+            } => {
+                let key = FeedTextKey {
+                    row_idx,
+                    block_idx,
+                    sub_idx: 0,
+                };
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .pl(px(f32::from(indent) * 14.0))
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .text_sm()
+                    .text_color(text_main)
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(accent)
+                            .child(SharedString::from(number)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .child(render_selectable_markdown_inline(
+                                feed_layouts,
+                                active_selection,
+                                key,
+                                &text,
                                 cx,
                             )),
                     )
@@ -1689,24 +1945,41 @@ fn render_markdown_blocks(
                     .border_color(accent)
                     .text_sm()
                     .text_color(text_dim)
-                    .child(render_selectable_feed_text(
+                    .child(render_selectable_markdown_inline(
                         feed_layouts,
                         active_selection,
                         key,
-                        text,
+                        &text,
                         cx,
                     ))
                     .into_any_element()
             }
+            MdBlock::Rule => div()
+                .w_full()
+                .h(px(1.0))
+                .my_1()
+                .bg(border)
+                .into_any_element(),
             MdBlock::Table {
                 headers,
                 alignments,
                 rows,
             } => {
                 let mut tsv_lines = Vec::with_capacity(rows.len() + 1);
-                tsv_lines.push(headers.join("\t"));
+                tsv_lines.push(
+                    headers
+                        .iter()
+                        .map(|h| parse_inline(h).plain)
+                        .collect::<Vec<_>>()
+                        .join("\t"),
+                );
                 for r in &rows {
-                    tsv_lines.push(r.join("\t"));
+                    tsv_lines.push(
+                        r.iter()
+                            .map(|c| parse_inline(c).plain)
+                            .collect::<Vec<_>>()
+                            .join("\t"),
+                    );
                 }
                 let tsv_copy = tsv_lines.join("\n");
                 let col_count = headers.len().max(1);
@@ -1739,11 +2012,11 @@ fn render_markdown_blocks(
                             cell_div = cell_div.border_l_1().border_color(border);
                         }
                         cell_div
-                            .child(render_selectable_feed_text(
+                            .child(render_selectable_markdown_inline(
                                 feed_layouts,
                                 active_selection,
                                 key,
-                                cell,
+                                &cell,
                                 cx,
                             ))
                             .into_any_element()
@@ -1788,11 +2061,11 @@ fn render_markdown_blocks(
                                     cell_div = cell_div.border_l_1().border_color(border);
                                 }
                                 cell_div
-                                    .child(render_selectable_feed_text(
+                                    .child(render_selectable_markdown_inline(
                                         feed_layouts,
                                         active_selection,
                                         key,
-                                        cell,
+                                        &cell,
                                         cx,
                                     ))
                                     .into_any_element()
@@ -2270,6 +2543,18 @@ impl Render for HermesAppView {
                     if let Some(d) = detail {
                         line.push_str(" — ");
                         line.push_str(d);
+                    }
+                    if *state == ToolCardState::Running {
+                        let elapsed = self
+                            .state
+                            .active_tool_starts
+                            .get(name)
+                            .map(|s| format_running_elapsed(s.elapsed()));
+                        if let Some(dur) = elapsed {
+                            line.push_str(&format!(" (running… · {dur})"));
+                        } else {
+                            line.push_str(" (running…)");
+                        }
                     }
                     let error_reason = if *state == ToolCardState::Failed {
                         summary.clone()
@@ -4219,7 +4504,10 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::text_from_keystroke;
+    use super::{
+        merge_highlights_with_selection, shortcut_letter, text_from_keystroke, InlineStyle,
+        TextBuffer,
+    };
 
     #[test]
     fn space_key_inserts_space_even_without_key_char() {
@@ -4242,11 +4530,67 @@ mod tests {
             text_from_keystroke("a", Some("ф"), false, false, false),
             Some("ф")
         );
+        // Single-char printable fallback when key_char is None.
+        assert_eq!(
+            text_from_keystroke("ф", None, false, false, false),
+            Some("ф")
+        );
+        // Control characters and multi-char named keys are not inserted.
+        assert_eq!(
+            text_from_keystroke("enter", None, false, false, false),
+            None
+        );
+        assert_eq!(
+            text_from_keystroke("a", Some("\x01"), false, false, false),
+            Some("a")
+        );
         // Modified chords do not insert text.
         assert_eq!(text_from_keystroke("space", None, true, false, false), None);
         assert_eq!(
             text_from_keystroke("v", Some("v"), false, false, true),
             None
         );
+    }
+
+    #[test]
+    fn shortcuts_work_on_latin_russian_layout_and_replace_selected_text() {
+        assert_eq!(shortcut_letter("a", None), Some('a'));
+        assert_eq!(shortcut_letter("A", None), Some('a'));
+        assert_eq!(shortcut_letter("ф", None), Some('a'));
+        assert_eq!(shortcut_letter("Ф", None), Some('a'));
+        assert_eq!(shortcut_letter("с", None), Some('c'));
+        assert_eq!(shortcut_letter("м", None), Some('v'));
+        assert_eq!(shortcut_letter("ч", None), Some('x'));
+        assert_eq!(shortcut_letter("unknown", Some("\x01")), Some('a'));
+
+        let mut buf = TextBuffer::new();
+        buf.insert_str("Старый текст запроса");
+        buf.select_all();
+        assert_eq!(buf.selected_text(), Some("Старый текст запроса"));
+        // Pressing any printable key replaces the entire selection.
+        let typed = text_from_keystroke("н", Some("Н"), false, false, false).unwrap();
+        buf.insert_str(typed);
+        assert_eq!(buf.as_str(), "Н");
+        assert_eq!(buf.selected_text(), None);
+
+        // Space also replaces an active selection.
+        buf.select_all();
+        let space = text_from_keystroke("space", None, false, false, false).unwrap();
+        buf.insert_str(space);
+        assert_eq!(buf.as_str(), " ");
+    }
+
+    #[test]
+    fn merge_highlights_with_selection_emits_strictly_non_overlapping_sorted_runs() {
+        let base = vec![(0..6, InlineStyle::Bold), (10..16, InlineStyle::Code)];
+        let merged = merge_highlights_with_selection(20, &base, Some(3..13));
+        assert!(!merged.is_empty());
+        for pair in merged.windows(2) {
+            assert!(pair[0].0.start < pair[0].0.end);
+            assert!(pair[0].0.end <= pair[1].0.start);
+        }
+        // Selected overlap spans [3..6], [6..10], [10..13] all get selection background.
+        let ranges: Vec<_> = merged.iter().map(|(r, _)| r.clone()).collect();
+        assert_eq!(ranges, vec![0..3, 3..6, 6..10, 10..13, 13..16]);
     }
 }

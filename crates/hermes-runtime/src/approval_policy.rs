@@ -414,7 +414,7 @@ impl ApprovalPolicy {
 
     /// True when the sandboxed embedded RustPython kernel may execute without an upfront
     /// `RunCode` prompt (its mutating host tools like `write_file`, `patch`, `xlsx_write`,
-    /// and `terminal` still run through their own approval checks).
+    /// `docx_write`, `pptx_write`, and `terminal` still run through their own approval checks).
     pub fn allows_embedded_code(&self) -> bool {
         if self.approves_all()
             || self
