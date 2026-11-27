@@ -14,7 +14,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
-use std::sync::Mutex;
+use std::cell::RefCell;
 
 #[cfg(unix)]
 const CLIPBOARD_TIMEOUT: Duration = Duration::from_millis(1500);
@@ -31,9 +31,10 @@ pub enum ClipboardRead {
 }
 
 #[cfg(test)]
-static TEST_OVERRIDE: Mutex<Option<ClipboardRead>> = Mutex::new(None);
-#[cfg(test)]
-static TEST_WRITE_LOG: Mutex<Option<Vec<String>>> = Mutex::new(None);
+thread_local! {
+    static TEST_OVERRIDE: RefCell<Option<ClipboardRead>> = const { RefCell::new(None) };
+    static TEST_WRITE_LOG: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+}
 
 #[cfg(test)]
 pub(crate) struct TestClipboardGuard {
@@ -43,13 +44,13 @@ pub(crate) struct TestClipboardGuard {
 #[cfg(test)]
 impl Drop for TestClipboardGuard {
     fn drop(&mut self) {
-        *TEST_OVERRIDE.lock().unwrap() = self.prev.take();
+        TEST_OVERRIDE.with(|slot| *slot.borrow_mut() = self.prev.take());
     }
 }
 
 #[cfg(test)]
 pub(crate) fn override_for_test(value: ClipboardRead) -> TestClipboardGuard {
-    let prev = TEST_OVERRIDE.lock().unwrap().replace(value);
+    let prev = TEST_OVERRIDE.with(|slot| slot.borrow_mut().replace(value));
     TestClipboardGuard { prev }
 }
 
@@ -61,27 +62,27 @@ pub(crate) struct TestWriteCaptureGuard {
 #[cfg(test)]
 impl TestWriteCaptureGuard {
     pub(crate) fn writes(&self) -> Vec<String> {
-        TEST_WRITE_LOG.lock().unwrap().clone().unwrap_or_default()
+        TEST_WRITE_LOG.with(|slot| slot.borrow().clone().unwrap_or_default())
     }
 }
 
 #[cfg(test)]
 impl Drop for TestWriteCaptureGuard {
     fn drop(&mut self) {
-        *TEST_WRITE_LOG.lock().unwrap() = self.prev.take();
+        TEST_WRITE_LOG.with(|slot| *slot.borrow_mut() = self.prev.take());
     }
 }
 
 #[cfg(test)]
 pub(crate) fn capture_writes_for_test() -> TestWriteCaptureGuard {
-    let prev = TEST_WRITE_LOG.lock().unwrap().replace(Vec::new());
+    let prev = TEST_WRITE_LOG.with(|slot| slot.borrow_mut().replace(Vec::new()));
     TestWriteCaptureGuard { prev }
 }
 
 /// Read plain UTF-8 text from the operating system clipboard.
 pub fn read_text() -> ClipboardRead {
     #[cfg(test)]
-    if let Some(mocked) = TEST_OVERRIDE.lock().unwrap().clone() {
+    if let Some(mocked) = TEST_OVERRIDE.with(|slot| slot.borrow().clone()) {
         return mocked;
     }
 
@@ -91,9 +92,18 @@ pub fn read_text() -> ClipboardRead {
 /// Write plain UTF-8 text to the operating system clipboard (with OSC 52 fallback on remote TTYs).
 pub fn write_text(text: &str) -> Result<(), String> {
     #[cfg(test)]
-    if let Some(log) = TEST_WRITE_LOG.lock().unwrap().as_mut() {
-        log.push(text.to_owned());
-        return Ok(());
+    {
+        let captured = TEST_WRITE_LOG.with(|slot| {
+            if let Some(log) = slot.borrow_mut().as_mut() {
+                log.push(text.to_owned());
+                true
+            } else {
+                false
+            }
+        });
+        if captured {
+            return Ok(());
+        }
     }
 
     write_text_platform(text)

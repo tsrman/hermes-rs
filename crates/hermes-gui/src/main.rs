@@ -1,6 +1,7 @@
 //! `hsr-gui`: standalone GPUI desktop application for Hermes Agent backed by the shared
 //! cross-platform local session owner (`hsr owner`, protocol v2).
 
+mod clipboard_media;
 mod editor;
 mod markdown;
 mod owner_client;
@@ -16,11 +17,11 @@ use std::time::Duration;
 #[cfg(target_os = "windows")]
 use gpui::WindowControlArea;
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, ClipboardItem, Context,
-    ExternalPaths, FocusHandle, FontStyle, FontWeight, HighlightStyle, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, PathPromptOptions, Pixels, Point, Rgba, ScrollHandle,
-    ScrollWheelEvent, SharedString, StrikethroughStyle, StyledText, TextLayout, TitlebarOptions,
-    UnderlineStyle, Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, rgb, size, App, Application, Bounds, ClipboardEntry, ClipboardItem,
+    Context, ExternalPaths, FocusHandle, FontStyle, FontWeight, HighlightStyle, KeyDownEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, PathPromptOptions, Pixels, Point, Rgba,
+    ScrollHandle, ScrollWheelEvent, SharedString, StrikethroughStyle, StyledText, TextLayout,
+    TitlebarOptions, UnderlineStyle, Window, WindowBounds, WindowOptions,
 };
 use hermes_runtime::config::profile_home;
 use hermes_runtime::local_owner::ApprovalScope;
@@ -32,8 +33,8 @@ use crate::owner_client::{BackendUpdate, OwnerClient, ScopedUpdate};
 use crate::setup_state::{SetupDraft, SetupField, GUI_PROVIDER_PRESETS, GUI_WEB_BACKENDS};
 use crate::state::{FeedRow, GuiState, PendingClarify, ToolCardState};
 use crate::workspace::{
-    attach_path_to_workspace, format_prompt_with_attachments, format_size, resolve_workspace_dir,
-    short_folder_label, WorkspacePrefs,
+    attach_bytes_to_workspace, attach_path_to_workspace, format_prompt_with_attachments,
+    format_size, resolve_workspace_dir, short_folder_label, WorkspacePrefs,
 };
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
@@ -708,6 +709,26 @@ impl HermesAppView {
         cx.notify();
     }
 
+    fn attach_clipboard_image(&mut self, ext: &str, bytes: &[u8], cx: &mut Context<Self>) {
+        let base_name = format!("clipboard_image.{ext}");
+        match attach_bytes_to_workspace(bytes, &base_name, &self.workspace_root) {
+            Ok(att) => {
+                let name = att.display_name.clone();
+                let size = format_size(att.size_bytes);
+                self.state.add_attachment(att);
+                self.state.status_message = format!("Attached clipboard image ({name}, {size})");
+            }
+            Err(err) => {
+                self.state.feed.push(FeedRow::Notice {
+                    is_error: true,
+                    text: err.clone(),
+                });
+                self.state.status_message = err;
+            }
+        }
+        cx.notify();
+    }
+
     fn save_setup(&mut self, cx: &mut Context<Self>) {
         match self.setup.save(&self.state.active_profile) {
             Ok(msg) => {
@@ -1030,8 +1051,41 @@ impl HermesAppView {
         }
 
         if primary_letter == Some('v') {
-            if let Some(item) = cx.read_from_clipboard() {
-                if let Some(text) = item.text() {
+            let item = cx.read_from_clipboard();
+
+            // 1. In the Composer, attach clipboard images (GPUI ClipboardEntry::Image on all OSes).
+            if self.input_target == InputTarget::Composer {
+                if let Some(img) = item.as_ref().and_then(|clip| {
+                    clip.entries().iter().find_map(|e| match e {
+                        ClipboardEntry::Image(img) => Some(img),
+                        _ => None,
+                    })
+                }) {
+                    match clipboard_media::normalize_gpui_image(img.format(), img.bytes()) {
+                        Ok((ext, bytes)) => self.attach_clipboard_image(ext, &bytes, cx),
+                        Err(err) => {
+                            self.state.feed.push(FeedRow::Notice {
+                                is_error: true,
+                                text: err.clone(),
+                            });
+                            self.state.status_message = err;
+                            cx.notify();
+                        }
+                    }
+                    return;
+                }
+
+                // 2. On Windows, Explorer Ctrl+C puts CF_HDROP (without Unicode text): attach those files.
+                #[cfg(target_os = "windows")]
+                if let Some(paths) = clipboard_media::read_windows_clipboard_files() {
+                    self.attach_paths(&paths, cx);
+                    return;
+                }
+            }
+
+            // 3. Plain text paste works in every text input field.
+            if let Some(text) = item.as_ref().and_then(ClipboardItem::text) {
+                if !text.is_empty() {
                     if let Some(buf) = self.active_buffer_mut() {
                         buf.insert_str(&text);
                     }
@@ -1042,6 +1096,27 @@ impl HermesAppView {
                         );
                     }
                     cx.notify();
+                    return;
+                }
+            }
+
+            // 4. On Windows, fall back to Win32 PNG / CF_DIBV5 / CF_DIB (Snipping Tool, Win+Shift+S,
+            //    PrtScn, Paint, browsers) which gpui 0.2.2 does not decode.
+            #[cfg(target_os = "windows")]
+            if self.input_target == InputTarget::Composer {
+                match clipboard_media::read_windows_clipboard_image() {
+                    Ok(Some((ext, bytes))) => {
+                        self.attach_clipboard_image(ext, &bytes, cx);
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        self.state.feed.push(FeedRow::Notice {
+                            is_error: true,
+                            text: err.clone(),
+                        });
+                        self.state.status_message = err;
+                        cx.notify();
+                    }
                 }
             }
             return;

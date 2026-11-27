@@ -3076,6 +3076,7 @@ dependencies = [
  "gpui",
  "hermes-cli",
  "hermes-runtime",
+ "image",
  "serde",
  "serde_json",
  "tokio",

@@ -212,6 +212,9 @@ pub struct TuiApp {
     input: String,
     /// Byte index of cursor in `input` (always on a UTF-8 char boundary).
     cursor: usize,
+    /// Optional selection anchor byte offset in `input`; when `Some(a)` with `a != cursor`,
+    /// `min(a, cursor)..max(a, cursor)` is selected in the composer.
+    input_anchor: Option<usize>,
     home: Option<PathBuf>,
     root: PathBuf,
     history_pos: Option<usize>,
@@ -249,6 +252,7 @@ impl TuiApp {
         Self {
             input: String::new(),
             cursor: 0,
+            input_anchor: None,
             home: None,
             root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             history_pos: None,
@@ -301,7 +305,66 @@ impl TuiApp {
         self.scroll_from_bottom = self.scroll_from_bottom.saturating_sub(lines);
     }
 
+    fn input_selection(&self) -> Option<std::ops::Range<usize>> {
+        let a = self.input_anchor?.min(self.input.len());
+        let c = self.cursor.min(self.input.len());
+        if a == c {
+            None
+        } else {
+            Some(a.min(c)..a.max(c))
+        }
+    }
+
+    fn selected_input_text(&self) -> Option<&str> {
+        let range = self.input_selection()?;
+        self.input.get(range)
+    }
+
+    fn clear_input_selection(&mut self) {
+        self.input_anchor = None;
+    }
+
+    fn select_all_input(&mut self) {
+        if self.input.is_empty() {
+            self.input_anchor = None;
+            self.cursor = 0;
+        } else {
+            self.input_anchor = Some(0);
+            self.cursor = self.input.len();
+        }
+    }
+
+    fn delete_input_selection(&mut self) -> bool {
+        let Some(range) = self.input_selection() else {
+            self.input_anchor = None;
+            return false;
+        };
+        self.input.drain(range.clone());
+        self.cursor = range.start;
+        self.input_anchor = None;
+        self.history_pos = None;
+        self.palette_index = 0;
+        true
+    }
+
+    fn set_input_cursor(&mut self, pos: usize, extend: bool) {
+        let clamped = pos.min(self.input.len());
+        if extend {
+            if self.input_anchor.is_none() {
+                self.input_anchor = Some(self.cursor);
+            }
+            self.cursor = clamped;
+            if self.input_anchor == Some(self.cursor) {
+                self.input_anchor = None;
+            }
+        } else {
+            self.input_anchor = None;
+            self.cursor = clamped;
+        }
+    }
+
     fn insert_char(&mut self, c: char) {
+        self.delete_input_selection();
         self.input.insert(self.cursor, c);
         self.cursor += c.len_utf8();
         self.history_pos = None;
@@ -309,6 +372,9 @@ impl TuiApp {
     }
 
     fn backspace(&mut self) {
+        if self.delete_input_selection() {
+            return;
+        }
         if self.cursor == 0 {
             return;
         }
@@ -323,22 +389,94 @@ impl TuiApp {
         self.palette_index = 0;
     }
 
+    fn prev_word_boundary(&self, from: usize) -> usize {
+        let head = &self.input[..from.min(self.input.len())];
+        let trimmed_end = head.trim_end().len();
+        head[..trimmed_end]
+            .rfind(char::is_whitespace)
+            .and_then(|ws_idx| {
+                let ws_char = head[ws_idx..].chars().next()?;
+                Some(ws_idx + ws_char.len_utf8())
+            })
+            .unwrap_or(0)
+    }
+
+    fn next_word_boundary(&self, from: usize) -> usize {
+        let start = from.min(self.input.len());
+        let tail = &self.input[start..];
+        let mut iter = tail.char_indices().peekable();
+        // Skip current non-whitespace word, then trailing whitespace (standard editor Ctrl+Right).
+        let starts_ws = iter.peek().is_some_and(|(_, c)| c.is_whitespace());
+        if starts_ws {
+            while iter.peek().is_some_and(|(_, c)| c.is_whitespace()) {
+                iter.next();
+            }
+            while iter.peek().is_some_and(|(_, c)| !c.is_whitespace()) {
+                iter.next();
+            }
+        } else {
+            while iter.peek().is_some_and(|(_, c)| !c.is_whitespace()) {
+                iter.next();
+            }
+            while iter.peek().is_some_and(|(_, c)| c.is_whitespace()) {
+                iter.next();
+            }
+        }
+        iter.peek().map_or(self.input.len(), |(i, _)| start + *i)
+    }
+
     fn delete_word_back(&mut self) {
+        if self.delete_input_selection() {
+            return;
+        }
         if self.cursor == 0 {
             return;
         }
-        let head = &self.input[..self.cursor];
-        let trimmed_end = head.trim_end().len();
-        let new_pos = head[..trimmed_end]
-            .rfind(char::is_whitespace)
-            .map(|i| i + 1)
-            .unwrap_or(0);
+        let new_pos = self.prev_word_boundary(self.cursor);
         self.input.drain(new_pos..self.cursor);
         self.cursor = new_pos;
         self.history_pos = None;
+        self.palette_index = 0;
+    }
+
+    fn delete_word_forward(&mut self) {
+        if self.delete_input_selection() {
+            return;
+        }
+        if self.cursor >= self.input.len() {
+            return;
+        }
+        let end = self.next_word_boundary(self.cursor);
+        self.input.drain(self.cursor..end);
+        self.history_pos = None;
+        self.palette_index = 0;
+    }
+
+    fn delete_to_line_end(&mut self) {
+        if self.delete_input_selection() {
+            return;
+        }
+        if self.cursor >= self.input.len() {
+            return;
+        }
+        let end = self.input[self.cursor..]
+            .find('\n')
+            .map_or(self.input.len(), |rel| {
+                if rel == 0 {
+                    self.cursor + 1
+                } else {
+                    self.cursor + rel
+                }
+            });
+        self.input.drain(self.cursor..end);
+        self.history_pos = None;
+        self.palette_index = 0;
     }
 
     fn delete_char_forward(&mut self) {
+        if self.delete_input_selection() {
+            return;
+        }
         if self.cursor >= self.input.len() {
             return;
         }
@@ -349,27 +487,67 @@ impl TuiApp {
             .unwrap_or(self.cursor);
         self.input.drain(self.cursor..next);
         self.history_pos = None;
+        self.palette_index = 0;
     }
 
-    fn move_left(&mut self) {
+    fn move_left(&mut self, extend: bool) {
+        if !extend {
+            if let Some(range) = self.input_selection() {
+                self.cursor = range.start;
+                self.input_anchor = None;
+                return;
+            }
+        }
         if self.cursor > 0 {
-            self.cursor = self.input[..self.cursor]
+            let prev = self.input[..self.cursor]
                 .char_indices()
                 .next_back()
                 .map(|(i, _)| i)
                 .unwrap_or(0);
+            self.set_input_cursor(prev, extend);
+        } else if !extend {
+            self.input_anchor = None;
         }
     }
 
-    fn move_right(&mut self) {
-        if self.cursor < self.input.len() {
-            if let Some(c) = self.input[self.cursor..].chars().next() {
-                self.cursor += c.len_utf8();
+    fn move_right(&mut self, extend: bool) {
+        if !extend {
+            if let Some(range) = self.input_selection() {
+                self.cursor = range.end;
+                self.input_anchor = None;
+                return;
             }
         }
+        if self.cursor < self.input.len() {
+            if let Some(c) = self.input[self.cursor..].chars().next() {
+                self.set_input_cursor(self.cursor + c.len_utf8(), extend);
+            }
+        } else if !extend {
+            self.input_anchor = None;
+        }
+    }
+
+    fn move_word_left(&mut self, extend: bool) {
+        let next = self.prev_word_boundary(self.cursor);
+        self.set_input_cursor(next, extend);
+    }
+
+    fn move_word_right(&mut self, extend: bool) {
+        let next = self.next_word_boundary(self.cursor);
+        self.set_input_cursor(next, extend);
+    }
+
+    fn move_home(&mut self, extend: bool) {
+        self.set_input_cursor(0, extend);
+    }
+
+    fn move_end(&mut self, extend: bool) {
+        let len = self.input.len();
+        self.set_input_cursor(len, extend);
     }
 
     fn move_line_up(&mut self) {
+        self.clear_input_selection();
         let before = &self.input[..self.cursor];
         let Some(cur_line_nl) = before.rfind('\n') else {
             return;
@@ -385,6 +563,7 @@ impl TuiApp {
     }
 
     fn move_line_down(&mut self) {
+        self.clear_input_selection();
         let before = &self.input[..self.cursor];
         let cur_line_start = before.rfind('\n').map_or(0, |i| i + 1);
         let col_chars = before[cur_line_start..].chars().count();
@@ -405,6 +584,7 @@ impl TuiApp {
     }
 
     fn insert_pasted(&mut self, raw: &str) {
+        self.delete_input_selection();
         let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
         self.input.insert_str(self.cursor, &normalized);
         self.cursor += normalized.len();
@@ -1152,6 +1332,29 @@ async fn handle_key_event(
         }
     }
 
+    let ctrl_letter = ctrl_shortcut_letter(key);
+
+    // 0b. If composer text is selected (e.g. after Ctrl+A or Shift+Arrows), Ctrl+C / Ctrl+Insert
+    // copies it to clipboard (with OSC 52 fallback over SSH/PuTTY) instead of wiping the input.
+    if app.modal.is_none() && !app.is_busy() && app.input_selection().is_some() {
+        if is_copy_selection_key(key) {
+            if let Some(selected) = app.selected_input_text().map(str::to_owned) {
+                match clipboard::write_text(&selected) {
+                    Ok(()) => app.set_copy_status(
+                        false,
+                        format!("Copied {} char(s) from input", selected.chars().count()),
+                    ),
+                    Err(msg) => app.set_copy_status(true, msg),
+                }
+            }
+            return None;
+        }
+        if key.code == KeyCode::Esc {
+            app.clear_input_selection();
+            return None;
+        }
+    }
+
     // Toggle mouse capture (Alt+M) for users who prefer native terminal mouse selection.
     if app.modal.is_none()
         && key.modifiers.contains(KeyModifiers::ALT)
@@ -1162,7 +1365,7 @@ async fn handle_key_event(
     }
 
     // 1. Active modal consumes keys first (except Ctrl-C which cancels the turn).
-    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+    if ctrl_letter == Some('c') {
         if let Some(handle) = active_handle.take() {
             handle.abort();
             *turn_rx = None;
@@ -1219,6 +1422,7 @@ async fn handle_key_event(
         if !app.input.is_empty() {
             app.input.clear();
             app.cursor = 0;
+            app.clear_input_selection();
             app.history_pos = None;
         }
         return None;
@@ -1230,7 +1434,7 @@ async fn handle_key_event(
     }
 
     // Ctrl-D exits when composer is empty and idle.
-    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('d') {
+    if ctrl_letter == Some('d') {
         if app.input.is_empty() && !app.is_busy() {
             app.should_exit = Some(UiOutcome::Exit);
         }
@@ -1255,11 +1459,13 @@ async fn handle_key_event(
             app.scroll_feed_down(3);
             return None;
         }
-        (KeyCode::Char('u'), m) if m.contains(KeyModifiers::CONTROL) => {
+        _ if ctrl_letter == Some('u') => {
             app.scroll_feed_up(12);
             return None;
         }
-        (KeyCode::End, m) if m.contains(KeyModifiers::CONTROL) => {
+        (KeyCode::End, m)
+            if m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::SHIFT) =>
+        {
             app.scroll_from_bottom = 0;
             return None;
         }
@@ -1284,6 +1490,7 @@ async fn handle_key_event(
                     }
                     app.input.replace_range(at_start..app.cursor, &replacement);
                     app.cursor = at_start + replacement.len();
+                    app.clear_input_selection();
                 } else {
                     app.input = item.replacement.clone();
                     if matches!(
@@ -1293,6 +1500,7 @@ async fn handle_key_event(
                         app.input.push(' ');
                     }
                     app.cursor = app.input.len();
+                    app.clear_input_selection();
                 }
                 app.palette_index = 0;
                 return None;
@@ -1322,12 +1530,14 @@ async fn handle_key_event(
                     }
                     app.input.replace_range(at_start..app.cursor, &replacement);
                     app.cursor = at_start + replacement.len();
+                    app.clear_input_selection();
                     app.palette_index = 0;
                     return None;
                 }
                 let chosen = item.replacement.clone();
                 app.input.clear();
                 app.cursor = 0;
+                app.clear_input_selection();
                 app.history_pos = None;
                 app.draft_before_history.clear();
                 app.palette_index = 0;
@@ -1345,9 +1555,10 @@ async fn handle_key_event(
 
     // Composer editing & submission
     match (key.code, key.modifiers) {
-        (KeyCode::Char('p'), m) if m.contains(KeyModifiers::CONTROL) && app.input.is_empty() => {
+        _ if ctrl_letter == Some('p') && app.input.is_empty() => {
             app.input = "/".into();
             app.cursor = 1;
+            app.clear_input_selection();
             app.palette_index = 0;
         }
         (KeyCode::Enter, m)
@@ -1357,12 +1568,15 @@ async fn handle_key_event(
         {
             app.insert_char('\n');
         }
-        (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => {
+        _ if ctrl_letter == Some('j') => {
             app.insert_char('\n');
         }
         (KeyCode::Enter, _) => {
             // Support trailing `\` continuation just like inline REPL.
-            if app.cursor == app.input.len() && app.input.ends_with('\\') {
+            if app.input_selection().is_none()
+                && app.cursor == app.input.len()
+                && app.input.ends_with('\\')
+            {
                 app.backspace();
                 app.insert_char('\n');
                 return None;
@@ -1370,6 +1584,7 @@ async fn handle_key_event(
             let text = app.input.trim().to_owned();
             app.input.clear();
             app.cursor = 0;
+            app.clear_input_selection();
             app.history_pos = None;
             app.draft_before_history.clear();
             if text.is_empty() {
@@ -1387,17 +1602,40 @@ async fn handle_key_event(
             }
             return Some(TuiAction::Turn(text));
         }
+        (KeyCode::Backspace, m) if m.contains(KeyModifiers::CONTROL) => app.delete_word_back(),
         (KeyCode::Backspace, _) => app.backspace(),
+        _ if ctrl_letter == Some('h') => app.backspace(),
+        (KeyCode::Delete, m) if m.contains(KeyModifiers::CONTROL) => app.delete_word_forward(),
         (KeyCode::Delete, _) => app.delete_char_forward(),
-        (KeyCode::Left, _) => app.move_left(),
-        (KeyCode::Right, _) => app.move_right(),
-        (KeyCode::Home, _) => app.cursor = 0,
-        (KeyCode::End, _) => app.cursor = app.input.len(),
-        (KeyCode::Char('a'), m) if m.contains(KeyModifiers::CONTROL) => app.cursor = 0,
-        (KeyCode::Char('e'), m) if m.contains(KeyModifiers::CONTROL) => {
-            app.cursor = app.input.len();
+        (KeyCode::Left, m) if m.contains(KeyModifiers::CONTROL) => {
+            app.move_word_left(m.contains(KeyModifiers::SHIFT));
         }
-        (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => app.delete_word_back(),
+        (KeyCode::Right, m) if m.contains(KeyModifiers::CONTROL) => {
+            app.move_word_right(m.contains(KeyModifiers::SHIFT));
+        }
+        (KeyCode::Left, m) => app.move_left(m.contains(KeyModifiers::SHIFT)),
+        (KeyCode::Right, m) => app.move_right(m.contains(KeyModifiers::SHIFT)),
+        (KeyCode::Home, m) => app.move_home(m.contains(KeyModifiers::SHIFT)),
+        (KeyCode::End, m) => app.move_end(m.contains(KeyModifiers::SHIFT)),
+        _ if ctrl_letter == Some('a') => {
+            app.clear_selection();
+            app.select_all_input();
+        }
+        _ if ctrl_letter == Some('x') => {
+            if let Some(selected) = app.selected_input_text().map(str::to_owned) {
+                match clipboard::write_text(&selected) {
+                    Ok(()) => app.set_copy_status(
+                        false,
+                        format!("Cut {} char(s) to clipboard", selected.chars().count()),
+                    ),
+                    Err(msg) => app.set_copy_status(true, msg),
+                }
+                app.delete_input_selection();
+            }
+        }
+        _ if ctrl_letter == Some('e') => app.move_end(false),
+        _ if ctrl_letter == Some('w') => app.delete_word_back(),
+        _ if ctrl_letter == Some('k') => app.delete_to_line_end(),
         _ if is_paste_key(key) => match clipboard::read_text() {
             ClipboardRead::Text(text) => app.insert_pasted(&text),
             ClipboardRead::Empty => {}
@@ -1419,6 +1657,7 @@ async fn handle_key_event(
             app.history_pos = Some(next_idx);
             app.input = state.prompt_history[next_idx].clone();
             app.cursor = app.input.len();
+            app.clear_input_selection();
         }
         (KeyCode::Down, _) if app.history_pos.is_some() => {
             if let Some(i) = app.history_pos {
@@ -1430,6 +1669,7 @@ async fn handle_key_event(
                     app.input = std::mem::take(&mut app.draft_before_history);
                 }
                 app.cursor = app.input.len();
+                app.clear_input_selection();
             }
         }
         (KeyCode::Down, _) if app.input[app.cursor..].contains('\n') => {
@@ -1443,6 +1683,40 @@ async fn handle_key_event(
         _ => {}
     }
     None
+}
+
+/// Map a Ctrl/Cmd keystroke to its physical Latin letter across English and Russian (ЙЦУКЕН)
+/// layouts so standard shortcuts (`Ctrl+A`, `Ctrl+C`, `Ctrl+V`, `Ctrl+X`, `Ctrl+W`, etc.) work
+/// consistently over PuTTY/SSH and local terminals regardless of active keyboard layout.
+fn ctrl_shortcut_letter(key: KeyEvent) -> Option<char> {
+    let m = key.modifiers;
+    if !(m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::SUPER))
+        || m.contains(KeyModifiers::ALT)
+    {
+        return None;
+    }
+    let KeyCode::Char(ch) = key.code else {
+        return None;
+    };
+    if ch.is_ascii_alphabetic() {
+        return Some(ch.to_ascii_lowercase());
+    }
+    match ch {
+        'ф' | 'Ф' => Some('a'),
+        'с' | 'С' => Some('c'),
+        'в' | 'В' => Some('d'),
+        'у' | 'У' => Some('e'),
+        'р' | 'Р' => Some('h'),
+        'о' | 'О' => Some('j'),
+        'л' | 'Л' => Some('k'),
+        'з' | 'З' => Some('p'),
+        'г' | 'Г' => Some('u'),
+        'м' | 'М' => Some('v'),
+        'ц' | 'Ц' => Some('w'),
+        'ч' | 'Ч' => Some('x'),
+        'я' | 'Я' => Some('z'),
+        _ => None,
+    }
 }
 
 /// True for key combinations that explicitly request clipboard paste when the
@@ -1878,18 +2152,18 @@ fn handle_modal_key(app: &mut TuiApp, state: &mut ReplState, home: Option<&Path>
                 *scroll = scroll.saturating_add(1);
                 app.modal = Some(modal);
             }
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
+            KeyCode::Char('y' | 'Y' | 'н' | 'Н') => {
                 if let Some(tx) = reply.take() {
                     let _ = tx.send(ApprovalDecision::Approved);
                 }
             }
-            KeyCode::Char('s') | KeyCode::Char('S') => {
+            KeyCode::Char('s' | 'S' | 'ы' | 'Ы') => {
                 let _ = approval::record_grant(request, Grant::Session);
                 if let Some(tx) = reply.take() {
                     let _ = tx.send(ApprovalDecision::Approved);
                 }
             }
-            KeyCode::Char('a') | KeyCode::Char('A') => {
+            KeyCode::Char('a' | 'A' | 'ф' | 'Ф') => {
                 if let Some(err) = approval::record_grant(request, Grant::Always) {
                     TuiApp::push_notice(
                         state,
@@ -1901,7 +2175,7 @@ fn handle_modal_key(app: &mut TuiApp, state: &mut ReplState, home: Option<&Path>
                     let _ = tx.send(ApprovalDecision::Approved);
                 }
             }
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+            KeyCode::Char('n' | 'N' | 'т' | 'Т') | KeyCode::Esc => {
                 if let Some(tx) = reply.take() {
                     let _ = tx.send(ApprovalDecision::Denied);
                 }
@@ -2366,16 +2640,40 @@ struct ComposerLayout {
 }
 
 /// Deterministically wrap composer input on explicit newlines and `inner_width` columns so
-/// box height, rendered rows, vertical scrolling, and visible cursor coordinates always agree.
-fn wrap_composer_lines(input: &str, cursor: usize, inner_width: usize) -> ComposerLayout {
+/// box height, rendered rows, vertical scrolling, selection highlights, and visible cursor
+/// coordinates always agree.
+fn wrap_composer_lines(
+    input: &str,
+    cursor: usize,
+    selection: Option<std::ops::Range<usize>>,
+    inner_width: usize,
+) -> ComposerLayout {
     let width = inner_width.max(1);
     let clamped_cursor = cursor.min(input.len());
+    let sel_style = Style::default().bg(Color::Blue).fg(Color::White);
     let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut current = String::new();
+    let mut row_spans: Vec<Span<'static>> = Vec::new();
+    let mut cur_buf = String::new();
+    let mut cur_selected = false;
     let mut col: usize = 0;
     let mut cursor_row: usize = 0;
     let mut cursor_col: usize = 0;
     let mut cursor_found = false;
+
+    let flush_row = |lines: &mut Vec<Line<'static>>,
+                     row_spans: &mut Vec<Span<'static>>,
+                     cur_buf: &mut String,
+                     cur_selected: bool| {
+        if !cur_buf.is_empty() {
+            let text = std::mem::take(cur_buf);
+            row_spans.push(if cur_selected {
+                Span::styled(text, sel_style)
+            } else {
+                Span::raw(text)
+            });
+        }
+        lines.push(Line::from(std::mem::take(row_spans)));
+    };
 
     for (byte_idx, ch) in input.char_indices() {
         if !cursor_found && byte_idx >= clamped_cursor {
@@ -2384,31 +2682,43 @@ fn wrap_composer_lines(input: &str, cursor: usize, inner_width: usize) -> Compos
             cursor_found = true;
         }
         if ch == '\n' {
-            lines.push(Line::from(std::mem::take(&mut current)));
+            flush_row(&mut lines, &mut row_spans, &mut cur_buf, cur_selected);
             col = 0;
             continue;
         }
         if col >= width {
-            lines.push(Line::from(std::mem::take(&mut current)));
+            flush_row(&mut lines, &mut row_spans, &mut cur_buf, cur_selected);
             col = 0;
             if byte_idx == clamped_cursor {
                 cursor_row = lines.len();
                 cursor_col = 0;
             }
         }
-        current.push(ch);
+        let is_sel = selection
+            .as_ref()
+            .is_some_and(|r| byte_idx >= r.start && byte_idx < r.end);
+        if is_sel != cur_selected && !cur_buf.is_empty() {
+            let text = std::mem::take(&mut cur_buf);
+            row_spans.push(if cur_selected {
+                Span::styled(text, sel_style)
+            } else {
+                Span::raw(text)
+            });
+        }
+        cur_selected = is_sel;
+        cur_buf.push(ch);
         col += 1;
     }
 
     if !cursor_found {
         if col >= width {
-            lines.push(Line::from(std::mem::take(&mut current)));
+            flush_row(&mut lines, &mut row_spans, &mut cur_buf, cur_selected);
             col = 0;
         }
         cursor_row = lines.len();
         cursor_col = col;
     }
-    lines.push(Line::from(current));
+    flush_row(&mut lines, &mut row_spans, &mut cur_buf, cur_selected);
 
     ComposerLayout {
         lines,
@@ -2421,7 +2731,7 @@ pub fn render_frame(frame: &mut Frame<'_>, app: &TuiApp, state: &ReplState) {
     let area = frame.area();
     let inner_width = area.width.saturating_sub(2).max(1) as usize;
     let max_composer_lines = (area.height / 3).clamp(3, 8);
-    let layout = wrap_composer_lines(&app.input, app.cursor, inner_width);
+    let layout = wrap_composer_lines(&app.input, app.cursor, app.input_selection(), inner_width);
     let composer_lines = (layout.lines.len().max(1) as u16).clamp(1, max_composer_lines);
     let composer_height = composer_lines + 2;
 
@@ -3920,7 +4230,7 @@ mod tests {
         // 3. Trailing newline (e.g. after Alt+Enter / Ctrl+J) expands box immediately and moves cursor to row + 1.
         app.input = "LineOne\n".into();
         app.cursor = app.input.len();
-        let layout = wrap_composer_lines(&app.input, app.cursor, 38);
+        let layout = wrap_composer_lines(&app.input, app.cursor, None, 38);
         assert_eq!(layout.lines.len(), 2);
         assert_eq!((layout.cursor_row, layout.cursor_col), (1, 0));
 
@@ -4533,5 +4843,150 @@ mod tests {
             !screen.contains("/cmd01"),
             "top items should scroll out:\n{screen}"
         );
+    }
+
+    #[tokio::test]
+    async fn ctrl_a_selects_highlights_and_supports_editor_shortcuts_including_russian_and_putty() {
+        let _writes = clipboard::capture_writes_for_test();
+        let mut app = TuiApp::new();
+        let mut state = sample_state();
+        let mut handle = None;
+        let mut rx = None;
+
+        for ch in "Привет мир test".chars() {
+            handle_key_event(
+                &mut app,
+                &mut state,
+                None,
+                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+                &mut handle,
+                &mut rx,
+            )
+            .await;
+        }
+        assert_eq!(app.input, "Привет мир test");
+
+        // Ctrl+A selects the entire composer text and highlights it in blue.
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert_eq!(app.selected_input_text(), Some("Привет мир test"));
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        terminal.draw(|f| render_frame(f, &app, &state)).unwrap();
+        let buf = terminal.backend().buffer();
+        let has_blue_cell = (0..60).any(|x| {
+            (0..12).any(|y| {
+                let cell = &buf[(x, y)];
+                cell.symbol() == "П" && cell.bg == Color::Blue
+            })
+        });
+        assert!(has_blue_cell, "selected composer text must be highlighted");
+
+        // Ctrl+C while composer text is selected copies it without wiping the input.
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert_eq!(app.input, "Привет мир test");
+        assert_eq!(
+            _writes.writes().last().map(String::as_str),
+            Some("Привет мир test")
+        );
+
+        // Typing any character replaces the active selection.
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert_eq!(app.input, "X");
+        assert!(app.input_selection().is_none());
+
+        // Russian layout Ctrl+Ф selects all, and Ctrl+Ч cuts it to clipboard.
+        app.insert_pasted("alpha beta gamma");
+        assert_eq!(app.input, "Xalpha beta gamma");
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Char('ф'), KeyModifiers::CONTROL),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert_eq!(app.selected_input_text(), Some("Xalpha beta gamma"));
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Char('ч'), KeyModifiers::CONTROL),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert!(app.input.is_empty());
+        assert_eq!(
+            _writes.writes().last().map(String::as_str),
+            Some("Xalpha beta gamma")
+        );
+
+        // Word navigation, Shift selection, Ctrl+Backspace, and PuTTY Ctrl+H.
+        app.insert_pasted("one two three");
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert_eq!(app.selected_input_text(), Some("three"));
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert_eq!(app.input, "one two ");
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert_eq!(app.input, "one two");
+        handle_key_event(
+            &mut app,
+            &mut state,
+            None,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL),
+            &mut handle,
+            &mut rx,
+        )
+        .await;
+        assert_eq!(app.input, "one ");
     }
 }

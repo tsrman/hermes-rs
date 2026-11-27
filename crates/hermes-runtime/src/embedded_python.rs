@@ -651,6 +651,32 @@ import contextlib, io, json, os, shlex, sys, time, traceback, types
 
 time.sleep = _hermes_bridge.sleep
 
+class _StatResult(tuple):
+    st_mode = property(lambda self: self[0])
+    st_ino = property(lambda self: self[1])
+    st_dev = property(lambda self: self[2])
+    st_nlink = property(lambda self: self[3])
+    st_uid = property(lambda self: self[4])
+    st_gid = property(lambda self: self[5])
+    st_size = property(lambda self: self[6])
+    st_atime = property(lambda self: self[7])
+    st_mtime = property(lambda self: self[8])
+    st_ctime = property(lambda self: self[9])
+
+_raw_stat = getattr(os, "stat", None)
+if callable(_raw_stat):
+    def _wrapped_stat(path, *args, **kwargs):
+        res = _raw_stat(path)
+        return res if hasattr(res, "st_size") else _StatResult(res)
+    os.stat = _wrapped_stat
+_raw_lstat = getattr(os, "lstat", None)
+if callable(_raw_lstat):
+    def _wrapped_lstat(path, *args, **kwargs):
+        res = _raw_lstat(path)
+        return res if hasattr(res, "st_size") else _StatResult(res)
+    os.lstat = _wrapped_lstat
+os.stat_result = _StatResult
+
 _LIMIT = 5000000
 
 class _Capture(io.StringIO):
@@ -1382,12 +1408,15 @@ print(avg, wb["sheets"]["Data"][1])
         let out2 = p2["stdout"].as_str().unwrap();
         assert!(out2.contains("25") && out2.contains("Mean"), "{p2}");
 
-        // Cell 3: bridges docx_write / docx_read and pptx_write / pptx_read
+        // Cell 3: bridges docx_write / docx_read, pptx_write / pptx_read, and os.path.getsize
         let code3 = r##"
+import os
 from hermes_tools import docx_write, docx_read, pptx_write, pptx_read
 
 d_res = docx_write("brief.docx", "# Отчёт\n\n- **Итог**: готово\n", title="Бриф")
 assert d_res["status"] == "ok", d_res
+assert os.path.getsize("brief.docx") > 500
+assert os.stat("brief.docx").st_size == os.path.getsize("brief.docx")
 d_read = docx_read("brief.docx")
 assert "Бриф" in d_read["paragraphs"], d_read
 
@@ -1396,6 +1425,7 @@ p_res = pptx_write("deck.pptx", [
     {"title": "Цели", "bullets": ["Запуск", "Рост"], "notes": "Показать демо"},
 ])
 assert p_res["status"] == "ok", p_res
+assert os.path.getsize("deck.pptx") > 500
 p_read = pptx_read("deck.pptx")
 assert p_read["slide_count"] == 2, p_read
 assert p_read["slides"][1]["notes"] == "Показать демо", p_read

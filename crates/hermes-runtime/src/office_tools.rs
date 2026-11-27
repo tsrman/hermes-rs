@@ -1947,7 +1947,7 @@ fn pptx_push_inline_runs(
             if l_idx > 0 {
                 let _ = write!(
                     out,
-                    r#"<a:br><a:rPr lang="ru-RU" sz="{size_hundredths}"/></a:br>"#
+                    r#"<a:br><a:rPr lang="ru-RU" sz="{size_hundredths}" dirty="0"/></a:br>"#
                 );
             }
             if part.is_empty() {
@@ -1978,6 +1978,10 @@ fn pptx_push_inline_runs(
             );
         }
     }
+    let _ = write!(
+        out,
+        r#"<a:endParaRPr lang="ru-RU" sz="{size_hundredths}" dirty="0"/>"#
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2081,8 +2085,9 @@ fn pptx_push_table(
         .unwrap_or_else(|| tbl.rows.first().map(Vec::len).unwrap_or(1))
         .max(1);
     let total_rows = tbl.rows.len() + usize::from(tbl.headers.is_some());
-    let col_w = cx / (col_count as i64);
-    let row_h = (cy / (total_rows.max(1) as i64)).clamp(320_000, 620_000);
+    let col_w = (cx / (col_count as i64)).max(100_000);
+    let row_h = (cy / (total_rows.max(1) as i64)).clamp(280_000, 580_000);
+    let frame_h = row_h.saturating_mul(total_rows.max(1) as i64);
     let cell_font_sz = if col_count >= 5 || total_rows >= 8 {
         1200
     } else {
@@ -2091,7 +2096,7 @@ fn pptx_push_table(
 
     let _ = write!(
         out,
-        r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="{id}" name="Table {id}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr firstRow="1" bandRow="1"/><a:tblGrid>"#
+        r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="{id}" name="Table {id}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{frame_h}"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr firstRow="1" bandRow="1"><a:tableStyleId>{{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}}</a:tableStyleId></a:tblPr><a:tblGrid>"#
     );
     for _ in 0..col_count {
         let _ = write!(out, r#"<a:gridCol w="{col_w}"/>"#);
@@ -2405,14 +2410,18 @@ fn pptx_render_slide_xml(
 fn pptx_notes_slide_xml(notes: &str) -> String {
     let mut paras = String::new();
     for line in notes.lines() {
-        let escaped = xml_escape(line);
-        let _ = write!(
-            paras,
-            r#"<a:p><a:r><a:rPr lang="ru-RU" dirty="0"/><a:t>{escaped}</a:t></a:r></a:p>"#
-        );
+        if line.is_empty() {
+            paras.push_str(r#"<a:p><a:endParaRPr lang="ru-RU" dirty="0"/></a:p>"#);
+        } else {
+            let escaped = xml_escape(line);
+            let _ = write!(
+                paras,
+                r#"<a:p><a:r><a:rPr lang="ru-RU" dirty="0"/><a:t>{escaped}</a:t></a:r><a:endParaRPr lang="ru-RU" dirty="0"/></a:p>"#
+            );
+        }
     }
     if paras.is_empty() {
-        paras.push_str(r#"<a:p><a:endParaRPr lang="ru-RU"/></a:p>"#);
+        paras.push_str(r#"<a:p><a:endParaRPr lang="ru-RU" dirty="0"/></a:p>"#);
     }
     format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -2422,7 +2431,11 @@ fn pptx_notes_slide_xml(notes: &str) -> String {
       <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
       <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
       <p:sp>
-        <p:nvSpPr><p:cNvPr id="2" name="Notes Placeholder"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>
+        <p:nvSpPr><p:cNvPr id="2" name="Slide Image Placeholder 1"/><p:cNvSpPr><a:spLocks noGrp="1" noRot="1" noChangeAspect="1"/></p:cNvSpPr><p:nvPr><p:ph type="sldImg"/></p:nvPr></p:nvSpPr>
+        <p:spPr/>
+      </p:sp>
+      <p:sp>
+        <p:nvSpPr><p:cNvPr id="3" name="Notes Placeholder 2"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>
         <p:spPr/>
         <p:txBody><a:bodyPr/><a:lstStyle/>{paras}</p:txBody>
       </p:sp>
@@ -2561,11 +2574,10 @@ pub(crate) fn pptx_write(workspace_root: &Path, args: &Value) -> Value {
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/presProps" Target="presProps.xml"/>
   <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/viewProps" Target="viewProps.xml"/>
-  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>
-  <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/tableStyles" Target="tableStyles.xml"/>
+  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/tableStyles" Target="tableStyles.xml"/>
 "#,
     );
-    let mut next_pres_rid = 6usize;
+    let mut next_pres_rid = 5usize;
     let notes_master_rid = if has_any_notes {
         let rid = next_pres_rid;
         next_pres_rid += 1;
@@ -2723,12 +2735,24 @@ pub(crate) fn pptx_write(workspace_root: &Path, args: &Value) -> Value {
     .to_owned();
 
     let pres_props = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:presentationPr xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>
+<p:presentationPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>
 "#
     .to_owned();
 
     let view_props = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:viewPr xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:normalViewPr><p:restoredLeft sz="15620"/><p:restoredTop sz="94660"/></p:normalViewPr><p:slideViewPr/></p:viewPr>
+<p:viewPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:normalViewPr><p:restoredLeft sz="15620"/><p:restoredTop sz="94660"/></p:normalViewPr>
+  <p:slideViewPr>
+    <p:cSldViewPr>
+      <p:cViewPr varScale="1">
+        <p:scale><a:sx n="100" d="100"/><a:sy n="100" d="100"/></p:scale>
+        <p:origin x="0" y="0"/>
+      </p:cViewPr>
+      <p:guideLst/>
+    </p:cSldViewPr>
+  </p:slideViewPr>
+  <p:gridSpacing cx="72008" cy="72008"/>
+</p:viewPr>
 "#
     .to_owned();
 
@@ -2740,11 +2764,13 @@ pub(crate) fn pptx_write(workspace_root: &Path, args: &Value) -> Value {
     let app_props = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">
-  <Application>Hermes</Application>
   <Slides>{}</Slides>
+  <Notes>{}</Notes>
+  <Application>Hermes</Application>
 </Properties>
 "#,
-        slides.len()
+        slides.len(),
+        notes_written
     );
 
     let mut all_entries: Vec<(String, String)> = vec![
@@ -2777,12 +2803,25 @@ pub(crate) fn pptx_write(workspace_root: &Path, args: &Value) -> Value {
         let notes_master_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:notesMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:cSld>
+    <p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg>
     <p:spTree>
       <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
       <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+      <p:sp>
+        <p:nvSpPr><p:cNvPr id="2" name="Slide Image Placeholder 1"/><p:cNvSpPr><a:spLocks noGrp="1" noRot="1" noChangeAspect="1"/></p:cNvSpPr><p:nvPr><p:ph type="sldImg"/></p:nvPr></p:nvSpPr>
+        <p:spPr><a:xfrm><a:off x="685800" y="1143000"/><a:ext cx="5486400" cy="3086100"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln w="12700"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill></a:ln></p:spPr>
+      </p:sp>
+      <p:sp>
+        <p:nvSpPr><p:cNvPr id="3" name="Notes Placeholder 2"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>
+        <p:spPr><a:xfrm><a:off x="685800" y="4572000"/><a:ext cx="5486400" cy="3886200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+        <p:txBody><a:bodyPr wrap="square" lIns="91440" tIns="45720" rIns="91440" bIns="45720"/><a:lstStyle/><a:p><a:endParaRPr lang="ru-RU"/></a:p></p:txBody>
+      </p:sp>
     </p:spTree>
   </p:cSld>
   <p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
+  <p:notesStyle>
+    <a:lvl1pPr marL="0" algn="l"><a:defRPr sz="1200" kern="1200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/><a:cs typeface="+mn-cs"/></a:defRPr></a:lvl1pPr>
+  </p:notesStyle>
 </p:notesMaster>
 "#
         .to_owned();
@@ -2952,6 +2991,44 @@ mod tests {
 
         let full_path = dir.path().join("decks/q3_review.pptx");
         assert_all_xml_parts_well_formed(&full_path, "PPTX");
+
+        // Verify PowerPoint-critical ECMA-376 invariants (valid viewProps, app.xml order,
+        // notesMaster placeholders + notesStyle, no extraneous theme rel on presentation.xml).
+        let raw_pptx = fs::read(&full_path).unwrap();
+        let pptx_zip = ZipArchive::from_bytes(&raw_pptx, "PPTX").unwrap();
+        let view_props_str =
+            String::from_utf8(pptx_zip.read_entry("ppt/viewProps.xml").unwrap()).unwrap();
+        assert!(view_props_str.contains("<p:cSldViewPr>"));
+        let app_xml_str =
+            String::from_utf8(pptx_zip.read_entry("docProps/app.xml").unwrap()).unwrap();
+        assert!(
+            app_xml_str.find("<Slides>").unwrap() < app_xml_str.find("<Application>").unwrap(),
+            "app.xml must place <Slides> before <Application>:\n{app_xml_str}"
+        );
+        let pres_rels_str = String::from_utf8(
+            pptx_zip
+                .read_entry("ppt/_rels/presentation.xml.rels")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(!pres_rels_str.contains("relationships/theme"));
+        let notes_master_str = String::from_utf8(
+            pptx_zip
+                .read_entry("ppt/notesMasters/notesMaster1.xml")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(notes_master_str.contains(r#"type="sldImg""#));
+        assert!(notes_master_str.contains(r#"type="body" idx="1""#));
+        assert!(notes_master_str.contains("<p:notesStyle>"));
+        let notes_slide_str = String::from_utf8(
+            pptx_zip
+                .read_entry("ppt/notesSlides/notesSlide2.xml")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(notes_slide_str.contains(r#"type="sldImg""#));
+        assert!(notes_slide_str.contains(r#"type="body" idx="1""#));
 
         let read_res = pptx_read(dir.path(), &json!({"path": "decks/q3_review.pptx"}));
         assert!(read_res.get("error").is_none(), "{read_res}");

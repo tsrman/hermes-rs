@@ -169,6 +169,47 @@ pub fn attach_path_to_workspace(
     })
 }
 
+/// Persist raw clipboard bytes (e.g. a pasted screenshot PNG) into
+/// `<workspace_root>/.hermes-attachments/` with deduplicated filename and attach it.
+pub fn attach_bytes_to_workspace(
+    bytes: &[u8],
+    base_name: &str,
+    workspace_root: &Path,
+) -> Result<AttachedFile, String> {
+    if bytes.is_empty() {
+        return Err("Clipboard image is empty.".into());
+    }
+    let size_bytes = bytes.len() as u64;
+    if size_bytes > MAX_ATTACH_BYTES {
+        return Err(format!(
+            "Clipboard image exceeds {} MiB attachment limit ({} bytes).",
+            MAX_ATTACH_BYTES / (1024 * 1024),
+            size_bytes
+        ));
+    }
+    let canon_root = workspace_root
+        .canonicalize()
+        .map_err(|e| format!("Invalid workspace directory: {e}"))?;
+    let attach_dir = canon_root.join(ATTACHMENTS_DIR);
+    fs::create_dir_all(&attach_dir)
+        .map_err(|e| format!("Cannot create {ATTACHMENTS_DIR} in workspace: {e}"))?;
+    let target = unique_dest_path(&attach_dir, base_name);
+    fs::write(&target, bytes).map_err(|e| format!("Failed writing clipboard attachment: {e}"))?;
+    let final_name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(base_name)
+        .to_owned();
+    let rel_path = format!("{ATTACHMENTS_DIR}/{final_name}");
+    Ok(AttachedFile {
+        rel_path,
+        display_name: final_name,
+        imported: true,
+        is_media_or_doc: true,
+        size_bytes,
+    })
+}
+
 /// Combine user prompt text with attached workspace files:
 /// - Text files use `@file:<rel_path>` so `context_refs` injects their content automatically.
 /// - Images/PDFs/Office docs note their workspace-relative path so the model inspects them via
@@ -370,6 +411,18 @@ mod tests {
         let prompt = format_prompt_with_attachments("Analyze these", &[a1, a3]);
         assert!(prompt.contains("@file:src/main.rs"));
         assert!(prompt.contains(".hermes-attachments/shot.png"));
+
+        // Clipboard byte attachment persists and deduplicates cleanly
+        let clip1 =
+            attach_bytes_to_workspace(b"\x89PNG\r\n\x1a\n1234", "clipboard_image.png", &work)
+                .unwrap();
+        assert_eq!(clip1.rel_path, ".hermes-attachments/clipboard_image.png");
+        assert!(clip1.is_media_or_doc);
+        let clip2 =
+            attach_bytes_to_workspace(b"\x89PNG\r\n\x1a\n5678", "clipboard_image.png", &work)
+                .unwrap();
+        assert_eq!(clip2.rel_path, ".hermes-attachments/clipboard_image_2.png");
+        assert!(attach_bytes_to_workspace(b"", "clipboard_image.png", &work).is_err());
 
         // Persistence round-trip
         let mut prefs = WorkspacePrefs::load(&profile);
