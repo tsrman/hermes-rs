@@ -2,8 +2,10 @@
 //! cross-platform local session owner (`hsr owner`, protocol v2).
 
 mod clipboard_media;
+mod diagram;
 mod editor;
 mod markdown;
+mod math_render;
 mod owner_client;
 mod setup_state;
 mod state;
@@ -27,8 +29,12 @@ use hermes_runtime::config::profile_home;
 use hermes_runtime::local_owner::ApprovalScope;
 use hermes_runtime::turn::{ApprovalAction, ApprovalDecision};
 
+use crate::diagram::{parse_mermaid, render_diagram};
 use crate::editor::TextBuffer;
-use crate::markdown::{parse_blocks, parse_inline, InlineStyle, MdBlock, TableAlign};
+use crate::markdown::{
+    highlight_code, parse_document, parse_inline_with_refs, InlineStyle, MdBlock, TableAlign,
+};
+use crate::math_render::render_math_formula;
 use crate::owner_client::{BackendUpdate, OwnerClient, ScopedUpdate};
 use crate::setup_state::{SetupDraft, SetupField, GUI_PROVIDER_PRESETS, GUI_WEB_BACKENDS};
 use crate::state::{FeedRow, GuiState, PendingClarify, ToolCardState};
@@ -514,6 +520,35 @@ impl HermesAppView {
         let range = sel.range()?;
         let snap = self.feed_layouts.get(&sel.key)?;
         snap.text.get(range).map(str::to_owned)
+    }
+
+    fn quote_text_into_composer(
+        &mut self,
+        fragment: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(chunk) = format_quote_insertion(self.state.composer_input.as_str(), fragment)
+        else {
+            return false;
+        };
+        self.state.composer_input.move_end(false);
+        self.state.composer_input.insert_str(&chunk);
+        self.feed_selection = None;
+        self.input_target = InputTarget::Composer;
+        self.state.palette_dismissed = false;
+        self.state.palette_index = 0;
+        self.state.status_message = "Quoted selection into reply".into();
+        window.focus(&self.focus_handle);
+        cx.notify();
+        true
+    }
+
+    fn quote_selected_feed_text(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(selected) = self.selected_feed_text() else {
+            return false;
+        };
+        self.quote_text_into_composer(&selected, window, cx)
     }
 
     fn handle_input_mouse_move(
@@ -1044,6 +1079,11 @@ impl HermesAppView {
             None
         };
 
+        if primary_letter == Some('q') && mods.shift {
+            self.quote_selected_feed_text(window, cx);
+            return;
+        }
+
         if (mods.alt && key.eq_ignore_ascii_case("f4")) || primary_letter == Some('q') {
             window.remove_window();
             cx.quit();
@@ -1421,6 +1461,44 @@ fn shortcut_letter(key: &str, key_char: Option<&str>) -> Option<char> {
     None
 }
 
+fn format_quote_insertion(existing: &str, fragment: &str) -> Option<String> {
+    let trimmed = fragment.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let quoted = trimmed
+        .lines()
+        .map(|line| {
+            let clean = line.trim_end();
+            if clean.is_empty() {
+                ">".to_owned()
+            } else {
+                format!("> {clean}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let prefix = if existing.is_empty() || existing.ends_with("\n\n") {
+        ""
+    } else if existing.ends_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
+    Some(format!("{prefix}{quoted}\n\n"))
+}
+
+fn format_selection_preview(fragment: &str, max_chars: usize) -> String {
+    let collapsed: String = fragment.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = collapsed.chars();
+    let head: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
 /// Extract insertable text from a GPUI keystroke.
 ///
 /// On Windows, `gpui 0.2.2` maps `VK_SPACE` via `parse_immutable` to `key = "space"` with
@@ -1737,6 +1815,14 @@ fn inline_style_to_highlight(style: InlineStyle) -> HighlightStyle {
             }),
             ..Default::default()
         },
+        InlineStyle::Underline => HighlightStyle {
+            underline: Some(UnderlineStyle {
+                thickness: px(1.0),
+                color: Some(rgb(0xe6edf6).into()),
+                wavy: false,
+            }),
+            ..Default::default()
+        },
         InlineStyle::Link => HighlightStyle {
             color: Some(rgb(0x4ea1ff).into()),
             underline: Some(UnderlineStyle {
@@ -1744,6 +1830,35 @@ fn inline_style_to_highlight(style: InlineStyle) -> HighlightStyle {
                 color: Some(rgb(0x4ea1ff).into()),
                 wavy: false,
             }),
+            ..Default::default()
+        },
+        InlineStyle::Footnote => HighlightStyle {
+            color: Some(rgb(0x7dd3fc).into()),
+            font_weight: Some(FontWeight::SEMIBOLD),
+            ..Default::default()
+        },
+        InlineStyle::Math => HighlightStyle {
+            color: Some(rgb(0xfde68a).into()),
+            font_style: Some(FontStyle::Italic),
+            background_color: Some(rgb(0x10141c).into()),
+            ..Default::default()
+        },
+        InlineStyle::CodeKeyword => HighlightStyle {
+            color: Some(rgb(0xc084fc).into()),
+            font_weight: Some(FontWeight::SEMIBOLD),
+            ..Default::default()
+        },
+        InlineStyle::CodeString => HighlightStyle {
+            color: Some(rgb(0x86efac).into()),
+            ..Default::default()
+        },
+        InlineStyle::CodeComment => HighlightStyle {
+            color: Some(rgb(0x64748b).into()),
+            font_style: Some(FontStyle::Italic),
+            ..Default::default()
+        },
+        InlineStyle::CodeNumber => HighlightStyle {
+            color: Some(rgb(0xfbbf24).into()),
             ..Default::default()
         },
     }
@@ -1866,9 +1981,10 @@ fn render_selectable_markdown_inline(
     active_selection: Option<FeedTextSelection>,
     key: FeedTextKey,
     raw: &str,
+    link_refs: &HashMap<String, String>,
     cx: &mut Context<HermesAppView>,
 ) -> gpui::AnyElement {
-    let parsed = parse_inline(raw);
+    let parsed = parse_inline_with_refs(raw, link_refs);
     render_selectable_feed_text_styled(
         feed_layouts,
         active_selection,
@@ -1889,10 +2005,19 @@ fn render_markdown_blocks(
     let text_main = rgb(0xe6edf6);
     let text_dim = rgb(0x8e9bb0);
     let accent = rgb(0x4ea1ff);
+    let green = rgb(0x4ade80);
     let border = rgb(0x2b3446);
     let bg_code = rgb(0x10141c);
+    let mono_font = if cfg!(target_os = "windows") {
+        "Consolas"
+    } else {
+        "monospace"
+    };
 
-    parse_blocks(text)
+    let doc = parse_document(text);
+    let refs = &doc.link_refs;
+
+    doc.blocks
         .into_iter()
         .enumerate()
         .map(|(block_idx, block)| match block {
@@ -1908,13 +2033,18 @@ fn render_markdown_blocks(
                         active_selection,
                         key,
                         &text,
+                        refs,
                         cx,
                     ),
                 );
                 if level <= 2 {
-                    el.text_base().into_any_element()
+                    el.text_base()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .into_any_element()
                 } else {
-                    el.text_sm().into_any_element()
+                    el.text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .into_any_element()
                 }
             }
             MdBlock::Paragraph { text } => {
@@ -1933,6 +2063,7 @@ fn render_markdown_blocks(
                         active_selection,
                         key,
                         &text,
+                        refs,
                         cx,
                     ))
                     .into_any_element()
@@ -1962,6 +2093,47 @@ fn render_markdown_blocks(
                                 active_selection,
                                 key,
                                 &text,
+                                refs,
+                                cx,
+                            )),
+                    )
+                    .into_any_element()
+            }
+            MdBlock::TaskItem {
+                indent,
+                checked,
+                text,
+            } => {
+                let key = FeedTextKey {
+                    row_idx,
+                    block_idx,
+                    sub_idx: 0,
+                };
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .pl(px(f32::from(indent) * 14.0))
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .text_sm()
+                    .text_color(if checked { text_dim } else { text_main })
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(if checked { green } else { text_dim })
+                            .child(if checked { "☑" } else { "☐" }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .child(render_selectable_markdown_inline(
+                                feed_layouts,
+                                active_selection,
+                                key,
+                                &text,
+                                refs,
                                 cx,
                             )),
                     )
@@ -2001,18 +2173,70 @@ fn render_markdown_blocks(
                                 active_selection,
                                 key,
                                 &text,
+                                refs,
                                 cx,
                             )),
                     )
                     .into_any_element()
             }
-            MdBlock::Quote { text } => {
+            MdBlock::Definition { term, definition } => {
+                let term_key = FeedTextKey {
+                    row_idx,
+                    block_idx,
+                    sub_idx: 0,
+                };
+                let def_key = FeedTextKey {
+                    row_idx,
+                    block_idx,
+                    sub_idx: 1,
+                };
+                let mut container = div().w_full().min_w(px(0.0)).flex().flex_col().gap_1();
+                if !term.is_empty() {
+                    container = container.child(
+                        div()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(0xffffff))
+                            .child(render_selectable_markdown_inline(
+                                feed_layouts,
+                                active_selection,
+                                term_key,
+                                &term,
+                                refs,
+                                cx,
+                            )),
+                    );
+                }
+                container
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .pl_4()
+                            .border_l_2()
+                            .border_color(border)
+                            .text_sm()
+                            .text_color(text_main)
+                            .child(render_selectable_markdown_inline(
+                                feed_layouts,
+                                active_selection,
+                                def_key,
+                                &definition,
+                                refs,
+                                cx,
+                            )),
+                    )
+                    .into_any_element()
+            }
+            MdBlock::Quote { depth, text } => {
                 let key = FeedTextKey {
                     row_idx,
                     block_idx,
                     sub_idx: 0,
                 };
-                div()
+                let mut el = div()
                     .w_full()
                     .min_w(px(0.0))
                     .pl_3()
@@ -2025,8 +2249,139 @@ fn render_markdown_blocks(
                         active_selection,
                         key,
                         &text,
+                        refs,
                         cx,
-                    ))
+                    ));
+                for _ in 1..depth {
+                    el = div()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .pl_3()
+                        .border_l_2()
+                        .border_color(border)
+                        .child(el);
+                }
+                el.into_any_element()
+            }
+            MdBlock::MathBlock { raw } => {
+                let copy_latex = raw.clone();
+                let quote_latex = format!("$$\n{}\n$$", raw.trim());
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .my_1()
+                    .rounded_md()
+                    .bg(bg_code)
+                    .border_1()
+                    .border_color(border)
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .px_3()
+                            .py_1()
+                            .border_b_1()
+                            .border_color(border)
+                            .flex()
+                            .flex_row()
+                            .justify_between()
+                            .items_center()
+                            .child(div().text_xs().text_color(text_dim).child("Math"))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .rounded_sm()
+                                            .cursor_pointer()
+                                            .bg(rgb(0x1d2432))
+                                            .text_xs()
+                                            .text_color(accent)
+                                            .child("❝ Quote")
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |view, _, window, cx| {
+                                                    cx.stop_propagation();
+                                                    view.quote_text_into_composer(
+                                                        &quote_latex,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .rounded_sm()
+                                            .cursor_pointer()
+                                            .bg(rgb(0x1d2432))
+                                            .text_xs()
+                                            .text_color(accent)
+                                            .child("Copy LaTeX")
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |view, _, _, cx| {
+                                                    cx.stop_propagation();
+                                                    cx.write_to_clipboard(
+                                                        ClipboardItem::new_string(
+                                                            copy_latex.clone(),
+                                                        ),
+                                                    );
+                                                    view.state.status_message =
+                                                        "Copied LaTeX formula to clipboard".into();
+                                                    cx.notify();
+                                                }),
+                                            ),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .px_3()
+                            .py_2()
+                            .child(render_math_formula(&raw)),
+                    )
+                    .into_any_element()
+            }
+            MdBlock::FootnoteDef { id, text } => {
+                let key = FeedTextKey {
+                    row_idx,
+                    block_idx,
+                    sub_idx: 0,
+                };
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(text_dim)
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(rgb(0x7dd3fc))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(SharedString::from(format!("[{id}]"))),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .child(render_selectable_markdown_inline(
+                                feed_layouts,
+                                active_selection,
+                                key,
+                                &text,
+                                refs,
+                                cx,
+                            )),
+                    )
                     .into_any_element()
             }
             MdBlock::Rule => div()
@@ -2044,14 +2399,14 @@ fn render_markdown_blocks(
                 tsv_lines.push(
                     headers
                         .iter()
-                        .map(|h| parse_inline(h).plain)
+                        .map(|h| parse_inline_with_refs(h, refs).plain)
                         .collect::<Vec<_>>()
                         .join("\t"),
                 );
                 for r in &rows {
                     tsv_lines.push(
                         r.iter()
-                            .map(|c| parse_inline(c).plain)
+                            .map(|c| parse_inline_with_refs(c, refs).plain)
                             .collect::<Vec<_>>()
                             .join("\t"),
                     );
@@ -2092,6 +2447,7 @@ fn render_markdown_blocks(
                                 active_selection,
                                 key,
                                 &cell,
+                                refs,
                                 cx,
                             ))
                             .into_any_element()
@@ -2141,6 +2497,7 @@ fn render_markdown_blocks(
                                         active_selection,
                                         key,
                                         &cell,
+                                        refs,
                                         cx,
                                     ))
                                     .into_any_element()
@@ -2218,7 +2575,98 @@ fn render_markdown_blocks(
                     .into_any_element()
             }
             MdBlock::CodeBlock { lang, code } => {
+                if lang
+                    .as_deref()
+                    .is_some_and(|l| l.eq_ignore_ascii_case("mermaid"))
+                {
+                    if let Some(diagram) = parse_mermaid(&code) {
+                        let copy_src = code.clone();
+                        let quote_src = format!("```mermaid\n{}\n```", code.trim());
+                        let header = format!("Mermaid · {}", diagram.kind_label());
+                        return div()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .my_1()
+                            .rounded_md()
+                            .bg(bg_code)
+                            .border_1()
+                            .border_color(border)
+                            .overflow_hidden()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .px_3()
+                                    .py_1()
+                                    .border_b_1()
+                                    .border_color(border)
+                                    .flex()
+                                    .flex_row()
+                                    .justify_between()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(text_dim)
+                                            .child(SharedString::from(header)),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_row()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .px_2()
+                                                    .rounded_sm()
+                                                    .cursor_pointer()
+                                                    .bg(rgb(0x1d2432))
+                                                    .text_xs()
+                                                    .text_color(accent)
+                                                    .child("❝ Quote")
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(move |view, _, window, cx| {
+                                                            cx.stop_propagation();
+                                                            view.quote_text_into_composer(
+                                                                &quote_src, window, cx,
+                                                            );
+                                                        }),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .px_2()
+                                                    .rounded_sm()
+                                                    .cursor_pointer()
+                                                    .bg(rgb(0x1d2432))
+                                                    .text_xs()
+                                                    .text_color(accent)
+                                                    .child("Copy Mermaid")
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(move |view, _, _, cx| {
+                                                            cx.stop_propagation();
+                                                            cx.write_to_clipboard(
+                                                                ClipboardItem::new_string(
+                                                                    copy_src.clone(),
+                                                                ),
+                                                            );
+                                                            view.state.status_message =
+                                                                "Copied Mermaid source to clipboard"
+                                                                    .into();
+                                                            cx.notify();
+                                                        }),
+                                                    ),
+                                            ),
+                                    ),
+                            )
+                            .child(div().w_full().p_2().child(render_diagram(diagram)))
+                            .into_any_element();
+                    }
+                }
                 let copy_text = code.clone();
+                let code_spans = highlight_code(lang.as_deref(), &code);
                 let header_label = lang.unwrap_or_else(|| "code".into());
                 let key = FeedTextKey {
                     row_idx,
@@ -2278,13 +2726,15 @@ fn render_markdown_blocks(
                         div()
                             .px_3()
                             .py_2()
+                            .font_family(mono_font)
                             .text_xs()
                             .text_color(rgb(0xcbd5e1))
-                            .child(render_selectable_feed_text(
+                            .child(render_selectable_feed_text_styled(
                                 feed_layouts,
                                 active_selection,
                                 key,
                                 code,
+                                &code_spans,
                                 cx,
                             )),
                     )
@@ -2537,6 +2987,8 @@ impl Render for HermesAppView {
                 }
                 FeedRow::Assistant(text) => {
                     let copy_reply = text.clone();
+                    let row_has_selection = active_feed_sel
+                        .is_some_and(|sel| sel.key.row_idx == row_idx && sel.range().is_some());
                     let blocks = render_markdown_blocks(
                         row_idx,
                         text,
@@ -2573,28 +3025,59 @@ impl Render for HermesAppView {
                                         .child(div().text_xs().text_color(text_dim).child("Hermes"))
                                         .child(
                                             div()
-                                                .px_2()
-                                                .rounded_sm()
-                                                .cursor_pointer()
-                                                .bg(rgb(0x141923))
-                                                .border_1()
-                                                .border_color(border)
-                                                .text_xs()
-                                                .text_color(accent)
-                                                .child("Copy")
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(move |view, _, _, cx| {
-                                                        cx.stop_propagation();
-                                                        cx.write_to_clipboard(
-                                                            ClipboardItem::new_string(
-                                                                copy_reply.clone(),
+                                                .flex()
+                                                .flex_row()
+                                                .gap_2()
+                                                .when(row_has_selection, |el| {
+                                                    el.child(
+                                                        div()
+                                                            .px_2()
+                                                            .rounded_sm()
+                                                            .cursor_pointer()
+                                                            .bg(accent)
+                                                            .text_xs()
+                                                            .text_color(rgb(0x0b1017))
+                                                            .font_weight(FontWeight::SEMIBOLD)
+                                                            .child("❝ Quote")
+                                                            .on_mouse_down(
+                                                                MouseButton::Left,
+                                                                cx.listener(
+                                                                    |view, _, window, cx| {
+                                                                        cx.stop_propagation();
+                                                                        view.quote_selected_feed_text(
+                                                                            window, cx,
+                                                                        );
+                                                                    },
+                                                                ),
                                                             ),
-                                                        );
-                                                        view.state.status_message =
-                                                            "Copied response to clipboard".into();
-                                                        cx.notify();
-                                                    }),
+                                                    )
+                                                })
+                                                .child(
+                                                    div()
+                                                        .px_2()
+                                                        .rounded_sm()
+                                                        .cursor_pointer()
+                                                        .bg(rgb(0x141923))
+                                                        .border_1()
+                                                        .border_color(border)
+                                                        .text_xs()
+                                                        .text_color(accent)
+                                                        .child("Copy")
+                                                        .on_mouse_down(
+                                                            MouseButton::Left,
+                                                            cx.listener(move |view, _, _, cx| {
+                                                                cx.stop_propagation();
+                                                                cx.write_to_clipboard(
+                                                                    ClipboardItem::new_string(
+                                                                        copy_reply.clone(),
+                                                                    ),
+                                                                );
+                                                                view.state.status_message =
+                                                                    "Copied response to clipboard"
+                                                                        .into();
+                                                                cx.notify();
+                                                            }),
+                                                        ),
                                                 ),
                                         ),
                                 )
@@ -3901,6 +4384,125 @@ impl Render for HermesAppView {
             })
             .collect();
 
+        let selection_action_panel = self.selected_feed_text().and_then(|sel_text| {
+            if sel_text.trim().is_empty() {
+                return None;
+            }
+            let preview = format_selection_preview(&sel_text, 76);
+            let copy_sel = sel_text.clone();
+            Some(
+                div()
+                    .mx_4()
+                    .mb_2()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(rgb(0x162233))
+                    .border_1()
+                    .border_color(accent)
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_xs()
+                                    .text_color(accent)
+                                    .child("❝"),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .overflow_hidden()
+                                    .text_xs()
+                                    .text_color(text_main)
+                                    .child(SharedString::from(preview)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .bg(accent)
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(0x0b1017))
+                                    .child("Quote in reply (Ctrl+Shift+Q)")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|view, _, window, cx| {
+                                            cx.stop_propagation();
+                                            view.quote_selected_feed_text(window, cx);
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .bg(bg_card)
+                                    .border_1()
+                                    .border_color(border)
+                                    .text_xs()
+                                    .text_color(text_main)
+                                    .child("Copy")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |view, _, _, cx| {
+                                            cx.stop_propagation();
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                copy_sel.clone(),
+                                            ));
+                                            view.state.status_message =
+                                                "Copied selection to clipboard".into();
+                                            cx.notify();
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .px_1()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(text_dim)
+                                    .child("×")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|view, _, _, cx| {
+                                            cx.stop_propagation();
+                                            view.feed_selection = None;
+                                            cx.notify();
+                                        }),
+                                    ),
+                            ),
+                    ),
+            )
+        });
+
         let attachments_panel = (!self.state.attachments.is_empty()).then(|| {
             let chips: Vec<_> = self
                 .state
@@ -4315,10 +4917,11 @@ impl Render for HermesAppView {
                     )
                     // Scrollable feed or in-app Setup screen
                     .child(main_body)
-                    // Pending approval, clarify modal, `@` / `/` completion popup, or attached files bar
+                    // Pending approval, clarify modal, `@` / `/` completion popup, selection quote bar, or attached files bar
                     .children(approval_panel)
                     .children(clarify_panel)
                     .children(completion_panel)
+                    .children(selection_action_panel)
                     .children(attachments_panel)
                     // Composer bar
                     .child(
@@ -4352,8 +4955,11 @@ impl Render for HermesAppView {
                             )
                             .child(
                                 div()
+                                    .id("composer-input-scroll")
                                     .flex_1()
                                     .min_h(px(38.0))
+                                    .max_h(px(200.0))
+                                    .overflow_y_scroll()
                                     .px_3()
                                     .py_2()
                                     .rounded_md()
@@ -4580,8 +5186,8 @@ fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        merge_highlights_with_selection, shortcut_letter, text_from_keystroke, InlineStyle,
-        TextBuffer,
+        format_quote_insertion, format_selection_preview, merge_highlights_with_selection,
+        shortcut_letter, text_from_keystroke, InlineStyle, TextBuffer,
     };
 
     #[test]
@@ -4667,5 +5273,27 @@ mod tests {
         // Selected overlap spans [3..6], [6..10], [10..13] all get selection background.
         let ranges: Vec<_> = merged.iter().map(|(r, _)| r.clone()).collect();
         assert_eq!(ranges, vec![0..3, 3..6, 6..10, 10..13, 13..16]);
+    }
+
+    #[test]
+    fn formats_quoted_selection_for_empty_and_existing_composer_text() {
+        assert_eq!(format_quote_insertion("", "   \n  "), None);
+        assert_eq!(
+            format_quote_insertion("", "First line\n\nSecond line  ").as_deref(),
+            Some("> First line\n>\n> Second line\n\n")
+        );
+        assert_eq!(
+            format_quote_insertion("Вопрос по фрагменту:", "timeout = 30s").as_deref(),
+            Some("\n\n> timeout = 30s\n\n")
+        );
+        assert_eq!(
+            format_quote_insertion("> First quote\n\n", "Second quote").as_deref(),
+            Some("> Second quote\n\n")
+        );
+        assert_eq!(
+            format_selection_preview("  hello   world \n from chat ", 15),
+            "hello world fro…"
+        );
+        assert_eq!(format_selection_preview("short text", 20), "short text");
     }
 }
