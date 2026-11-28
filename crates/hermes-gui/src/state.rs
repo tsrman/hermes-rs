@@ -31,7 +31,6 @@ pub enum FeedRow {
         name: String,
         detail: Option<String>,
         summary: Option<String>,
-        #[allow(dead_code)]
         live_output: Vec<String>,
         state: ToolCardState,
     },
