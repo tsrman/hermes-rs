@@ -1650,7 +1650,7 @@ mod windows_tests {
             ApprovalDecision::Denied,
         )
         .await;
-        assert_eq!(denied["status"], "denied");
+        assert_eq!(denied["status"], "approval_denied");
         assert!(!dir.path().join("marker.txt").exists());
 
         let ok = run_win(
