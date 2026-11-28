@@ -489,6 +489,7 @@ struct Arguments {
 /// The first and the last characters of what a command printed, 40% and 60% of the limit,
 /// with a notice between them when the middle was left out.
 struct Kept {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     max_chars: usize,
     head_limit: usize,
     tail_limit: usize,
@@ -511,6 +512,7 @@ impl Kept {
     fn with_limit(max_chars: usize) -> Self {
         let head_limit = (max_chars as f64 * 0.4) as usize;
         Self {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             max_chars,
             head_limit,
             tail_limit: max_chars - head_limit,
