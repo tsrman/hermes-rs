@@ -24,6 +24,7 @@ jobs:
   verify-ci:
     name: Verify green CI on release commit
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     permissions:
       actions: read
       contents: read
@@ -35,14 +36,14 @@ jobs:
           GH_REPO: ${{ github.repository }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 160); do
             runs=$(gh run list --repo "$GH_REPO" --workflow "CI" --commit "$COMMIT_SHA" --json status,conclusion,url)
             if jq -e 'any(.[]; .status == "completed" and .conclusion == "success")' <<< "$runs" >/dev/null; then
               echo "Green CI verified for $COMMIT_SHA"
               exit 0
             fi
             if jq -e 'any(.[]; .status != "completed")' <<< "$runs" >/dev/null; then
-              echo "CI for $COMMIT_SHA is still running (attempt $attempt/60); waiting 15s..."
+              echo "CI for $COMMIT_SHA is still running (attempt $attempt/160); waiting 15s..."
               sleep 15
               continue
             fi

@@ -78,11 +78,11 @@ fn resolve_notes_path(zip: &ZipArchive<'_>, slide_num: usize) -> Option<String> 
 /// Arguments:
 /// - `path`: workspace-relative or absolute `.pptx` path inside the workspace
 /// - `max_slides`: optional slide cap (default 200, max 1000)
-pub(crate) fn pptx_read(workspace_root: &Path, args: &Value) -> Value {
+pub(crate) fn pptx_read(workspace_root: &Path, profile: Option<&Path>, args: &Value) -> Value {
     let Some(path_str) = args["path"].as_str() else {
         return json!({"error": "pptx_read requires a 'path' string argument"});
     };
-    let resolved = match resolve_workspace_path(workspace_root, path_str, true) {
+    let resolved = match resolve_workspace_path(workspace_root, profile, path_str, true) {
         Ok(p) => p,
         Err(err) => return json!({"error": err}),
     };
@@ -1013,11 +1013,11 @@ fn pptx_theme_xml() -> String {
 /// - `title`: optional presentation metadata title
 /// - `author`: optional author metadata (defaults to `"Hermes"`)
 /// - `theme`: optional `"corporate"` (default), `"dark"`, or `"minimal"`
-pub(crate) fn pptx_write(workspace_root: &Path, args: &Value) -> Value {
+pub(crate) fn pptx_write(workspace_root: &Path, profile: Option<&Path>, args: &Value) -> Value {
     let Some(path_str) = args["path"].as_str() else {
         return json!({"error": "pptx_write requires a 'path' string argument"});
     };
-    let resolved = match resolve_workspace_path(workspace_root, path_str, false) {
+    let resolved = match resolve_workspace_path(workspace_root, profile, path_str, false) {
         Ok(p) => p,
         Err(err) => return json!({"error": err}),
     };

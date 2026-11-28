@@ -593,15 +593,27 @@ async fn dispatch_sandbox_tool(
     // Native pure-Rust Office (Excel/Word/PowerPoint) helpers available in every execute_code session.
     if name == "xlsx_read" {
         *calls += 1;
-        return Ok(excel_tools::xlsx_read(workspace_root, raw_args));
+        return Ok(excel_tools::xlsx_read(
+            workspace_root,
+            cx.options.profile,
+            raw_args,
+        ));
     }
     if name == "docx_read" {
         *calls += 1;
-        return Ok(office_tools::docx_read(workspace_root, raw_args));
+        return Ok(office_tools::docx_read(
+            workspace_root,
+            cx.options.profile,
+            raw_args,
+        ));
     }
     if name == "pptx_read" {
         *calls += 1;
-        return Ok(office_tools::pptx_read(workspace_root, raw_args));
+        return Ok(office_tools::pptx_read(
+            workspace_root,
+            cx.options.profile,
+            raw_args,
+        ));
     }
     if matches!(name, "xlsx_write" | "docx_write" | "pptx_write") {
         *calls += 1;
@@ -643,9 +655,9 @@ async fn dispatch_sandbox_tool(
             return Ok(approval_error(decision));
         }
         return Ok(match name {
-            "docx_write" => office_tools::docx_write(workspace_root, raw_args),
-            "pptx_write" => office_tools::pptx_write(workspace_root, raw_args),
-            _ => excel_tools::xlsx_write(workspace_root, raw_args),
+            "docx_write" => office_tools::docx_write(workspace_root, cx.options.profile, raw_args),
+            "pptx_write" => office_tools::pptx_write(workspace_root, cx.options.profile, raw_args),
+            _ => excel_tools::xlsx_write(workspace_root, cx.options.profile, raw_args),
         });
     }
 

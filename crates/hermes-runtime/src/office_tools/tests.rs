@@ -26,6 +26,7 @@ fn roundtrips_docx_markdown_and_blocks_and_enforces_workspace() {
 
     let write_res = docx_write(
         dir.path(),
+        None,
         &json!({
             "path": "reports/summary.docx",
             "title": "Итоги года",
@@ -39,7 +40,7 @@ fn roundtrips_docx_markdown_and_blocks_and_enforces_workspace() {
     let full_path = dir.path().join("reports/summary.docx");
     assert_all_xml_parts_well_formed(&full_path, "DOCX");
 
-    let read_res = docx_read(dir.path(), &json!({"path": "reports/summary.docx"}));
+    let read_res = docx_read(dir.path(), None, &json!({"path": "reports/summary.docx"}));
     assert!(read_res.get("error").is_none(), "{read_res}");
     let paras = read_res["paragraphs"].as_array().unwrap();
     assert!(paras.iter().any(|p| p == "Итоги года"), "{paras:?}");
@@ -68,6 +69,7 @@ fn roundtrips_docx_markdown_and_blocks_and_enforces_workspace() {
     // Structured blocks API
     let blocks_res = docx_write(
         dir.path(),
+        None,
         &json!({
             "path": "reports/structured.docx",
             "blocks": [
@@ -86,6 +88,7 @@ fn roundtrips_docx_markdown_and_blocks_and_enforces_workspace() {
     // Workspace escape refused
     let escaped = docx_write(
         dir.path(),
+        None,
         &json!({"path": "../outside.docx", "content": "nope"}),
     );
     assert!(escaped["error"].as_str().is_some());
@@ -96,6 +99,7 @@ fn roundtrips_pptx_slides_tables_columns_and_notes_and_enforces_workspace() {
     let dir = tempfile::tempdir().unwrap();
     let write_res = pptx_write(
         dir.path(),
+        None,
         &json!({
             "path": "decks/q3_review.pptx",
             "title": "Q3 Business Review",
@@ -179,7 +183,7 @@ fn roundtrips_pptx_slides_tables_columns_and_notes_and_enforces_workspace() {
     assert!(notes_slide_str.contains(r#"type="sldImg""#));
     assert!(notes_slide_str.contains(r#"type="body" idx="1""#));
 
-    let read_res = pptx_read(dir.path(), &json!({"path": "decks/q3_review.pptx"}));
+    let read_res = pptx_read(dir.path(), None, &json!({"path": "decks/q3_review.pptx"}));
     assert!(read_res.get("error").is_none(), "{read_res}");
     assert_eq!(read_res["slide_count"], 3);
     let slides = read_res["slides"].as_array().unwrap();
@@ -217,6 +221,7 @@ fn roundtrips_pptx_slides_tables_columns_and_notes_and_enforces_workspace() {
     // Workspace escape refused
     let escaped = pptx_write(
         dir.path(),
+        None,
         &json!({"path": "../outside.pptx", "slides": [{"title": "x"}]}),
     );
     assert!(escaped["error"].as_str().is_some());
@@ -249,6 +254,7 @@ fn main() {}
 ```";
     let res = docx_write(
         dir.path(),
+        None,
         &json!({
             "path": "reports/markdown_doc.docx",
             "title": "Отчёт",
@@ -259,7 +265,11 @@ fn main() {}
     let full_path = dir.path().join("reports/markdown_doc.docx");
     assert_all_xml_parts_well_formed(&full_path, "DOCX");
 
-    let read_res = docx_read(dir.path(), &json!({"path": "reports/markdown_doc.docx"}));
+    let read_res = docx_read(
+        dir.path(),
+        None,
+        &json!({"path": "reports/markdown_doc.docx"}),
+    );
     assert!(read_res.get("error").is_none(), "{read_res}");
     let paragraphs = read_res["paragraphs"].as_array().unwrap();
     assert!(paragraphs.iter().any(|p| p == "Ежеквартальный отчёт"));
@@ -319,22 +329,41 @@ fn office_tools_reject_protected_paths_and_corrupt_or_oversized_or_zipbomb_archi
         ".hermes/auth.json",
         ".env",
     ] {
-        let w = docx_write(dir.path(), &json!({"path": bad, "paragraphs": ["x"]}));
+        let w = docx_write(dir.path(), None, &json!({"path": bad, "paragraphs": ["x"]}));
         assert!(w["error"].as_str().is_some(), "expected refusal for {bad}");
         assert!(!dir.path().join(bad).exists());
         let p = pptx_write(
             dir.path(),
+            None,
             &json!({"path": bad, "slides": [{"title": "x"}]}),
         );
         assert!(p["error"].as_str().is_some(), "expected refusal for {bad}");
     }
 
+    // 1b. A custom active profile directory outside ~/.hsr / ~/.hermes is also protected.
+    let custom_profile = dir.path().join("my-custom-profile");
+    fs::create_dir_all(&custom_profile).unwrap();
+    let custom_docx = docx_write(
+        dir.path(),
+        Some(&custom_profile),
+        &json!({"path": "my-custom-profile/notes.docx", "content": "x"}),
+    );
+    assert!(custom_docx["error"].as_str().is_some());
+    assert!(!custom_profile.join("notes.docx").exists());
+    let custom_pptx = pptx_write(
+        dir.path(),
+        Some(&custom_profile),
+        &json!({"path": "my-custom-profile/deck.pptx", "slides": [{"title": "x"}]}),
+    );
+    assert!(custom_pptx["error"].as_str().is_some());
+    assert!(!custom_profile.join("deck.pptx").exists());
+
     // 2. Corrupt / truncated archive returns a clean error without panicking.
     let corrupt = dir.path().join("broken.docx");
     fs::write(&corrupt, b"PK\x03\x04not-a-real-zip").unwrap();
-    let bad_docx = docx_read(dir.path(), &json!({"path": "broken.docx"}));
+    let bad_docx = docx_read(dir.path(), None, &json!({"path": "broken.docx"}));
     assert!(bad_docx["error"].as_str().is_some());
-    let bad_pptx = pptx_read(dir.path(), &json!({"path": "broken.docx"}));
+    let bad_pptx = pptx_read(dir.path(), None, &json!({"path": "broken.docx"}));
     assert!(bad_pptx["error"].as_str().is_some());
 
     // 3. Multi-entry zip bomb: 6 slides x 10 MiB of compressible text (~60 MiB uncompressed
@@ -354,7 +383,7 @@ fn office_tools_reject_protected_paths_and_corrupt_or_oversized_or_zipbomb_archi
         fs::metadata(&bomb_path).unwrap().len() < 500_000,
         "compressed bomb fixture should be small on disk"
     );
-    let bomb_res = pptx_read(dir.path(), &json!({"path": "bomb.pptx"}));
+    let bomb_res = pptx_read(dir.path(), None, &json!({"path": "bomb.pptx"}));
     let bomb_err = bomb_res["error"]
         .as_str()
         .expect("zip bomb must be rejected by cumulative decompression budget");
@@ -368,7 +397,7 @@ fn office_tools_reject_protected_paths_and_corrupt_or_oversized_or_zipbomb_archi
     let huge_file = fs::File::create(&huge_path).unwrap();
     huge_file.set_len(MAX_DOCUMENT_BYTES + 1024).unwrap();
     drop(huge_file);
-    let huge_res = docx_read(dir.path(), &json!({"path": "huge.docx"}));
+    let huge_res = docx_read(dir.path(), None, &json!({"path": "huge.docx"}));
     assert!(
         huge_res["error"]
             .as_str()

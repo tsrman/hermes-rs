@@ -955,14 +955,19 @@ fn collect_protected_profiles(active: Option<&Path>) -> Vec<PathBuf> {
 }
 
 /// Shared workspace path guard used by both `file_tools` and Office (`xlsx`/`docx`/`pptx`) tools:
-/// rejects paths outside `root`, protected profile stores (`~/.hsr`, `~/.hermes`, `HERMES_HOME`,
-/// `HSR_HOME`), sensitive metadata components (`.git`, `.ssh`, `.aws`, `.env`, `vault`, etc.),
-/// and protected OS system paths.
-pub(crate) fn check_protected_workspace_path(root: &Path, path: &Path) -> Result<(), String> {
+/// rejects paths outside `root`, the active profile store (even outside default locations),
+/// sibling profile stores (`~/.hsr`, `~/.hermes`, `HERMES_HOME`, `HSR_HOME`), sensitive metadata
+/// components (`.git`, `.ssh`, `.aws`, `.env`, `vault`, etc.), and protected OS system paths.
+pub(crate) fn check_protected_workspace_path(
+    root: &Path,
+    path: &Path,
+    profile: Option<&Path>,
+) -> Result<(), String> {
     let relative = path
         .strip_prefix(root)
         .map_err(|_| "Path is outside the working directory")?;
-    let protected_profiles = collect_protected_profiles(None);
+    let active = profile.map(|p| p.canonical().unwrap_or_else(|_| p.to_owned()));
+    let protected_profiles = collect_protected_profiles(active.as_deref());
     if protected_profiles
         .iter()
         .any(|profile| path.starts_with(profile))

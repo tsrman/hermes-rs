@@ -19,11 +19,11 @@ use super::{
 /// Arguments:
 /// - `path`: workspace-relative or absolute `.docx` path inside the workspace
 /// - `max_paragraphs`: optional paragraph cap (default 5000, max 50000)
-pub(crate) fn docx_read(workspace_root: &Path, args: &Value) -> Value {
+pub(crate) fn docx_read(workspace_root: &Path, profile: Option<&Path>, args: &Value) -> Value {
     let Some(path_str) = args["path"].as_str() else {
         return json!({"error": "docx_read requires a 'path' string argument"});
     };
-    let resolved = match resolve_workspace_path(workspace_root, path_str, true) {
+    let resolved = match resolve_workspace_path(workspace_root, profile, path_str, true) {
         Ok(p) => p,
         Err(err) => return json!({"error": err}),
     };
@@ -436,11 +436,11 @@ pub(super) fn core_props_xml(title: &str, author: &str) -> String {
 /// - `title`: optional document title
 /// - `subtitle`: optional document subtitle
 /// - `author`: optional author metadata (defaults to `"Hermes"`)
-pub(crate) fn docx_write(workspace_root: &Path, args: &Value) -> Value {
+pub(crate) fn docx_write(workspace_root: &Path, profile: Option<&Path>, args: &Value) -> Value {
     let Some(path_str) = args["path"].as_str() else {
         return json!({"error": "docx_write requires a 'path' string argument"});
     };
-    let resolved = match resolve_workspace_path(workspace_root, path_str, false) {
+    let resolved = match resolve_workspace_path(workspace_root, profile, path_str, false) {
         Ok(p) => p,
         Err(err) => return json!({"error": err}),
     };

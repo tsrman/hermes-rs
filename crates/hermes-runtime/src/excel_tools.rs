@@ -121,6 +121,7 @@ fn replace_file_atomically(tmp: &Path, target: &Path) -> Result<(), String> {
 /// credential/secret files.
 pub(crate) fn resolve_workspace_path(
     workspace_root: &Path,
+    profile: Option<&Path>,
     raw: &str,
     must_exist: bool,
 ) -> Result<PathBuf, String> {
@@ -187,7 +188,7 @@ pub(crate) fn resolve_workspace_path(
             canon_root.display()
         ));
     }
-    check_protected_workspace_path(&canon_root, &checked)?;
+    check_protected_workspace_path(&canon_root, &checked, profile)?;
     if checked.to_str().is_some_and(|p| is_secret_file_arg(p, &[])) {
         return Err(format!(
             "refused to access secret/credential file: {trimmed}"
@@ -224,11 +225,11 @@ fn cell_to_json(cell: &Data) -> Value {
 /// - `path`: workspace-relative or absolute path inside the workspace
 /// - `sheet`: optional sheet name (reads all sheets when omitted)
 /// - `max_rows`: optional row cap per sheet (default 5000, max 50000)
-pub(crate) fn xlsx_read(workspace_root: &Path, args: &Value) -> Value {
+pub(crate) fn xlsx_read(workspace_root: &Path, profile: Option<&Path>, args: &Value) -> Value {
     let Some(path_str) = args["path"].as_str() else {
         return json!({"error": "xlsx_read requires a 'path' string argument"});
     };
-    let resolved = match resolve_workspace_path(workspace_root, path_str, true) {
+    let resolved = match resolve_workspace_path(workspace_root, profile, path_str, true) {
         Ok(p) => p,
         Err(err) => return json!({"error": err}),
     };
@@ -447,11 +448,11 @@ fn write_cell(
 /// Arguments:
 /// - `path`: workspace-relative or absolute `.xlsx` path inside the workspace
 /// - `sheets`: dict `{"Sheet1": [[...], ...]}` or list `[{"name": "...", "headers": [...], "rows": [[...]], "autofit": true}]`
-pub(crate) fn xlsx_write(workspace_root: &Path, args: &Value) -> Value {
+pub(crate) fn xlsx_write(workspace_root: &Path, profile: Option<&Path>, args: &Value) -> Value {
     let Some(path_str) = args["path"].as_str() else {
         return json!({"error": "xlsx_write requires a 'path' string argument"});
     };
-    let resolved = match resolve_workspace_path(workspace_root, path_str, false) {
+    let resolved = match resolve_workspace_path(workspace_root, profile, path_str, false) {
         Ok(p) => p,
         Err(err) => return json!({"error": err}),
     };
@@ -536,6 +537,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let write_res = xlsx_write(
             dir.path(),
+            None,
             &json!({
                 "path": "reports/sales.xlsx",
                 "sheets": [
@@ -555,7 +557,7 @@ mod tests {
         assert_eq!(write_res["sheets_written"], 1);
         assert_eq!(write_res["rows_written"], 4);
 
-        let read_res = xlsx_read(dir.path(), &json!({"path": "reports/sales.xlsx"}));
+        let read_res = xlsx_read(dir.path(), None, &json!({"path": "reports/sales.xlsx"}));
         assert!(read_res.get("error").is_none(), "{read_res}");
         assert_eq!(read_res["sheet_names"], json!(["Итоги"]));
         let rows = read_res["sheets"]["Итоги"].as_array().unwrap();
@@ -566,11 +568,34 @@ mod tests {
         // Rejects workspace escape
         let escaped = xlsx_write(
             dir.path(),
+            None,
             &json!({
                 "path": "../outside.xlsx",
                 "sheets": {"S": [["x"]]}
             }),
         );
         assert!(escaped["error"].as_str().is_some());
+
+        // Rejects writes/reads into a custom active profile located outside ~/.hsr / ~/.hermes
+        let custom_profile = dir.path().join("custom-store/profiles/work");
+        fs::create_dir_all(&custom_profile).unwrap();
+        let blocked_profile_write = xlsx_write(
+            dir.path(),
+            Some(&custom_profile),
+            &json!({
+                "path": "custom-store/profiles/work/leak.xlsx",
+                "sheets": {"S": [["x"]]}
+            }),
+        );
+        assert!(blocked_profile_write["error"].as_str().is_some());
+        let blocked_store_sibling = xlsx_write(
+            dir.path(),
+            Some(&custom_profile),
+            &json!({
+                "path": "custom-store/other.xlsx",
+                "sheets": {"S": [["x"]]}
+            }),
+        );
+        assert!(blocked_store_sibling["error"].as_str().is_some());
     }
 }

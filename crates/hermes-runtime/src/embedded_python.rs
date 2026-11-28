@@ -1350,12 +1350,12 @@ mod tests {
                 EmbeddedEvent::Output(_) => {}
                 EmbeddedEvent::ToolCall { tool, args } => {
                     let val = match tool.as_str() {
-                        "xlsx_write" => crate::excel_tools::xlsx_write(dir, &args),
-                        "xlsx_read" => crate::excel_tools::xlsx_read(dir, &args),
-                        "docx_write" => crate::office_tools::docx_write(dir, &args),
-                        "docx_read" => crate::office_tools::docx_read(dir, &args),
-                        "pptx_write" => crate::office_tools::pptx_write(dir, &args),
-                        "pptx_read" => crate::office_tools::pptx_read(dir, &args),
+                        "xlsx_write" => crate::excel_tools::xlsx_write(dir, None, &args),
+                        "xlsx_read" => crate::excel_tools::xlsx_read(dir, None, &args),
+                        "docx_write" => crate::office_tools::docx_write(dir, None, &args),
+                        "docx_read" => crate::office_tools::docx_read(dir, None, &args),
+                        "pptx_write" => crate::office_tools::pptx_write(dir, None, &args),
+                        "pptx_read" => crate::office_tools::pptx_read(dir, None, &args),
                         other => json!({"error": format!("unexpected {other}")}),
                     };
                     assert!(kernel.send_tool_reply(val));
