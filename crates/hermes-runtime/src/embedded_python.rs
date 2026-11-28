@@ -98,8 +98,8 @@ enum BridgeTransport {
 
 struct SandboxFd {
     file: File,
-    #[allow(dead_code)]
     path: PathBuf,
+    delete_on_close: bool,
 }
 
 const MAX_SANDBOX_FDS: usize = 256;
@@ -556,7 +556,14 @@ fn sandbox_dup(fd: i32, vm: &VirtualMachine) -> PyResult<i32> {
         let path = entry.path.clone();
         let new_fd = state.next_fd;
         state.next_fd = state.next_fd.wrapping_add(1).max(FIRST_SANDBOX_FD);
-        state.fds.insert(new_fd, SandboxFd { file: cloned, path });
+        state.fds.insert(
+            new_fd,
+            SandboxFd {
+                file: cloned,
+                path,
+                delete_on_close: false,
+            },
+        );
         Ok(new_fd)
     })
 }
@@ -600,16 +607,21 @@ fn sandbox_symlink(
 const SANDBOX_O_RDONLY: i32 = 0;
 const SANDBOX_O_WRONLY: i32 = 1;
 const SANDBOX_O_RDWR: i32 = 2;
-const SANDBOX_O_CREAT: i32 = 0o100;
-const SANDBOX_O_EXCL: i32 = 0o200;
-const SANDBOX_O_TRUNC: i32 = 0o1000;
-const SANDBOX_O_APPEND: i32 = 0o2000;
-const SANDBOX_O_DIRECTORY: i32 = 0o200000;
-const SANDBOX_O_NOFOLLOW: i32 = 0o400000;
-const SANDBOX_O_CLOEXEC: i32 = 0o2000000;
-const SANDBOX_O_NOINHERIT: i32 = 0x80;
-const SANDBOX_O_TEXT: i32 = 0x4000;
-const SANDBOX_O_BINARY: i32 = 0x8000;
+const SANDBOX_O_CREAT: i32 = 0x0000_0040;
+const SANDBOX_O_EXCL: i32 = 0x0000_0080;
+const SANDBOX_O_TRUNC: i32 = 0x0000_0200;
+const SANDBOX_O_APPEND: i32 = 0x0000_0400;
+const SANDBOX_O_NONBLOCK: i32 = 0x0000_0800;
+const SANDBOX_O_TEXT: i32 = 0x0000_4000;
+const SANDBOX_O_BINARY: i32 = 0x0000_8000;
+const SANDBOX_O_DIRECTORY: i32 = 0x0001_0000;
+const SANDBOX_O_NOFOLLOW: i32 = 0x0002_0000;
+const SANDBOX_O_CLOEXEC: i32 = 0x0008_0000;
+const SANDBOX_O_NOINHERIT: i32 = 0x0010_0000;
+const SANDBOX_O_TEMPORARY: i32 = 0x0020_0000;
+const SANDBOX_O_SHORT_LIVED: i32 = 0x0040_0000;
+const SANDBOX_O_RANDOM: i32 = 0x0080_0000;
+const SANDBOX_O_SEQUENTIAL: i32 = 0x0100_0000;
 
 fn ensure_read_allowed(target: &Path, vm: &VirtualMachine) -> PyResult<()> {
     let profile = current_profile_dir();
@@ -637,8 +649,9 @@ fn sandbox_open(
     let excl = (flags & SANDBOX_O_EXCL) != 0;
     let trunc = (flags & SANDBOX_O_TRUNC) != 0;
     let append = (flags & SANDBOX_O_APPEND) != 0;
+    let delete_on_close = (flags & SANDBOX_O_TEMPORARY) != 0;
 
-    if write || create || trunc || append {
+    if write || create || trunc || append || delete_on_close {
         ensure_mutation_allowed(&target, vm)?;
     }
 
@@ -672,13 +685,20 @@ fn sandbox_open(
         }
         let fd = state.next_fd;
         state.next_fd = state.next_fd.wrapping_add(1).max(FIRST_SANDBOX_FD);
-        state.fds.insert(fd, SandboxFd { file, path: target });
+        state.fds.insert(
+            fd,
+            SandboxFd {
+                file,
+                path: target,
+                delete_on_close,
+            },
+        );
         Ok(fd)
     })
 }
 
 fn sandbox_close(fd: i32, vm: &VirtualMachine) -> PyResult<()> {
-    BRIDGE.with(|slot| {
+    let removed = BRIDGE.with(|slot| {
         let mut borrow = slot.borrow_mut();
         let state = borrow
             .as_mut()
@@ -686,9 +706,14 @@ fn sandbox_close(fd: i32, vm: &VirtualMachine) -> PyResult<()> {
         state
             .fds
             .remove(&fd)
-            .map(|_| ())
             .ok_or_else(|| vm.new_os_error(format!("bad file descriptor: {fd}")))
-    })
+    })?;
+    let delete_path = removed.delete_on_close.then_some(removed.path);
+    drop(removed.file);
+    if let Some(path) = delete_path {
+        let _ = std::fs::remove_file(&path);
+    }
+    Ok(())
 }
 
 fn sandbox_read(fd: i32, n: usize, vm: &VirtualMachine) -> PyResult<Vec<u8>> {
@@ -1035,6 +1060,8 @@ macro_rules! define_sandbox_os {
             #[pyattr]
             const O_APPEND: i32 = SANDBOX_O_APPEND;
             #[pyattr]
+            const O_NONBLOCK: i32 = SANDBOX_O_NONBLOCK;
+            #[pyattr]
             const O_DIRECTORY: i32 = SANDBOX_O_DIRECTORY;
             #[pyattr]
             const O_NOFOLLOW: i32 = SANDBOX_O_NOFOLLOW;
@@ -1042,6 +1069,14 @@ macro_rules! define_sandbox_os {
             const O_CLOEXEC: i32 = SANDBOX_O_CLOEXEC;
             #[pyattr]
             const O_NOINHERIT: i32 = SANDBOX_O_NOINHERIT;
+            #[pyattr]
+            const O_TEMPORARY: i32 = SANDBOX_O_TEMPORARY;
+            #[pyattr]
+            const O_SHORT_LIVED: i32 = SANDBOX_O_SHORT_LIVED;
+            #[pyattr]
+            const O_RANDOM: i32 = SANDBOX_O_RANDOM;
+            #[pyattr]
+            const O_SEQUENTIAL: i32 = SANDBOX_O_SEQUENTIAL;
             #[pyattr]
             const O_TEXT: i32 = SANDBOX_O_TEXT;
             #[pyattr]
@@ -3849,11 +3884,15 @@ assert pathlib.Path("nested_copy/sub/data.json").exists()
 shutil.rmtree("nested_copy")
 assert not pathlib.Path("nested_copy").exists()
 
-# 4. tempfile (NamedTemporaryFile + TemporaryDirectory) inside isolated temp_root
+# 4. tempfile (NamedTemporaryFile + TemporaryDirectory + O_TEMPORARY delete-on-close)
 with tempfile.NamedTemporaryFile("w+", delete=True) as tf:
     tf.write("tmp-data")
     tf.seek(0)
     assert tf.read() == "tmp-data"
+_tfd = os.open("ephemeral_tmp.txt", os.O_CREAT | os.O_RDWR | os.O_TEMPORARY, 0o600)
+os.write(_tfd, b"gone")
+os.close(_tfd)
+assert not os.path.exists("ephemeral_tmp.txt")
 with tempfile.TemporaryDirectory() as td:
     tp = pathlib.Path(td) / "item.txt"
     tp.write_text("inside-temp")
