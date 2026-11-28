@@ -110,6 +110,7 @@ struct BridgeState {
     workspace_root: PathBuf,
     cwd: PathBuf,
     temp_root: Option<tempfile::TempDir>,
+    profile_dir: Option<PathBuf>,
     env: Vec<(String, String)>,
     abort: Arc<AbortState>,
     fds: HashMap<i32, SandboxFd>,
@@ -121,6 +122,7 @@ impl BridgeState {
     fn new(
         transport: BridgeTransport,
         cwd: PathBuf,
+        profile_dir: Option<PathBuf>,
         env: Vec<(String, String)>,
         abort: Arc<AbortState>,
     ) -> Self {
@@ -129,6 +131,7 @@ impl BridgeState {
             workspace_root: cwd.clone(),
             cwd,
             temp_root: None,
+            profile_dir,
             env,
             abort,
             fds: HashMap::new(),
@@ -305,34 +308,36 @@ fn normalize_for_scope_check(path: &Path) -> Result<PathBuf, std::io::Error> {
 }
 
 /// Enforce that mutating filesystem operations stay inside the session workspace root or the
-/// session's isolated sandbox temp directory.
+/// session's isolated sandbox temp directory, and never touch protected profile, repository, or
+/// secret/credential paths (prevents `os.rename(".env", "notes.txt")` bypasses, B2).
 fn ensure_mutation_allowed(target: &Path, vm: &VirtualMachine) -> PyResult<PathBuf> {
-    let (workspace_root, temp_root) = BRIDGE.with(|slot| {
+    let (workspace_root, temp_root, profile_dir) = BRIDGE.with(|slot| {
         let mut borrow = slot.borrow_mut();
         if let Some(state) = borrow.as_mut() {
             let ws = state.workspace_root.clone();
             let tmp = state.temp_root.as_ref().map(|d| d.path().to_path_buf());
-            (ws, tmp)
+            let prof = state.profile_dir.clone();
+            (ws, tmp, prof)
         } else {
             (
                 std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                None,
                 None,
             )
         }
     });
     let canon_target = normalize_for_scope_check(target)
         .map_err(|e| io_err_to_py(e, &target.display().to_string(), vm))?;
-    let ws_allowed = std::fs::canonicalize(&workspace_root)
-        .map(|ws| canon_target.starts_with(&ws))
-        .unwrap_or(false);
+    let canon_ws = std::fs::canonicalize(&workspace_root).ok();
+    let ws_allowed = canon_ws
+        .as_ref()
+        .is_some_and(|ws| canon_target.starts_with(ws));
     let tmp_allowed = temp_root
         .as_deref()
         .and_then(|t| std::fs::canonicalize(t).ok())
         .is_some_and(|t| canon_target.starts_with(&t));
-    if ws_allowed || tmp_allowed {
-        Ok(canon_target)
-    } else {
-        Err(vm.new_exception(
+    if !ws_allowed && !tmp_allowed {
+        return Err(vm.new_exception(
             vm.ctx.exceptions.permission_error.to_owned(),
             vec![
                 vm.ctx.new_int(13i32).into(),
@@ -343,8 +348,63 @@ fn ensure_mutation_allowed(target: &Path, vm: &VirtualMachine) -> PyResult<PathB
                     ))
                     .into(),
             ],
-        ))
+        ));
     }
+    if let Some(ref ws) = canon_ws {
+        if ws_allowed {
+            crate::file_tools::check_protected_workspace_path(
+                ws,
+                &canon_target,
+                profile_dir.as_deref(),
+            )
+            .map_err(|msg| {
+                vm.new_exception(
+                    vm.ctx.exceptions.permission_error.to_owned(),
+                    vec![
+                        vm.ctx.new_int(13i32).into(),
+                        vm.ctx
+                            .new_str(format!("{msg}: {}", target.display()))
+                            .into(),
+                    ],
+                )
+            })?;
+        }
+    }
+    crate::file_tools::check_protected_read_path(&canon_target, profile_dir.as_deref()).map_err(
+        |msg| {
+            vm.new_exception(
+                vm.ctx.exceptions.permission_error.to_owned(),
+                vec![
+                    vm.ctx.new_int(13i32).into(),
+                    vm.ctx
+                        .new_str(format!("{msg}: {}", target.display()))
+                        .into(),
+                ],
+            )
+        },
+    )?;
+    Ok(canon_target)
+}
+
+fn current_profile_dir() -> Option<PathBuf> {
+    BRIDGE.with(|slot| slot.borrow().as_ref().and_then(|s| s.profile_dir.clone()))
+}
+
+fn ensure_not_profile_ancestor(target: &Path, vm: &VirtualMachine) -> PyResult<()> {
+    let profile = current_profile_dir();
+    crate::file_tools::check_not_ancestor_of_protected_profile(target, profile.as_deref()).map_err(
+        |msg| {
+            vm.new_exception(
+                vm.ctx.exceptions.permission_error.to_owned(),
+                vec![
+                    vm.ctx.new_int(13i32).into(),
+                    vm.ctx
+                        .new_str(format!("{msg}: {}", target.display()))
+                        .into(),
+                ],
+            )
+        },
+    )
 }
 
 fn sandbox_chdir(path: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
@@ -552,7 +612,8 @@ const SANDBOX_O_TEXT: i32 = 0x4000;
 const SANDBOX_O_BINARY: i32 = 0x8000;
 
 fn ensure_read_allowed(target: &Path, vm: &VirtualMachine) -> PyResult<()> {
-    crate::file_tools::check_protected_read_path(target, None).map_err(|msg| {
+    let profile = current_profile_dir();
+    crate::file_tools::check_protected_read_path(target, profile.as_deref()).map_err(|msg| {
         vm.new_exception(
             vm.ctx.exceptions.permission_error.to_owned(),
             vec![vm.ctx.new_int(13i32).into(), vm.ctx.new_str(msg).into()],
@@ -742,7 +803,8 @@ fn sandbox_mkdir(
 
 fn sandbox_rmdir(path: PyObjectRef, _kwargs: KwArgs, vm: &VirtualMachine) -> PyResult<()> {
     let target = resolve_py_path(path, vm)?;
-    ensure_mutation_allowed(&target, vm)?;
+    let canon = ensure_mutation_allowed(&target, vm)?;
+    ensure_not_profile_ancestor(&canon, vm)?;
     std::fs::remove_dir(&target)
         .map_err(|e| io_err_to_py(e, &format!("rmdir {}", target.display()), vm))
 }
@@ -762,8 +824,10 @@ fn sandbox_rename(
 ) -> PyResult<()> {
     let src_path = resolve_py_path(src, vm)?;
     let dst_path = resolve_py_path(dst, vm)?;
-    ensure_mutation_allowed(&src_path, vm)?;
-    ensure_mutation_allowed(&dst_path, vm)?;
+    let canon_src = ensure_mutation_allowed(&src_path, vm)?;
+    ensure_not_profile_ancestor(&canon_src, vm)?;
+    let canon_dst = ensure_mutation_allowed(&dst_path, vm)?;
+    ensure_not_profile_ancestor(&canon_dst, vm)?;
     std::fs::rename(&src_path, &dst_path).map_err(|e| {
         io_err_to_py(
             e,
@@ -1393,6 +1457,31 @@ mod _sandbox_winreg {
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
         disabled(vm)
+    }
+}
+
+/// Minimal sandboxed `_winapi` stub for Windows: stdlib `shutil` and `pathlib._os` execute
+/// `import _winapi` unconditionally when `sys.platform == "win32"`, then feature-detect
+/// `hasattr(_winapi, "CopyFile2")` and fall back to pure-Python `open()` (which enforces our
+/// sandbox read/write guards). Exposing this stub without Win32 process/file handles lets
+/// `shutil` and `pathlib` import cleanly on Windows without granting raw Win32 API access.
+#[cfg_attr(not(windows), allow(dead_code))]
+#[rustpython_vm::pymodule(name = "_winapi")]
+mod _sandbox_winapi {
+    use super::*;
+
+    #[pyattr]
+    const ERROR_ACCESS_DENIED: u32 = 5;
+    #[pyattr]
+    const ERROR_PRIVILEGE_NOT_HELD: u32 = 1314;
+    #[pyattr]
+    const COPY_FILE_ALLOW_DECRYPTED_DESTINATION: u32 = 0x0000_0008;
+    #[pyattr]
+    const COPY_FILE_COPY_SYMLINK: u32 = 0x0000_0800;
+
+    #[pyfunction(name = "NeedCurrentDirectoryForExePath")]
+    fn need_current_directory_for_exe_path(_exe_name: PyObjectRef) -> bool {
+        false
     }
 }
 
@@ -2159,9 +2248,19 @@ def _hermes_run_cell(code, cwd, _emit=_BRIDGE_EMIT_OUTPUT):
         "traceback": _trace,
     }}, ensure_ascii=False)
 
-# Hide internal bridge module from user code once closures have captured their handles.
+# Hide internal bridge module and installer helpers from user code once closures have captured
+# their individual handles (H1: ensures `_hermes_bridge` is unreachable via `__defaults__`).
 sys.modules["_hermes_bridge"] = None
-for _priv_name in ("_hermes_bridge", "_BRIDGE_CALL_TOOL", "_BRIDGE_EMIT_OUTPUT"):
+for _priv_name in (
+    "_hermes_bridge",
+    "_BRIDGE_CALL_TOOL",
+    "_BRIDGE_EMIT_OUTPUT",
+    "_install_sqlite3",
+    "_install_yaml",
+    "_install_http_shims",
+    "_install_subprocess_shim",
+    "_install_asyncio_shim",
+):
     globals().pop(_priv_name, None)
 "#
     )
@@ -2201,12 +2300,7 @@ except Exception:
     pass
 
 # --- Workspace-scoped sqlite3 backed by host rusqlite ---
-def _install_sqlite3(_bridge=_hermes_bridge):
-    _sq_open = _bridge.sqlite_open
-    _sq_exec = _bridge.sqlite_exec
-    _sq_batch = _bridge.sqlite_exec_batch
-    _sq_in_tx = _bridge.sqlite_in_transaction
-    _sq_close = _bridge.sqlite_close
+def _install_sqlite3(_sq_open, _sq_exec, _sq_batch, _sq_in_tx, _sq_close):
     mod = types.ModuleType("sqlite3")
     mod.sqlite_version = "3.46.0"
     mod.sqlite_version_info = (3, 46, 0)
@@ -2452,12 +2546,16 @@ def _install_sqlite3(_bridge=_hermes_bridge):
         setattr(mod, _k, _v)
     sys.modules["sqlite3"] = mod
 
-_install_sqlite3()
+_install_sqlite3(
+    _hermes_bridge.sqlite_open,
+    _hermes_bridge.sqlite_exec,
+    _hermes_bridge.sqlite_exec_batch,
+    _hermes_bridge.sqlite_in_transaction,
+    _hermes_bridge.sqlite_close,
+)
 
 # --- Safe PyYAML-compatible yaml module backed by serde_yaml ---
-def _install_yaml(_bridge=_hermes_bridge):
-    _yl_load_all = _bridge.yaml_load_all
-    _yl_dump = _bridge.yaml_dump
+def _install_yaml(_yl_load_all, _yl_dump):
     mod = types.ModuleType("yaml")
     class YAMLError(Exception): pass
     class SafeLoader: pass
@@ -2525,7 +2623,7 @@ def _install_yaml(_bridge=_hermes_bridge):
         setattr(mod, _k, _v)
     sys.modules["yaml"] = mod
 
-_install_yaml()
+_install_yaml(_hermes_bridge.yaml_load_all, _hermes_bridge.yaml_dump)
 
 # --- Policy-gated HTTP client backing urllib.request and requests ---
 def _install_http_shims():
@@ -3020,6 +3118,7 @@ impl EmbeddedKernel {
     pub(crate) fn spawn(
         tools: &[&'static str],
         env: Vec<(String, String)>,
+        profile_dir: Option<PathBuf>,
     ) -> Result<Self, String> {
         let (cell_tx, cell_rx) = std_mpsc::channel::<HostCell>();
         let (reply_tx, reply_rx) = std_mpsc::channel::<String>();
@@ -3043,6 +3142,7 @@ impl EmbeddedKernel {
                             reply_rx,
                         },
                         std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                        profile_dir,
                         env,
                         Arc::clone(&abort_worker),
                     ));
@@ -3055,13 +3155,17 @@ impl EmbeddedKernel {
                 let bridge_def = _hermes_bridge::module_def(&builder.ctx);
                 #[cfg(windows)]
                 let winreg_def = _sandbox_winreg::module_def(&builder.ctx);
+                #[cfg(windows)]
+                let winapi_def = _sandbox_winapi::module_def(&builder.ctx);
                 let builder = builder
                     .add_native_modules(&stdlib_defs)
                     .add_native_module(os_def)
                     .add_native_module(signal_def)
                     .add_native_module(bridge_def);
                 #[cfg(windows)]
-                let builder = builder.add_native_module(winreg_def);
+                let builder = builder
+                    .add_native_module(winreg_def)
+                    .add_native_module(winapi_def);
                 let interp = builder
                     .add_frozen_modules(rustpython_pylib::FROZEN_STDLIB)
                     .init_hook(move |vm| {
@@ -3285,6 +3389,8 @@ fn run_stdio_worker_inner() -> Result<u8, String> {
     struct InitFrame {
         tools: Vec<String>,
         env: Vec<(String, String)>,
+        #[serde(default)]
+        profile_dir: Option<PathBuf>,
     }
     let init: InitFrame = serde_json::from_str(&init_line)
         .map_err(|e| format!("invalid embedded worker init frame: {e}"))?;
@@ -3297,6 +3403,7 @@ fn run_stdio_worker_inner() -> Result<u8, String> {
         *slot.borrow_mut() = Some(BridgeState::new(
             BridgeTransport::Stdio,
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            init.profile_dir,
             init.env,
             abort,
         ));
@@ -3309,13 +3416,17 @@ fn run_stdio_worker_inner() -> Result<u8, String> {
     let bridge_def = _hermes_bridge::module_def(&builder.ctx);
     #[cfg(windows)]
     let winreg_def = _sandbox_winreg::module_def(&builder.ctx);
+    #[cfg(windows)]
+    let winapi_def = _sandbox_winapi::module_def(&builder.ctx);
     let builder = builder
         .add_native_modules(&stdlib_defs)
         .add_native_module(os_def)
         .add_native_module(signal_def)
         .add_native_module(bridge_def);
     #[cfg(windows)]
-    let builder = builder.add_native_module(winreg_def);
+    let builder = builder
+        .add_native_module(winreg_def)
+        .add_native_module(winapi_def);
     let interp = builder
         .add_frozen_modules(rustpython_pylib::FROZEN_STDLIB)
         .build();
@@ -3425,6 +3536,7 @@ impl EmbeddedSubprocessKernel {
         tools: &[&'static str],
         directory: &Path,
         env: Vec<(String, String)>,
+        profile_dir: Option<PathBuf>,
     ) -> Result<Self, String> {
         use std::process::Stdio;
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -3475,7 +3587,12 @@ impl EmbeddedSubprocessKernel {
             .ok_or("embedded Python worker stdout unavailable")?;
         let mut reader = BufReader::new(stdout);
 
-        let init = json!({"type": "init", "tools": tools, "env": env});
+        let init = json!({
+            "type": "init",
+            "tools": tools,
+            "env": env,
+            "profile_dir": profile_dir,
+        });
         writer
             .write_all(format!("{init}\n").as_bytes())
             .await
@@ -3614,7 +3731,7 @@ mod tests {
     async fn embedded_rustpython_persists_state_uses_stdlib_and_bridges_xlsx() {
         let dir = tempfile::tempdir().unwrap();
         let mut kernel =
-            EmbeddedKernel::spawn(&["read_file"], Vec::new()).expect("spawn embedded kernel");
+            EmbeddedKernel::spawn(&["read_file"], Vec::new(), None).expect("spawn embedded kernel");
         let deadline = Instant::now() + Duration::from_secs(30);
 
         // Cell 1: stdlib + xlsx_write + persistent variable
@@ -3686,7 +3803,8 @@ print("OFFICE_OK")
         let dir = tempfile::tempdir().unwrap();
         let outside_dir = tempfile::tempdir().unwrap();
         let outside_target = outside_dir.path().join("escaped.txt");
-        let mut kernel = EmbeddedKernel::spawn(&[], Vec::new()).expect("spawn embedded kernel");
+        let mut kernel =
+            EmbeddedKernel::spawn(&[], Vec::new(), None).expect("spawn embedded kernel");
         let deadline = Instant::now() + Duration::from_secs(30);
 
         let code = format!(
@@ -3793,10 +3911,20 @@ print("STDLIB_FS_OK")
         let outside_attach = outside_dir.path().join("attached.db");
         let outside_vacuum = outside_dir.path().join("vacuumed.db");
 
-        // Create a minimal valid PDF and synthetic secret files inside workspace for C1 testing.
+        // Create a minimal valid PDF, synthetic secret files, `.hermes`, and a custom non-default
+        // profile directory inside workspace to test C1, B2 (rename/replace/move), H1, and H2.
         std::fs::write(dir.path().join(".env"), "API_KEY=synthetic-secret\n").unwrap();
         std::fs::create_dir_all(dir.path().join(".ssh")).unwrap();
         std::fs::write(dir.path().join(".ssh").join("id_rsa"), "synthetic-key\n").unwrap();
+        std::fs::create_dir_all(dir.path().join(".hermes")).unwrap();
+        std::fs::write(
+            dir.path().join(".hermes").join("auth.json"),
+            "{\"tok\":1}\n",
+        )
+        .unwrap();
+        let custom_profile = dir.path().join("custom-profile-dir");
+        std::fs::create_dir_all(&custom_profile).unwrap();
+        std::fs::write(custom_profile.join("config.yaml"), "secret: 1\n").unwrap();
         let minimal_pdf = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 4 0 R>>endobj\n4 0 obj<</Length 44>>stream\nBT /F1 12 Tf 10 100 Td (Hello Hermes PDF) Tj ET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f \n0000000009 00000 n \n0000000056 00000 n \n0000000111 00000 n \n0000000190 00000 n \ntrailer<</Size 5/Root 1 0 R>>\nstartxref\n283\n%%EOF\n";
         std::fs::write(dir.path().join("sample.pdf"), minimal_pdf).unwrap();
 
@@ -3804,7 +3932,8 @@ print("STDLIB_FS_OK")
 
         // Part A: kernel WITHOUT terminal — subprocess MUST raise PermissionError.
         {
-            let mut kernel = EmbeddedKernel::spawn(&[], Vec::new()).expect("spawn kernel");
+            let mut kernel = EmbeddedKernel::spawn(&[], Vec::new(), Some(custom_profile.clone()))
+                .expect("spawn kernel");
             let code = format!(
                 r#"
 import os, signal, sqlite3, subprocess, unittest, unittest.mock, urllib.request, requests, yaml
@@ -3930,21 +4059,36 @@ except PermissionError:
     sub_blocked = True
 assert sub_blocked, "subprocess without terminal must raise PermissionError"
 
-# C1 regression: secret/credential files cannot be read via open() or sqlite3 even inside workspace
-assert os.path.exists(".env")
-env_read_blocked = False
-try:
-    open(".env", "r").read()
-except PermissionError:
-    env_read_blocked = True
-assert env_read_blocked, "reading .env must raise PermissionError"
+# C1 / B2 / H1 / H2 regressions: secret/credential files and active/sibling profile dirs
+# cannot be read, renamed, replaced, moved, or removed even inside workspace; `_hermes_bridge`
+# is not reachable via installer defaults or globals.
+import shutil
+assert "_hermes_bridge" not in sqlite3.Connection.close.__globals__
+assert "_install_sqlite3" not in sqlite3.Connection.close.__globals__
+assert "_install_yaml" not in yaml.safe_load.__globals__
 
-ssh_read_blocked = False
-try:
-    open(".ssh/id_rsa", "r").read()
-except PermissionError:
-    ssh_read_blocked = True
-assert ssh_read_blocked, "reading .ssh/id_rsa must raise PermissionError"
+assert os.path.exists(".env")
+for _op_name, _op in [
+    ("open .env", lambda: open(".env", "r").read()),
+    ("open .ssh/id_rsa", lambda: open(".ssh/id_rsa", "r").read()),
+    ("open .hermes/auth.json", lambda: open(".hermes/auth.json", "r").read()),
+    ("open custom profile", lambda: open("custom-profile-dir/config.yaml", "r").read()),
+    ("rename .env", lambda: os.rename(".env", "notes_env.txt")),
+    ("replace .env", lambda: os.replace(".env", "notes_env.txt")),
+    ("shutil.move .env", lambda: shutil.move(".env", "notes_env.txt")),
+    ("remove .env", lambda: os.remove(".env")),
+    ("rename .hermes", lambda: os.rename(".hermes", "hz")),
+    ("rename .hermes/auth.json", lambda: os.rename(".hermes/auth.json", "r.txt")),
+    ("rename custom profile", lambda: os.rename("custom-profile-dir", "moved_prof")),
+]:
+    _blocked = False
+    try:
+        _op()
+    except PermissionError:
+        _blocked = True
+    assert _blocked, f"expected PermissionError for {{_op_name}}"
+assert os.path.exists(".env") and os.path.exists(".hermes/auth.json")
+assert os.path.exists("custom-profile-dir/config.yaml")
 
 print("ALL_6_PART_A_OK")
 "#,
@@ -3970,7 +4114,7 @@ print("ALL_6_PART_A_OK")
         // Part B: kernel WITH terminal — subprocess routes through terminal + handles approval denial & check=True
         {
             let mut kernel =
-                EmbeddedKernel::spawn(&["terminal"], Vec::new()).expect("spawn kernel");
+                EmbeddedKernel::spawn(&["terminal"], Vec::new(), None).expect("spawn kernel");
             let code = r#"
 import subprocess
 
@@ -4036,7 +4180,7 @@ print("ALL_6_PART_B_OK")
 
         // 1. Tight CPU loop, even wrapped in `except BaseException: pass`.
         {
-            let mut kernel = EmbeddedKernel::spawn(&[], Vec::new()).expect("spawn kernel");
+            let mut kernel = EmbeddedKernel::spawn(&[], Vec::new(), None).expect("spawn kernel");
             let abort = Arc::clone(&kernel.abort);
             assert!(kernel.start_cell(
                 "while True:\n    try:\n        pass\n    except BaseException:\n        pass\n",
@@ -4055,7 +4199,7 @@ print("ALL_6_PART_B_OK")
 
         // 2. Long `time.sleep(...)` is interrupted immediately on shutdown.
         {
-            let mut kernel = EmbeddedKernel::spawn(&[], Vec::new()).expect("spawn kernel");
+            let mut kernel = EmbeddedKernel::spawn(&[], Vec::new(), None).expect("spawn kernel");
             let abort = Arc::clone(&kernel.abort);
             assert!(kernel.start_cell("import time\ntime.sleep(60)\n", dir.path()));
             let event = kernel
@@ -4119,10 +4263,12 @@ print("ALL_6_PART_B_OK")
                 let stdlib_defs = rustpython_stdlib::stdlib_module_defs(&builder.ctx);
                 let os_def = _sandbox_os::module_def(&builder.ctx);
                 let winreg_def = _sandbox_winreg::module_def(&builder.ctx);
+                let winapi_def = _sandbox_winapi::module_def(&builder.ctx);
                 let interp = builder
                     .add_native_modules(&stdlib_defs)
                     .add_native_module(os_def)
                     .add_native_module(winreg_def)
+                    .add_native_module(winapi_def)
                     .add_frozen_modules(rustpython_pylib::FROZEN_STDLIB)
                     .build();
                 interp.enter(|vm| {
@@ -4130,9 +4276,11 @@ print("ALL_6_PART_B_OK")
                     let code = vm
                         .compile(
                             concat!(
-                                "import winreg\n",
+                                "import winreg, _winapi\n",
                                 "assert winreg.HKEY_CURRENT_USER > 0\n",
                                 "assert winreg.HKEY_LOCAL_MACHINE > 0\n",
+                                "assert not hasattr(_winapi, 'CopyFile2')\n",
+                                "assert _winapi.NeedCurrentDirectoryForExePath('cmd.exe') is False\n",
                                 "raised = False\n",
                                 "try:\n",
                                 "    winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Software')\n",

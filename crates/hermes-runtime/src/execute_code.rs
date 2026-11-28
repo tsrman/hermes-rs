@@ -13,7 +13,7 @@
 
 use crate::paths::PathExt;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
@@ -21,8 +21,6 @@ use std::time::{Duration, Instant};
 use std::collections::HashSet;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, OwnedFd};
-#[cfg(unix)]
-use std::path::PathBuf;
 #[cfg(unix)]
 use std::process::Stdio;
 #[cfg(unix)]
@@ -446,10 +444,12 @@ async fn spawn_embedded(
     tools: &[&'static str],
     directory: &Path,
     env: Vec<(String, String)>,
+    profile_dir: Option<PathBuf>,
 ) -> Result<SessionKernel, String> {
     if use_subprocess_worker() {
         if let Ok(exe) = std::env::current_exe() {
-            let kernel = EmbeddedSubprocessKernel::spawn(&exe, tools, directory, env).await?;
+            let kernel =
+                EmbeddedSubprocessKernel::spawn(&exe, tools, directory, env, profile_dir).await?;
             #[cfg(unix)]
             if let Ok(mut groups) = GROUPS.lock() {
                 groups.insert(kernel.pgid);
@@ -457,7 +457,7 @@ async fn spawn_embedded(
             return Ok(SessionKernel::EmbeddedProcess(Box::new(kernel)));
         }
     }
-    EmbeddedKernel::spawn(tools, env).map(SessionKernel::Embedded)
+    EmbeddedKernel::spawn(tools, env, profile_dir).map(SessionKernel::Embedded)
 }
 
 /// The interpreter: the active virtual environment's, else `python3` on the command PATH.
@@ -836,15 +836,44 @@ pub(crate) async fn sandbox_http_request(
                 Ok(u) => u,
                 Err(_) => return Ok(json!({"error": "invalid redirect base URL"})),
             };
-            let next = match base.join(loc) {
-                Ok(u) => u.to_string(),
+            let next_url = match base.join(loc) {
+                Ok(u) => u,
                 Err(_) => return Ok(json!({"error": "invalid redirect Location URL"})),
             };
+            let same_origin = base.scheme().eq_ignore_ascii_case(next_url.scheme())
+                && base.host_str().map(str::to_ascii_lowercase)
+                    == next_url.host_str().map(str::to_ascii_lowercase)
+                && base.port_or_known_default() == next_url.port_or_known_default();
             if matches!(status.as_u16(), 301..=303) {
                 current_method = reqwest::Method::GET;
                 current_body = None;
+            } else if !same_origin
+                && (!matches!(current_method, reqwest::Method::GET | reqwest::Method::HEAD)
+                    || current_body.is_some())
+            {
+                // C2: do not silently forward an approved mutating method or request body across
+                // origins on 307/308 redirects without fresh user approval.
+                return Ok(json!({
+                    "error": format!(
+                        "Blocked cross-origin {} redirect for {} request from {} to {}",
+                        status.as_u16(),
+                        current_method,
+                        base.host_str().unwrap_or(""),
+                        next_url.host_str().unwrap_or("")
+                    ),
+                    "blocked": true,
+                }));
             }
-            current_url = next;
+            if !same_origin {
+                for sensitive in [
+                    reqwest::header::AUTHORIZATION,
+                    reqwest::header::COOKIE,
+                    reqwest::header::PROXY_AUTHORIZATION,
+                ] {
+                    req_headers.remove(&sensitive);
+                }
+            }
+            current_url = next_url.to_string();
             continue;
         }
 
@@ -952,9 +981,11 @@ async fn dispatch_sandbox_tool(
     }
     if name == "http_request" {
         *calls += 1;
-        let Some(web) = cx.options.web else {
+        let web_allowed =
+            cx.options.tools.allows("web_search") || cx.options.tools.allows("web_extract");
+        let Some(web) = cx.options.web.filter(|_| web_allowed) else {
             return Ok(json!({
-                "error": "http_request is disabled because web tools are not configured in this session",
+                "error": "http_request is disabled because the web toolset is not enabled in this session",
                 "blocked": true,
             }));
         };
@@ -1412,7 +1443,8 @@ pub(crate) fn call<'a>(
                     } else {
                         #[cfg(not(target_os = "macos"))]
                         {
-                            match spawn_embedded(&tools, &directory, env).await {
+                            let profile_dir = cx.options.profile.map(Path::to_path_buf);
+                            match spawn_embedded(&tools, &directory, env, profile_dir).await {
                                 Ok(k) => k,
                                 Err(message) => {
                                     return json!({"status": "error", "error": format!("The embedded Python kernel could not start: {message}"), "tool_calls_made": 0, "duration_seconds": 0});
@@ -1427,7 +1459,8 @@ pub(crate) fn call<'a>(
                 }
                 #[cfg(not(unix))]
                 {
-                    match spawn_embedded(&tools, &directory, env).await {
+                    let profile_dir = cx.options.profile.map(Path::to_path_buf);
+                    match spawn_embedded(&tools, &directory, env, profile_dir).await {
                         Ok(k) => k,
                         Err(message) => {
                             return json!({"status": "error", "error": format!("The embedded Python kernel could not start: {message}"), "tool_calls_made": 0, "duration_seconds": 0});
@@ -1962,7 +1995,49 @@ mod tests {
             assert_eq!(res["blocked"], true, "{res}");
         }
 
-        // 2. When cx.options.web is Some, POST requires approval and denies if rejected.
+        // 1b. When cx.options.web is Some (as CLI/owner always pass) but the session ToolPolicy
+        // disables the `web` toolset (e.g. `-t file,terminal`), http_request MUST still be blocked (C1).
+        {
+            let web = crate::web_tools::WebSettings::default();
+            let no_web_cfg: serde_yaml::Value =
+                serde_yaml::from_str("platform_toolsets:\n  cli: [file, terminal]\n").unwrap();
+            let no_web_policy = ToolPolicy::from_config(&no_web_cfg);
+            let mut options = test_turn_options(dir.path(), &no_web_policy, &intent_ack, Some(5));
+            options.web = Some(&web);
+            let mut files = FileWorkspace::new(dir.path(), None);
+            let mut memory_turn = MemoryTurn::default();
+            let mut todo = TodoStore::default();
+            let mut approve = |_: ApprovalRequest| -> BoxFuture<'_, ApprovalDecision> {
+                Box::pin(async { ApprovalDecision::Approved })
+            };
+            let mut cx = ToolContext {
+                options: &options,
+                skills: &skills,
+                files: &mut files,
+                memory_turn: &mut memory_turn,
+                todo: &mut todo,
+                approve: &mut approve,
+                route: &route,
+                fallbacks: &[],
+                tool_output: None,
+            };
+            let mut calls = 0;
+            let res = dispatch_sandbox_tool(
+                "http_request",
+                &json!({"url": "https://example.com/", "method": "GET"}),
+                &SANDBOX_TOOLS,
+                dir.path(),
+                &mut cx,
+                Instant::now() + Duration::from_secs(10),
+                10,
+                &mut calls,
+            )
+            .await
+            .unwrap();
+            assert_eq!(res["blocked"], true, "{res}");
+        }
+
+        // 2. When cx.options.web is Some and web toolset is enabled, POST requires approval and denies if rejected.
         {
             let web = crate::web_tools::WebSettings::default();
             let mut options = test_turn_options(dir.path(), &policy, &intent_ack, Some(5));
@@ -2074,5 +2149,100 @@ mod tests {
         assert_eq!(body.len(), MAX_HTTP_RESP_BYTES);
 
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn sandbox_http_request_blocks_cross_origin_307_and_308_redirects_with_body() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener_a = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr_a = listener_a.local_addr().unwrap();
+        let listener_b = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr_b = listener_b.local_addr().unwrap();
+
+        let b_hit = std::sync::Arc::new(AtomicBool::new(false));
+        let b_hit_srv = std::sync::Arc::clone(&b_hit);
+        let server_b = tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener_b.accept().await {
+                b_hit_srv.store(true, Ordering::SeqCst);
+                let _ = sock
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await;
+            }
+        });
+
+        let server_a = tokio::spawn(async move {
+            for _ in 0..4 {
+                let Ok((mut sock, _)) = listener_a.accept().await else {
+                    break;
+                };
+                let mut buf = [0u8; 2048];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let resp = if req.starts_with("POST /redir307 ") {
+                    format!(
+                        "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{addr_b}/steal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                } else if req.starts_with("POST /redir308 ") {
+                    format!(
+                        "HTTP/1.1 308 Permanent Redirect\r\nLocation: http://{addr_b}/steal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                } else if req.starts_with("POST /same-origin ") {
+                    format!(
+                        "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{addr_a}/final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                } else {
+                    "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndone"
+                        .to_owned()
+                };
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+        });
+
+        let priv_web = crate::web_tools::WebSettings {
+            allow_private_urls: true,
+            ..Default::default()
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+
+        for path in ["/redir307", "/redir308"] {
+            let res = sandbox_http_request(
+                &json!({
+                    "url": format!("http://{addr_a}{path}"),
+                    "method": "POST",
+                    "body": "sensitive-payload",
+                }),
+                Some(&priv_web),
+                deadline,
+            )
+            .await
+            .unwrap();
+            assert_eq!(res["blocked"], true, "{path}: {res}");
+        }
+        assert!(
+            !b_hit.load(Ordering::SeqCst),
+            "cross-origin target must never receive redirected POST body"
+        );
+
+        // Same-origin 307 redirect still succeeds.
+        let same = sandbox_http_request(
+            &json!({
+                "url": format!("http://{addr_a}/same-origin"),
+                "method": "POST",
+                "body": "ok-payload",
+            }),
+            Some(&priv_web),
+            deadline,
+        )
+        .await
+        .unwrap();
+        assert_eq!(same["status"], 200, "{same}");
+
+        server_a.abort();
+        server_b.abort();
     }
 }

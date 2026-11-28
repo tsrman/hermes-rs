@@ -1035,6 +1035,24 @@ pub(crate) fn check_protected_read_path(
     Ok(())
 }
 
+/// Reject mutating (renaming/removing) a directory that contains a protected Hermes/HSR profile
+/// store, so moving an ancestor folder cannot detach a custom profile from its protected path.
+pub(crate) fn check_not_ancestor_of_protected_profile(
+    target: &Path,
+    profile: Option<&Path>,
+) -> Result<(), String> {
+    let canon = target.canonical().unwrap_or_else(|_| target.to_path_buf());
+    let active = profile.map(|p| p.canonical().unwrap_or_else(|_| p.to_owned()));
+    let protected_profiles = collect_protected_profiles(active.as_deref());
+    if protected_profiles
+        .iter()
+        .any(|prof| prof.starts_with(&canon))
+    {
+        return Err("Refusing to move or remove a directory containing a protected profile".into());
+    }
+    Ok(())
+}
+
 fn protected_component(component: Component<'_>) -> bool {
     let name = component.as_os_str().to_string_lossy().to_ascii_lowercase();
     (name != ".env.example" && (name == ".env" || name.starts_with(".env.")))
