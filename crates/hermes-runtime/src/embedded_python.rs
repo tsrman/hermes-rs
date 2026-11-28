@@ -1528,6 +1528,12 @@ mod _sandbox_winapi {
     fn get_long_path_name(path: PyObjectRef, vm: &VirtualMachine) -> PyResult<String> {
         extract_path_string(path, vm)
     }
+
+    /// No-op hook used by stdlib `mimetypes.MimeTypes.read_windows_registry` so
+    /// `mimetypes.guess_type()` works via Python's built-in `types_map` without touching
+    /// the Windows Registry (which remains disabled in `_sandbox_winreg`).
+    #[pyfunction]
+    fn _mimetypes_read_windows_registry(_add_type: PyObjectRef) {}
 }
 
 fn set_host_workspace_root(path: &str) {
@@ -4441,6 +4447,7 @@ print("STDLIB_AND_NTFS_OK")
                                 "assert _winapi.NeedCurrentDirectoryForExePath('cmd.exe') is False\n",
                                 "assert _winapi.GetModuleFileName(0) == 'python3.dll'\n",
                                 "assert _winapi.GetLongPathName('C:\\\\tmp') == 'C:\\\\tmp'\n",
+                                "assert _winapi._mimetypes_read_windows_registry(lambda *a: None) is None\n",
                                 "raised = False\n",
                                 "try:\n",
                                 "    winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Software')\n",
