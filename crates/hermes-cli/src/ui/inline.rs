@@ -229,7 +229,12 @@ impl Highlighter for SlashHelper {
         }
     }
 
-    fn highlight_char(&self, line: &str, _pos: usize, _forced: bool) -> bool {
+    fn highlight_char(
+        &self,
+        line: &str,
+        _pos: usize,
+        _kind: rustyline::highlight::CmdKind,
+    ) -> bool {
         self.styled && line.starts_with('/')
     }
 }
