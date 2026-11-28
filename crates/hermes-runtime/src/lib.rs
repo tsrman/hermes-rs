@@ -19,6 +19,8 @@ mod difflib;
 mod doc_extract;
 #[cfg(not(target_os = "macos"))]
 pub mod embedded_python;
+#[cfg(not(target_os = "macos"))]
+mod embedded_sqlite;
 mod excel_tools;
 pub mod execute_code;
 mod file_tools;

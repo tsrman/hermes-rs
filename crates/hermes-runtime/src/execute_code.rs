@@ -111,7 +111,7 @@ pub(crate) fn schema(tools: &[&str]) -> Value {
         }
         #[cfg(not(unix))]
         text.push_str(
-            "\n\nBuilt-in RustPython + Office helpers (no system Python or Office required): `from hermes_tools import xlsx_read, xlsx_write, docx_read, docx_write, pptx_read, pptx_write`.\n- xlsx_read(path, sheet=None, max_rows=5000) / xlsx_write(path, sheets): read .xlsx/.xls/.xlsb/.ods sheets or write .xlsx workbooks (formulas like '=SUM(B2:B10)', bold headers, autofit).\n- docx_read(path, max_paragraphs=5000) / docx_write(path, content=None, title=None, subtitle=None, blocks=None, author=None): read .docx paragraphs & tables or create formatted Word .docx documents from Markdown (`content`) or structured `blocks` (heading, paragraph, bullets, numbered, table, quote, code, rule, page_break).\n- pptx_read(path, max_slides=200) / pptx_write(path, slides, title=None, author=None, theme='corporate'): read .pptx slides/tables/notes or create formatted 16:9 PowerPoint .pptx decks from `slides` dicts (title, subtitle, layout='title'|'content'|'section', bullets, body, table, left/right columns, notes; themes: 'corporate', 'dark', 'minimal').",
+            "\n\nBuilt-in RustPython + Office/Document/HTTP helpers (no system Python or Office required): `from hermes_tools import xlsx_read, xlsx_write, docx_read, docx_write, pptx_read, pptx_write, pdf_read, http_request`.\n- xlsx_read(path, sheet=None, max_rows=5000) / xlsx_write(path, sheets): read .xlsx/.xls/.xlsb/.ods sheets or write .xlsx workbooks (formulas like '=SUM(B2:B10)', bold headers, autofit).\n- docx_read(path, max_paragraphs=5000) / docx_write(path, content=None, title=None, subtitle=None, blocks=None, author=None): read .docx paragraphs & tables or create formatted Word .docx documents from Markdown (`content`) or structured `blocks` (heading, paragraph, bullets, numbered, table, quote, code, rule, page_break).\n- pptx_read(path, max_slides=200) / pptx_write(path, slides, title=None, author=None, theme='corporate'): read .pptx slides/tables/notes or create formatted 16:9 PowerPoint .pptx decks from `slides` dicts (title, subtitle, layout='title'|'content'|'section', bullets, body, table, left/right columns, notes; themes: 'corporate', 'dark', 'minimal').\n- pdf_read(path, max_chars=100000): extract text from a workspace .pdf file.\n- http_request(url, method='GET', headers=None, body=None, timeout=30): policy-gated HTTP(S) request enforced by SSRF and website blocklist guards (also backs sandboxed `urllib.request` and `requests`).\n- Stdlib + built-in modules: workspace-scoped `open()`, `pathlib`, `glob`, `shutil`, `tempfile`, `zipfile`, `tarfile`, `sqlite3`, `yaml`, `unittest`, and approval-gated `subprocess` (when `terminal` is enabled).",
         );
         function["description"] = Value::String(text);
     }
@@ -122,7 +122,7 @@ pub(crate) fn schema(tools: &[&str]) -> Value {
 /// helpers and one function per tool the script may call.
 #[cfg(unix)]
 fn kernel_source(tools: &[&str]) -> String {
-    const STUBS: [(&str, &str); 13] = [
+    const STUBS: [(&str, &str); 15] = [
         ("web_search", "def web_search(query, limit=5):\n    return _call('web_search', {'query': query, 'limit': limit})\n"),
         ("web_extract", "def web_extract(urls, char_limit=None):\n    return _call('web_extract', {'urls': urls, 'char_limit': char_limit})\n"),
         ("read_file", "def read_file(path, offset=1, limit=2000):\n    return _call('read_file', {'path': path, 'offset': offset, 'limit': limit})\n"),
@@ -136,6 +136,8 @@ fn kernel_source(tools: &[&str]) -> String {
         ("docx_write", "def docx_write(path, content=None, title=None, subtitle=None, blocks=None, author=None):\n    return _call('docx_write', {'path': path, 'content': content, 'title': title, 'subtitle': subtitle, 'blocks': blocks, 'author': author})\n"),
         ("pptx_read", "def pptx_read(path, max_slides=200):\n    return _call('pptx_read', {'path': path, 'max_slides': max_slides})\n"),
         ("pptx_write", "def pptx_write(path, slides, title=None, author=None, theme=None):\n    return _call('pptx_write', {'path': path, 'slides': slides, 'title': title, 'author': author, 'theme': theme})\n"),
+        ("pdf_read", "def pdf_read(path, max_chars=100000):\n    return _call('pdf_read', {'path': path, 'max_chars': max_chars})\n"),
+        ("http_request", "def http_request(url, method='GET', headers=None, body=None, body_b64=None, timeout=30):\n    return _call('http_request', {'url': url, 'method': method, 'headers': headers, 'body': body, 'body_b64': body_b64, 'timeout': timeout})\n"),
     ];
     let stubs: String = STUBS
         .iter()
@@ -148,6 +150,8 @@ fn kernel_source(tools: &[&str]) -> String {
                     | "docx_write"
                     | "pptx_read"
                     | "pptx_write"
+                    | "pdf_read"
+                    | "http_request"
             ) || tools.contains(name)
         })
         .map(|(_, source)| *source)
@@ -162,6 +166,8 @@ fn kernel_source(tools: &[&str]) -> String {
         "docx_write",
         "pptx_read",
         "pptx_write",
+        "pdf_read",
+        "http_request",
     ]
     .iter()
     .chain(tools.iter())
@@ -573,6 +579,285 @@ enum Cell {
     Died,
 }
 
+const MAX_HTTP_REQ_BYTES: usize = 2 * 1024 * 1024;
+const MAX_HTTP_RESP_BYTES: usize = 4 * 1024 * 1024;
+const MAX_HTTP_REDIRECTS: usize = 5;
+const MAX_HTTP_HEADERS: usize = 32;
+
+fn encode_http_b64(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = *chunk.get(1).unwrap_or(&0);
+        let b2 = *chunk.get(2).unwrap_or(&0);
+        out.push(TABLE[(b0 >> 2) as usize] as char);
+        out.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(b2 & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+fn decode_http_b64(input: &str) -> Result<Vec<u8>, String> {
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let mut buf: u32 = 0;
+    let mut bits: u8 = 0;
+    for b in input.bytes() {
+        let val = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' | b'\n' | b'\r' | b' ' | b'\t' => continue,
+            _ => return Err("invalid base64 byte in body_b64".into()),
+        };
+        buf = (buf << 6) | u32::from(val);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+            buf &= (1 << bits) - 1;
+        }
+    }
+    Ok(out)
+}
+
+/// Extract text from a PDF inside `workspace_root` using `doc_extract`.
+pub(crate) fn pdf_read_tool(workspace_root: &Path, profile: Option<&Path>, args: &Value) -> Value {
+    let Some(raw_path) = args.get("path").and_then(Value::as_str) else {
+        return json!({"error": "pdf_read requires a 'path' string argument"});
+    };
+    let resolved =
+        match excel_tools::resolve_workspace_path(workspace_root, profile, raw_path, true) {
+            Ok(p) => p,
+            Err(err) => return json!({"error": err}),
+        };
+    let max_chars = args
+        .get("max_chars")
+        .and_then(Value::as_u64)
+        .map(|n| (n as usize).clamp(1_000, 500_000))
+        .unwrap_or(100_000);
+    let data = match std::fs::read(&resolved) {
+        Ok(bytes) => bytes,
+        Err(err) => return json!({"error": format!("failed reading {raw_path}: {err}")}),
+    };
+    match crate::doc_extract::extract_document_bytes(&data, &resolved, raw_path) {
+        Ok(mut text) => {
+            let total_chars = text.chars().count();
+            let truncated = total_chars > max_chars;
+            if truncated {
+                text = text.chars().take(max_chars).collect();
+            }
+            json!({
+                "status": "ok",
+                "path": raw_path,
+                "text": text,
+                "chars": total_chars,
+                "truncated": truncated,
+            })
+        }
+        Err(err) => json!({"error": err}),
+    }
+}
+
+/// Policy-gated HTTP(S) client for `execute_code` (`hermes_tools.http_request`, `urllib.request`,
+/// and `requests`). Enforces `website_policy` and `url_safety::is_safe_url` on the initial URL
+/// and on every redirect hop, caps request/response sizes, and never attaches host API keys.
+pub(crate) async fn sandbox_http_request(
+    args: &Value,
+    web: Option<&crate::web_tools::WebSettings>,
+    deadline: Instant,
+) -> Result<Value, ()> {
+    let Some(initial_url) = args
+        .get("url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+    else {
+        return Ok(json!({"error": "http_request requires a non-empty 'url' string"}));
+    };
+
+    let method_str = args
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or("GET")
+        .trim()
+        .to_ascii_uppercase();
+    let method = match method_str.as_str() {
+        "GET" => reqwest::Method::GET,
+        "HEAD" => reqwest::Method::HEAD,
+        "POST" => reqwest::Method::POST,
+        "PUT" => reqwest::Method::PUT,
+        "PATCH" => reqwest::Method::PATCH,
+        "DELETE" => reqwest::Method::DELETE,
+        other => {
+            return Ok(json!({"error": format!("unsupported HTTP method: {other}")}));
+        }
+    };
+
+    let body_bytes: Option<Vec<u8>> =
+        if let Some(b64) = args.get("body_b64").and_then(Value::as_str) {
+            match decode_http_b64(b64) {
+                Ok(bytes) => Some(bytes),
+                Err(err) => return Ok(json!({"error": err})),
+            }
+        } else {
+            args.get("body")
+                .and_then(Value::as_str)
+                .map(|text| text.as_bytes().to_vec())
+        };
+    if let Some(ref b) = body_bytes {
+        if b.len() > MAX_HTTP_REQ_BYTES {
+            return Ok(
+                json!({"error": format!("request body exceeds {} bytes limit", MAX_HTTP_REQ_BYTES)}),
+            );
+        }
+    }
+
+    let mut req_headers = reqwest::header::HeaderMap::new();
+    if let Some(map) = args.get("headers").and_then(Value::as_object) {
+        for (k, v) in map.iter().take(MAX_HTTP_HEADERS) {
+            let lower = k.to_ascii_lowercase();
+            if matches!(
+                lower.as_str(),
+                "host" | "connection" | "content-length" | "transfer-encoding"
+            ) {
+                continue;
+            }
+            if let (Ok(name), Some(val_str)) = (
+                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                v.as_str(),
+            ) {
+                if let Ok(val) = reqwest::header::HeaderValue::from_str(val_str) {
+                    req_headers.insert(name, val);
+                }
+            }
+        }
+    }
+
+    let timeout_secs = args
+        .get("timeout")
+        .and_then(Value::as_f64)
+        .filter(|t| t.is_finite() && *t > 0.0)
+        .unwrap_or(30.0)
+        .clamp(1.0, 30.0);
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(());
+    }
+    let req_timeout = Duration::from_secs_f64(timeout_secs).min(remaining);
+
+    let allow_private = web.is_some_and(|w| w.allow_private_urls);
+    let website_policy = web.map(|w| &w.website_policy);
+
+    let client = match reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(req_timeout)
+        .user_agent("hermes-rs-sandbox/1.0")
+        .build()
+    {
+        Ok(c) => c,
+        Err(err) => return Ok(json!({"error": format!("failed creating HTTP client: {err}")})),
+    };
+
+    let mut current_url = initial_url.to_owned();
+    let mut current_method = method;
+    let mut current_body = body_bytes;
+
+    for _hop in 0..=MAX_HTTP_REDIRECTS {
+        if let Some(policy) = website_policy {
+            if let Some(block) = policy.check_access(&current_url) {
+                return Ok(json!({
+                    "error": block.message,
+                    "blocked": true,
+                    "policy": block.policy_metadata(),
+                }));
+            }
+        }
+        if !crate::url_safety::is_safe_url(&current_url, allow_private).await {
+            return Ok(json!({
+                "error": "Blocked: URL targets a private, internal, metadata, or unsupported address",
+                "blocked": true,
+            }));
+        }
+
+        let mut req = client
+            .request(current_method.clone(), &current_url)
+            .headers(req_headers.clone());
+        if let Some(ref b) = current_body {
+            req = req.body(b.clone());
+        }
+
+        let resp = match tokio::time::timeout_at(deadline.into(), req.send()).await {
+            Err(_) => return Err(()),
+            Ok(Err(err)) => return Ok(json!({"error": format!("HTTP request failed: {err}")})),
+            Ok(Ok(r)) => r,
+        };
+
+        let status = resp.status();
+        if status.is_redirection() {
+            let Some(loc) = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+            else {
+                return Ok(json!({"error": "redirect response missing Location header"}));
+            };
+            let base = match reqwest::Url::parse(&current_url) {
+                Ok(u) => u,
+                Err(_) => return Ok(json!({"error": "invalid redirect base URL"})),
+            };
+            let next = match base.join(loc) {
+                Ok(u) => u.to_string(),
+                Err(_) => return Ok(json!({"error": "invalid redirect Location URL"})),
+            };
+            if matches!(status.as_u16(), 301..=303) {
+                current_method = reqwest::Method::GET;
+                current_body = None;
+            }
+            current_url = next;
+            continue;
+        }
+
+        let mut resp_headers = Map::new();
+        for (k, v) in resp.headers() {
+            if let Ok(s) = v.to_str() {
+                resp_headers.insert(k.as_str().to_owned(), Value::String(s.to_owned()));
+            }
+        }
+        let final_url = resp.url().to_string();
+        let bytes = match tokio::time::timeout_at(deadline.into(), resp.bytes()).await {
+            Err(_) => return Err(()),
+            Ok(Err(err)) => {
+                return Ok(json!({"error": format!("failed reading HTTP body: {err}")}))
+            }
+            Ok(Ok(b)) => b,
+        };
+        let truncated = bytes.len() > MAX_HTTP_RESP_BYTES;
+        let slice = &bytes[..bytes.len().min(MAX_HTTP_RESP_BYTES)];
+        return Ok(json!({
+            "status": status.as_u16(),
+            "ok": status.is_success(),
+            "url": final_url,
+            "headers": resp_headers,
+            "body_b64": encode_http_b64(slice),
+            "truncated": truncated,
+        }));
+    }
+
+    Ok(json!({"error": format!("too many redirects (limit {MAX_HTTP_REDIRECTS})")}))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_sandbox_tool(
     name: &str,
@@ -614,6 +899,14 @@ async fn dispatch_sandbox_tool(
             cx.options.profile,
             raw_args,
         ));
+    }
+    if name == "pdf_read" {
+        *calls += 1;
+        return Ok(pdf_read_tool(workspace_root, cx.options.profile, raw_args));
+    }
+    if name == "http_request" {
+        *calls += 1;
+        return sandbox_http_request(raw_args, cx.options.web, deadline).await;
     }
     if matches!(name, "xlsx_write" | "docx_write" | "pptx_write") {
         *calls += 1;
@@ -670,6 +963,8 @@ async fn dispatch_sandbox_tool(
             "docx_write",
             "pptx_read",
             "pptx_write",
+            "pdf_read",
+            "http_request",
         ]);
         names.sort_unstable();
         return Ok(json!({"error": format!(
@@ -1447,5 +1742,88 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn sandbox_http_request_enforces_ssrf_redirects_and_website_blocklist() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = [0u8; 2048];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let resp = if req.starts_with("GET /redirect-meta ") {
+                    "HTTP/1.1 302 Found\r\nLocation: http://169.254.169.254/latest/meta-data\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                } else {
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}"
+                };
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+
+        // 1. Default settings block loopback SSRF.
+        let blocked =
+            sandbox_http_request(&json!({"url": format!("http://{addr}/ok")}), None, deadline)
+                .await
+                .unwrap();
+        assert_eq!(blocked["blocked"], true, "{blocked}");
+
+        // 2. Website blocklist blocks configured domain even when allow_private_urls is true.
+        let blocked_web = crate::web_tools::WebSettings {
+            allow_private_urls: true,
+            website_policy: crate::website_policy::WebsitePolicy {
+                enabled: true,
+                rules: vec![crate::website_policy::WebsiteRule {
+                    pattern: "blocked.example.com".into(),
+                    source: "config".into(),
+                }],
+            },
+            ..Default::default()
+        };
+        let policy_blocked = sandbox_http_request(
+            &json!({"url": "https://blocked.example.com/secret"}),
+            Some(&blocked_web),
+            deadline,
+        )
+        .await
+        .unwrap();
+        assert_eq!(policy_blocked["blocked"], true, "{policy_blocked}");
+
+        // 3. allow_private_urls=true permits loopback /ok...
+        let priv_web = crate::web_tools::WebSettings {
+            allow_private_urls: true,
+            ..Default::default()
+        };
+        let ok_resp = sandbox_http_request(
+            &json!({"url": format!("http://{addr}/ok")}),
+            Some(&priv_web),
+            deadline,
+        )
+        .await
+        .unwrap();
+        assert_eq!(ok_resp["status"], 200, "{ok_resp}");
+        let body = decode_http_b64(ok_resp["body_b64"].as_str().unwrap()).unwrap();
+        assert_eq!(body, b"{\"ok\":true}");
+
+        // 4. ...but redirect to cloud metadata (169.254.169.254) MUST STILL BE BLOCKED!
+        let redir_blocked = sandbox_http_request(
+            &json!({"url": format!("http://{addr}/redirect-meta")}),
+            Some(&priv_web),
+            deadline,
+        )
+        .await
+        .unwrap();
+        assert_eq!(redir_blocked["blocked"], true, "{redir_blocked}");
+
+        server.abort();
     }
 }
