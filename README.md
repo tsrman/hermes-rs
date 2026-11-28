@@ -2,7 +2,7 @@
 
 A fast, standalone Rust implementation of [Hermes Agent](https://github.com/NousResearch/hermes-agent) — a single native CLI binary (`hsr`) with no Python runtime dependency, designed to live cleanly side-by-side with Python `hermes` using `~/.hsr` by default (override with `HSR_HOME` or `HERMES_HOME`) while staying drop-in compatible with existing `~/.hermes` profiles, `config.yaml`, `.env`, `auth.json`, skills, cron jobs, and SQLite `state.db` history.
 
-> Current releases: CLI **`v0.7.15`** (Linux x86_64/arm64 GNU & musl, macOS Apple Silicon & Intel, Windows x64) · Desktop GUI **`gui-v0.7.15`** (standalone `hsr-gui` for Linux GNU/musl & Windows x64; GUI versioning was synchronized with CLI starting at `0.7.14`, up from `gui-v0.4.11`)
+> Current releases: CLI **`v0.7.16`** (Linux x86_64/arm64 GNU & musl, macOS Apple Silicon & Intel, Windows x64) · Desktop GUI **`gui-v0.7.16`** (standalone `hsr-gui` for Linux GNU/musl & Windows x64; GUI versioning was synchronized with CLI starting at `0.7.14`, up from `gui-v0.4.11`)
 
 ## Highlights
 
@@ -40,7 +40,7 @@ Download the archive and `.sha256` checksum for your platform from [Releases](ht
 **Linux / macOS:**
 
 ```bash
-tag=v0.7.15
+tag=v0.7.16
 target=x86_64-unknown-linux-gnu
 archive="hsr-${tag#v}-$target.tar.gz"
 url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
@@ -64,7 +64,7 @@ url="https://github.com/tsrman/hermes-rs/releases/download/$tag"
 **Windows (PowerShell):**
 
 ```powershell
-$Tag = 'v0.7.15'
+$Tag = 'v0.7.16'
 $Archive = "hsr-$($Tag.Substring(1))-x86_64-pc-windows-msvc.zip"
 $Url = "https://github.com/tsrman/hermes-rs/releases/download/$Tag"
 Invoke-WebRequest "$Url/$Archive" -OutFile $Archive
