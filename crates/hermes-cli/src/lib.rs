@@ -8,6 +8,7 @@ mod auth;
 mod browser;
 mod chat;
 mod cron;
+mod gateway;
 mod owner;
 #[cfg(target_os = "linux")]
 mod profile;
@@ -73,6 +74,11 @@ enum Command {
         command: ConfigCommand,
     },
     Chat(chat::ChatArgs),
+    /// Run the local gateway HTTP Runs API server (`platforms.api_server`).
+    Gateway {
+        #[command(subcommand)]
+        command: gateway::Command,
+    },
     /// Run the local session owner for the selected profile.
     Owner,
 }
@@ -290,6 +296,7 @@ async fn run() -> Result<u8, String> {
             }
             outcome
         }
+        Command::Gateway { command } => gateway::run(home, command).await,
         Command::Owner => {
             owner::serve(home.ok_or("profile root is unavailable")?).await?;
             Ok(0)

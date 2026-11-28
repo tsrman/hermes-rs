@@ -25,6 +25,8 @@ fn config(name: &str, timeout_secs: u64) -> McpServerConfig {
         connect_timeout_secs: 10,
         resources: true,
         prompts: true,
+        include: None,
+        exclude: Vec::new(),
     }
 }
 

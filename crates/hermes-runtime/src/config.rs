@@ -232,6 +232,11 @@ pub struct ChatSettings {
     pub tts: crate::tts_tool::TtsSettings,
     pub x_search: crate::x_search::XSearchSettings,
     pub tools: ToolPolicy,
+    /// `agent.image_input_mode: "text"` — keep tool-returned images as text metadata instead of
+    /// attaching raw multimodal image blocks to the conversation (model uses `vision_analyze`).
+    pub image_input_mode_text: bool,
+    /// `platforms.api_server` HTTP Runs API settings for `hsr gateway run`.
+    pub api_server: ApiServerSettings,
     pub vertex: crate::providers::vertex::VertexSettings,
     pub bedrock: crate::providers::bedrock::BedrockSettings,
     openai_api_key: Option<String>,
@@ -240,6 +245,100 @@ pub struct ChatSettings {
     secrets: HashMap<String, String>,
     anthropic_api_key: Option<String>,
     anthropic_base_url: Option<String>,
+}
+
+/// `platforms.api_server`: local HTTP Runs API listener used by `hsr gateway run`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApiServerSettings {
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    pub key: Option<String>,
+}
+
+impl Default for ApiServerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: "127.0.0.1".to_owned(),
+            port: 8642,
+            key: None,
+        }
+    }
+}
+
+impl ApiServerSettings {
+    pub fn from_config(config: &serde_yaml::Value, secrets: &HashMap<String, String>) -> Self {
+        let section = config
+            .get("platforms")
+            .and_then(|p| p.get("api_server"))
+            .unwrap_or(&serde_yaml::Value::Null);
+        let extra = section.get("extra").unwrap_or(&serde_yaml::Value::Null);
+        let str_opt = |key: &str| {
+            extra
+                .get(key)
+                .or_else(|| section.get(key))
+                .and_then(serde_yaml::Value::as_str)
+                .map(|s| expand_env(s, secrets))
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+        };
+        let host = str_opt("host")
+            .or_else(|| {
+                std::env::var("API_SERVER_HOST")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+            })
+            .or_else(|| {
+                secrets
+                    .get("API_SERVER_HOST")
+                    .filter(|s| !s.trim().is_empty())
+                    .cloned()
+            })
+            .unwrap_or_else(|| "127.0.0.1".to_owned());
+        let port = extra
+            .get("port")
+            .or_else(|| section.get("port"))
+            .and_then(|v| {
+                v.as_u64()
+                    .and_then(|n| u16::try_from(n).ok())
+                    .or_else(|| v.as_str().and_then(|s| s.trim().parse::<u16>().ok()))
+            })
+            .or_else(|| {
+                std::env::var("API_SERVER_PORT")
+                    .ok()
+                    .and_then(|s| s.trim().parse::<u16>().ok())
+            })
+            .or_else(|| {
+                secrets
+                    .get("API_SERVER_PORT")
+                    .and_then(|s| s.trim().parse::<u16>().ok())
+            })
+            .filter(|&p| p > 0)
+            .unwrap_or(8642);
+        let key = str_opt("key")
+            .or_else(|| {
+                std::env::var("API_SERVER_KEY")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+            })
+            .or_else(|| {
+                secrets
+                    .get("API_SERVER_KEY")
+                    .filter(|s| !s.trim().is_empty())
+                    .cloned()
+            });
+        let enabled = truthy(
+            section.get("enabled").unwrap_or(&serde_yaml::Value::Null),
+            false,
+        );
+        Self {
+            enabled,
+            host,
+            port,
+            key,
+        }
+    }
 }
 
 /// `auxiliary.<task>` as written: which model and endpoint a side task uses.
@@ -354,6 +453,8 @@ impl Default for ChatSettings {
             tts: crate::tts_tool::TtsSettings::default(),
             x_search: crate::x_search::XSearchSettings::default(),
             tools: ToolPolicy::allow_all(),
+            image_input_mode_text: false,
+            api_server: ApiServerSettings::default(),
             vertex: crate::providers::vertex::VertexSettings::default(),
             bedrock: crate::providers::bedrock::BedrockSettings::default(),
             openai_api_key: None,
@@ -880,6 +981,12 @@ pub fn load_chat_settings(home: Option<&Path>) -> Result<ChatSettings, String> {
     settings.x_search =
         crate::x_search::XSearchSettings::from_config(&config, &secrets, Some(home));
     settings.tools = ToolPolicy::from_config(&config);
+    settings.image_input_mode_text = config
+        .get("agent")
+        .and_then(|agent| agent.get("image_input_mode"))
+        .and_then(serde_yaml::Value::as_str)
+        .is_some_and(|mode| mode.trim().eq_ignore_ascii_case("text"));
+    settings.api_server = ApiServerSettings::from_config(&config, &secrets);
     settings.clarify_timeout_secs = clarify_timeout(&config);
     settings.prompt.memory_tool = settings.tools.allows("memory");
     settings.terminal_env = crate::terminal::TerminalSettings::from_config(&config);
@@ -1154,6 +1261,31 @@ fn mcp_servers(
                         .unwrap_or(&serde_yaml::Value::Null),
                     true,
                 ),
+                include: entry
+                    .get("tools")
+                    .and_then(|tools| tools.get("include"))
+                    .and_then(serde_yaml::Value::as_sequence)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(serde_yaml::Value::as_str)
+                            .map(|s| s.trim().to_owned())
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    }),
+                exclude: entry
+                    .get("tools")
+                    .and_then(|tools| tools.get("exclude"))
+                    .and_then(serde_yaml::Value::as_sequence)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(serde_yaml::Value::as_str)
+                            .map(|s| s.trim().to_owned())
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             })
         })
         .collect()
@@ -2113,5 +2245,69 @@ mod mcp_timeout_tests {
                 "{case}"
             );
         }
+    }
+
+    #[test]
+    fn aurumai_json_config_parses_api_server_image_mode_and_mcp_include() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = serde_json::json!({
+            "model": {
+                "provider": "custom",
+                "base_url": "http://hermes-egress:8080/v1",
+                "default": "gpt-4o",
+                "api_key": "sess-token"
+            },
+            "approvals": {"mode": "off"},
+            "agent": {
+                "clarify_timeout": 4200,
+                "system_prompt": "You work in an isolated sandbox.",
+                "image_input_mode": "text"
+            },
+            "platform_toolsets": {"api_server": ["hermes-api-server", "clarify"]},
+            "mcp_servers": {
+                "aurum": {
+                    "url": "http://hermes-egress:8080/mcp",
+                    "headers": {"Authorization": "Bearer sess-token"},
+                    "skip_preflight": true,
+                    "timeout": 600,
+                    "connect_timeout": 30,
+                    "keepalive_interval": 1800,
+                    "tools": {
+                        "include": ["knowledge_search", "attach_file"],
+                        "resources": false,
+                        "prompts": false
+                    }
+                }
+            },
+            "platforms": {
+                "api_server": {
+                    "enabled": true,
+                    "extra": {"host": "127.0.0.1", "port": 8642, "key": "relay-secret-key"}
+                }
+            }
+        });
+        std::fs::write(dir.path().join("config.yaml"), cfg.to_string()).unwrap();
+
+        let settings = load_chat_settings(Some(dir.path())).unwrap();
+        assert!(settings.image_input_mode_text);
+        assert_eq!(settings.clarify_timeout_secs, 4200);
+        assert!(settings.approvals.approve_all);
+        assert!(settings.api_server.enabled);
+        assert_eq!(settings.api_server.host, "127.0.0.1");
+        assert_eq!(settings.api_server.port, 8642);
+        assert_eq!(settings.api_server.key.as_deref(), Some("relay-secret-key"));
+        assert_eq!(settings.mcp_servers.len(), 1);
+        let mcp = &settings.mcp_servers[0];
+        assert_eq!(mcp.name, "aurum");
+        assert!(!mcp.resources);
+        assert!(!mcp.prompts);
+        assert_eq!(
+            mcp.include.as_deref(),
+            Some(&["knowledge_search".to_owned(), "attach_file".to_owned()][..])
+        );
+
+        let policy = load_tool_policy(Some(dir.path()), "api_server").unwrap();
+        assert!(policy.allows("clarify"));
+        assert!(policy.allows("terminal"));
     }
 }

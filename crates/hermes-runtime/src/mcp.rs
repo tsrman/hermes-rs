@@ -116,6 +116,12 @@ pub struct McpServerConfig {
     /// `tools.prompts`: offer the prompt tools of a server that advertises prompts.
     #[serde(default = "enabled")]
     pub prompts: bool,
+    /// `tools.include`: optional allowlist of tool names exposed by this server.
+    #[serde(default)]
+    pub include: Option<Vec<String>>,
+    /// `tools.exclude`: optional denylist of tool names hidden from this server.
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 
 impl McpServerConfig {
@@ -132,6 +138,8 @@ impl McpServerConfig {
             && self.connect_timeout_secs == other.connect_timeout_secs
             && self.resources == other.resources
             && self.prompts == other.prompts
+            && self.include == other.include
+            && self.exclude == other.exclude
     }
 }
 
@@ -1348,11 +1356,28 @@ impl McpClients {
         let mut tools = self.tools.write().unwrap_or_else(PoisonError::into_inner);
         tools.retain(|tool| tool.server != index);
         let config_name = self.servers[index].config.name.clone();
+        let include = self.servers[index].config.include.clone();
+        let exclude = self.servers[index].config.exclude.clone();
         let mut natives: Vec<(String, &Value)> = Vec::new();
         for tool in &discovered.tools {
             let Some(name) = tool["name"].as_str() else {
                 continue;
             };
+            let exposed_candidate = mcp_prefixed_tool_name(&config_name, name);
+            if let Some(ref allowed) = include {
+                if !allowed
+                    .iter()
+                    .any(|item| item == name || item == &exposed_candidate)
+                {
+                    continue;
+                }
+            }
+            if exclude
+                .iter()
+                .any(|item| item == name || item == &exposed_candidate)
+            {
+                continue;
+            }
             if !natives.iter().any(|(seen, _)| seen == name) {
                 natives.push((name.to_owned(), tool));
             }
@@ -2692,6 +2717,8 @@ mod tests {
             connect_timeout_secs: 15,
             resources: true,
             prompts: true,
+            include: None,
+            exclude: Vec::new(),
         };
         let mut b = a.clone();
         assert!(a.same_config(&b));

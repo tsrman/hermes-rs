@@ -176,6 +176,7 @@ fn base_options<'a>(
         prefill: None,
         state_scope: None,
         approval_policy: None,
+        image_input_mode_text: false,
     }
 }
 
@@ -1027,4 +1028,111 @@ async fn x_search_validates_filters_retries_429_and_flags_degraded() {
         .as_str()
         .unwrap()
         .contains("allowed_x_handles"));
+}
+
+#[tokio::test]
+async fn image_input_mode_text_suppresses_inline_multimodal_tool_attachments() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = hermes_runtime::paths::canonical(dir.path()).unwrap();
+    std::fs::write(root.join("chart.png"), TINY_PNG).unwrap();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen_requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let seen_srv = Arc::clone(&seen_requests);
+    let server = std::thread::spawn(move || {
+        for step in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let (_, _, body) = read_http_request(&mut stream).unwrap();
+            let req: Value = serde_json::from_slice(&body).unwrap();
+            seen_srv.lock().unwrap().push(req);
+            let reply = if step == 0 {
+                json!({
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": null,
+                            "tool_calls": [{
+                                "id": "call_img_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_file",
+                                    "arguments": "{\"path\":\"chart.png\"}"
+                                }
+                            }]
+                        },
+                        "finish_reason": "tool_calls"
+                    }]
+                })
+            } else {
+                json!({
+                    "choices": [{
+                        "message": {"role": "assistant", "content": "Saw chart metadata"},
+                        "finish_reason": "stop"
+                    }]
+                })
+            };
+            write_http(
+                &mut stream,
+                "200 OK",
+                "application/json",
+                reply.to_string().as_bytes(),
+            );
+        }
+    });
+
+    let route = ModelRoute {
+        provider: Provider::OpenAi(
+            OpenAiProvider::new(&format!("http://{addr}/v1"), "k", Duration::from_secs(5))
+                .unwrap()
+                .with_streaming(false),
+        ),
+        provider_name: "custom",
+        model: "fixture".into(),
+    };
+    let policy = ToolPolicy::default();
+    let ack = IntentAckContinuation::default();
+    let mut opts = base_options(&root, None, &policy, &ack);
+    opts.image_input_mode_text = true;
+
+    let outcome = run_turn(
+        &route,
+        &[],
+        "Inspect chart.png",
+        opts,
+        TurnHistory::default(),
+        |_| {},
+        |_| async { ApprovalDecision::Approved },
+    )
+    .await
+    .unwrap();
+    server.join().unwrap();
+    assert!(matches!(outcome, TurnOutcome::Completed(_)));
+
+    let reqs = seen_requests.lock().unwrap();
+    assert_eq!(reqs.len(), 2);
+    let second_msgs = reqs[1]["messages"].as_array().unwrap();
+    // No follow-up multimodal image_url block should have been attached in text mode.
+    let has_image_block = second_msgs.iter().any(|m| {
+        m["content"].as_array().is_some_and(|parts| {
+            parts
+                .iter()
+                .any(|p| p["type"].as_str() == Some("image_url"))
+        })
+    });
+    assert!(
+        !has_image_block,
+        "image_input_mode=text must not attach inline image_url blocks: {second_msgs:?}"
+    );
+    let tool_msg = second_msgs
+        .iter()
+        .find(|m| m["role"].as_str() == Some("tool"))
+        .unwrap();
+    assert!(
+        tool_msg["content"]
+            .as_str()
+            .unwrap()
+            .contains("\"is_image\":true"),
+        "{tool_msg}"
+    );
 }

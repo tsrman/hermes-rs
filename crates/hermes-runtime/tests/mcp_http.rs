@@ -67,6 +67,8 @@ impl Fixture {
             connect_timeout_secs: 10,
             resources: true,
             prompts: true,
+            include: None,
+            exclude: Vec::new(),
         }
     }
 }
@@ -558,4 +560,24 @@ async fn an_initialize_that_times_out_is_not_cancelled() {
     assert!(warnings[0].contains("initialize timed out"), "{warnings:?}");
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     assert!(cancellations(&fixture).is_empty());
+}
+
+#[tokio::test]
+async fn tools_include_and_exclude_filter_exposed_mcp_tools() {
+    let fixture = Fixture::start_with(&[]);
+    let mut cfg = fixture.config("fixture-token", 10);
+    cfg.include = Some(vec!["echo".to_owned()]);
+    cfg.resources = false;
+    cfg.prompts = false;
+    let (clients, warnings) = McpClients::start(&[cfg]).await;
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let exposed: Vec<String> = clients
+        .schemas()
+        .iter()
+        .filter_map(|s| s["function"]["name"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(exposed, vec!["mcp__web__echo".to_owned()]);
+    assert!(clients.owns("mcp__web__echo"));
+    assert!(!clients.owns("mcp__web__expire"));
+    clients.shutdown().await;
 }

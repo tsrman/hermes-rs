@@ -158,6 +158,7 @@ fn base_options<'a>(
         prefill: None,
         state_scope: None,
         approval_policy: None,
+        image_input_mode_text: false,
     }
 }
 
