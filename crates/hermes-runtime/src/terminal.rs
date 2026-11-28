@@ -1275,8 +1275,10 @@ mod windows_shell {
         handle: *mut c_void,
     }
 
-    // SAFETY: Win32 Job Object handles are kernel handles that can be moved across threads.
+    // SAFETY: Win32 Job Object handles are thread-safe kernel handles; `CloseHandle` only runs
+    // exclusively in `Drop` (`&mut self`).
     unsafe impl Send for JobObject {}
+    unsafe impl Sync for JobObject {}
 
     impl JobObject {
         fn create() -> io::Result<Self> {
