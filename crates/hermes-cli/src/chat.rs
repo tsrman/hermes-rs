@@ -356,6 +356,8 @@ pub struct ChatRequest {
     x_search: hermes_runtime::x_search::XSearchSettings,
     #[serde(default)]
     tools: ToolPolicy,
+    #[serde(default)]
+    image_input_mode_text: bool,
     model_override: Option<String>,
     primary: Route,
     fallbacks: Vec<Route>,
@@ -527,6 +529,345 @@ pub enum Event {
     Stderr(String),
     Approval { id: u64, request: ApprovalRequest },
     Exit(u8),
+}
+
+pub(crate) enum GatewayTurnStatus {
+    Completed,
+    Interrupted,
+    Failed(String),
+}
+
+pub(crate) struct GatewayTurnResult {
+    pub status: GatewayTurnStatus,
+    pub output: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+pub(crate) fn prepare_gateway_request(
+    home: Option<&Path>,
+    root: &Path,
+    input: String,
+    session_id: String,
+    instructions: Option<String>,
+) -> Result<ChatRequest, String> {
+    let args = ChatArgs {
+        query: Some(input),
+        oneshot: false,
+        save_session: true,
+        resume: None,
+        continue_last: false,
+        max_turns: None,
+        base_url: None,
+        model: None,
+        api_key: None,
+        yolo: false,
+        debug_log: None,
+        events_json: false,
+        ui: None,
+    };
+    let mut request = prepare(home, args)?;
+    request.root = root.as_os_str().to_os_string();
+    request.single_query = false;
+    request.oneshot = false;
+    request.save_session = true;
+    request.state_scope = Some(session_id);
+    request.approval_timeout_secs = Some(request.approval_timeout_secs.unwrap_or(300));
+    request.tools = hermes_runtime::config::load_tool_policy(home, "api_server")?;
+    request.prompt.memory_tool = request.tools.allows("memory");
+    if let Some(extra) = instructions
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+    {
+        match request.prompt.ephemeral_system_prompt.as_mut() {
+            Some(existing) if existing.trim() == extra || existing.contains(&extra) => {}
+            Some(existing) => {
+                existing.push_str("\n\n");
+                existing.push_str(&extra);
+            }
+            None => request.prompt.ephemeral_system_prompt = Some(extra),
+        }
+    }
+    Ok(request)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_gateway_turn<E, A, F>(
+    home: Option<&Path>,
+    request: ChatRequest,
+    history: &mut hermes_runtime::turn::TurnHistory,
+    db_session_id: &mut Option<String>,
+    seed_history: Option<Vec<serde_json::Value>>,
+    mcp_pool: &McpPool,
+    cancel_flag: &std::sync::atomic::AtomicBool,
+    mut on_event: E,
+    approve: A,
+) -> Result<GatewayTurnResult, String>
+where
+    E: FnMut(TurnEvent<'_>),
+    A: FnMut(ApprovalRequest) -> F + Send,
+    F: Future<Output = ApprovalDecision> + Send + 'static,
+{
+    let root = Path::new(&request.root);
+    if !root.is_absolute() || request.max_turns == 0 {
+        return Err("invalid gateway request".into());
+    }
+    let mut writer = if let Some(home) = home {
+        if let Some(existing) = db_session_id.as_deref() {
+            match block_in_place(|| SessionWriter::prepare_resume(home, existing)) {
+                Ok(w) => Some(w),
+                Err(_) => Some(
+                    block_in_place(|| SessionWriter::prepare(home))
+                        .map_err(|error| error.to_string())?,
+                ),
+            }
+        } else {
+            Some(
+                block_in_place(|| SessionWriter::prepare(home))
+                    .map_err(|error| error.to_string())?,
+            )
+        }
+    } else {
+        None
+    };
+
+    if let Some(msgs) = seed_history {
+        if !msgs.is_empty() {
+            history.seed_messages(msgs);
+        }
+    }
+
+    let model = request
+        .model_override
+        .or_else(|| {
+            writer
+                .as_ref()
+                .and_then(SessionWriter::saved_model)
+                .map(str::to_owned)
+        })
+        .or_else(|| request.primary.model.clone())
+        .filter(|value| !value.is_empty())
+        .ok_or("model name is required")?;
+
+    let cache_scope = writer
+        .as_ref()
+        .and_then(SessionWriter::session_id)
+        .or(request.state_scope.as_deref());
+    let primary =
+        request
+            .primary
+            .open_with_session(model.clone(), request.attempts, cache_scope)?;
+    let summarizer = match &request.summary {
+        Some(route) => Some(route.open(route.model.clone().unwrap_or(model), request.attempts)?),
+        None => None,
+    };
+    let (mcp, _warnings) = mcp_pool
+        .acquire(
+            &request.mcp_servers,
+            home.map(Path::to_path_buf),
+            request.mcp_result_size_chars,
+        )
+        .await;
+    let delegate_route = match &request.delegate {
+        Some(route) => Some(route.open(
+            route.model.clone().unwrap_or_else(|| primary.model.clone()),
+            request.attempts,
+        )?),
+        None => None,
+    };
+    let vision_route = match &request.vision_route {
+        Some(route) => Some(route.open(
+            route.model.clone().unwrap_or_else(|| primary.model.clone()),
+            request.attempts,
+        )?),
+        None => None,
+    };
+    let delegation = hermes_runtime::delegation::Delegation::new(request.delegation.clone(), false)
+        .with_route(delegate_route);
+    let approval_policy =
+        hermes_runtime::approval_policy::ApprovalPolicy::new(request.approvals.clone());
+    let options = TurnOptions {
+        single_query: false,
+        journal: None,
+        delegation: Some(&delegation),
+        system_prompt_override: None,
+        ephemeral_system_prompt: request.prompt.ephemeral_system_prompt.as_deref(),
+        child: None,
+        delegate_depth: 0,
+        cancel_flag: Some(cancel_flag),
+        steer_queue: None,
+        prefill: (!request.prefill.is_empty()).then_some(request.prefill.as_slice()),
+        state_scope: request.state_scope.as_deref(),
+        approval_policy: Some(&approval_policy),
+        image_input_mode_text: request.image_input_mode_text,
+        mcp: Some(mcp.as_ref()),
+        web: Some(&request.web),
+        browser: Some(&request.browser),
+        memory: Some(&request.memory),
+        vision: Some(&request.vision),
+        vision_route: vision_route.as_ref(),
+        image_gen: Some(&request.image_gen),
+        tts: Some(&request.tts),
+        x_search: Some(&request.x_search),
+        tools: &request.tools,
+        root,
+        profile: home,
+        session_id: writer.as_ref().and_then(SessionWriter::session_id),
+        max_turns: request.max_turns,
+        approval_timeout_secs: request.approval_timeout_secs,
+        terminal_approval_timeout_secs: request.terminal_approval_timeout_secs,
+        terminal_local: request.terminal_local,
+        compression: Some(&request.compression),
+        keep_phone_numbers: request.keep_phone_numbers,
+        stall_guards: request.stall_guards,
+        intent_ack_continuation: &request.intent_ack_continuation,
+        summarizer: summarizer.as_ref(),
+        compaction_guard: None,
+        terminal_env: Some(&request.terminal_env),
+        clarify_timeout_secs: request.clarify_timeout_secs,
+    };
+    block_in_place(|| history.capture_prompt(&options, &request.prompt, &primary));
+    let fallbacks = request
+        .fallbacks
+        .iter()
+        .filter_map(|route| {
+            route
+                .open_with_session(route.model.clone()?, request.attempts, cache_scope)
+                .ok()
+        })
+        .collect::<Vec<_>>();
+    let expanded = hermes_runtime::context_refs::expand_context_references(
+        &request.query,
+        root,
+        request.compression.context_window().map(|n| n as usize),
+        Some(&request.web.website_policy),
+    )
+    .await;
+    let effective_query = expanded.text;
+
+    let mut approve = approve;
+    let _ = history
+        .compact(
+            home,
+            root,
+            &request.prompt,
+            &request.compression,
+            &primary,
+            summarizer.as_ref(),
+            CompactionTrigger::Estimate {
+                query: &effective_query,
+            },
+            None,
+        )
+        .await;
+    let mut retried = false;
+    let outcome = loop {
+        let mut started = false;
+        let result = run_turn(
+            &primary,
+            &fallbacks,
+            &effective_query,
+            options,
+            history.clone(),
+            |event| {
+                started |= matches!(event, TurnEvent::Text(_) | TurnEvent::ToolStarted { .. });
+                on_event(event);
+            },
+            &mut approve,
+        )
+        .await;
+        let overflow = matches!(
+            result,
+            Err(TurnError::Provider(ProviderError::ContextOverflow))
+        );
+        if !overflow || started || retried || history.is_compacted() {
+            break result;
+        }
+        retried = true;
+        let compaction = history
+            .compact(
+                home,
+                root,
+                &request.prompt,
+                &request.compression,
+                &primary,
+                summarizer.as_ref(),
+                CompactionTrigger::Overflow {
+                    query: &effective_query,
+                },
+                None,
+            )
+            .await;
+        if !matches!(compaction, CompactionOutcome::Applied) {
+            break result;
+        }
+    };
+
+    match outcome {
+        Ok(TurnOutcome::Completed(turn)) => {
+            let output = turn.final_response().to_owned();
+            let (input_tokens, output_tokens) = turn.usage();
+            if let Some(mut w) = writer.take() {
+                if let Ok(saved_id) = block_in_place(|| w.save(&turn, root)) {
+                    *db_session_id = Some(saved_id);
+                }
+            }
+            *history = turn.into_history();
+            Ok(GatewayTurnResult {
+                status: GatewayTurnStatus::Completed,
+                output,
+                input_tokens,
+                output_tokens,
+            })
+        }
+        Ok(TurnOutcome::Interrupted(turn)) => {
+            let output = turn.final_response().to_owned();
+            let (input_tokens, output_tokens) = turn.usage();
+            if let Some(mut w) = writer.take() {
+                if let Ok(saved_id) = block_in_place(|| w.save(&turn, root)) {
+                    *db_session_id = Some(saved_id);
+                }
+            }
+            *history = turn.into_history();
+            Ok(GatewayTurnResult {
+                status: GatewayTurnStatus::Interrupted,
+                output,
+                input_tokens,
+                output_tokens,
+            })
+        }
+        Ok(TurnOutcome::IterationLimit) => Ok(GatewayTurnResult {
+            status: GatewayTurnStatus::Failed(
+                "Iteration limit reached without a final response.".into(),
+            ),
+            output: "Iteration limit reached without a final response.".into(),
+            input_tokens: 0,
+            output_tokens: 0,
+        }),
+        Err(TurnError::Provider(ProviderError::HttpStatus(code))) => {
+            let msg = format!("provider error: upstream_error {code}");
+            Ok(GatewayTurnResult {
+                status: GatewayTurnStatus::Failed(msg.clone()),
+                output: msg,
+                input_tokens: 0,
+                output_tokens: 0,
+            })
+        }
+        Err(err) => {
+            let msg = match err {
+                TurnError::InvalidIterationSummary => {
+                    "Iteration limit reached: the model did not return a text summary.".into()
+                }
+                other => format!("turn failed: {other:?}"),
+            };
+            Ok(GatewayTurnResult {
+                status: GatewayTurnStatus::Failed(msg.clone()),
+                output: msg,
+                input_tokens: 0,
+                output_tokens: 0,
+            })
+        }
+    }
 }
 
 pub fn display(event: Event) -> io::Result<()> {
@@ -861,6 +1202,7 @@ pub fn prepare(home: Option<&Path>, mut args: ChatArgs) -> Result<ChatRequest, S
         tts: settings.tts,
         x_search: settings.x_search,
         tools: settings.tools,
+        image_input_mode_text: settings.image_input_mode_text,
         model_override: args.model,
     })
 }
@@ -1015,6 +1357,7 @@ where
         prefill: (!request.prefill.is_empty()).then_some(request.prefill.as_slice()),
         state_scope: request.state_scope.as_deref(),
         approval_policy: request.approval_policy.as_deref(),
+        image_input_mode_text: request.image_input_mode_text,
         mcp: Some(mcp.as_ref()),
         web: Some(&request.web),
         browser: Some(&request.browser),
@@ -1298,7 +1641,7 @@ fn format_event(event: TurnEvent<'_>, detailed: bool) -> Event {
             serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into())
         )),
         TurnEvent::Fallback(model) => Event::Stderr(format!("Model fallback: {model:?}")),
-        TurnEvent::ToolStarted { name, detail } => match detail.filter(|_| detailed) {
+        TurnEvent::ToolStarted { name, detail, .. } => match detail.filter(|_| detailed) {
             Some(detail) => Event::Stderr(format!("Tool started: {name:?}\t{detail}")),
             None => Event::Stderr(format!("Tool started: {name:?}")),
         },
@@ -1310,6 +1653,7 @@ fn format_event(event: TurnEvent<'_>, detailed: bool) -> Event {
             name,
             succeeded,
             summary,
+            ..
         } => {
             let status = if succeeded { "completed" } else { "failed" };
             match summary.filter(|_| detailed) {
@@ -1593,6 +1937,7 @@ pub async fn compress_session(
         prefill: None,
         state_scope: request.state_scope.as_deref(),
         approval_policy: request.approval_policy.as_deref(),
+        image_input_mode_text: request.image_input_mode_text,
         mcp: None,
         web: Some(&request.web),
         browser: Some(&request.browser),

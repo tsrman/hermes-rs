@@ -157,7 +157,7 @@ impl ToolPolicy {
                 .get("platform_toolsets")
                 .and_then(|sets| sets.get(platform)),
         )
-        .unwrap_or_else(|| vec![format!("hermes-{platform}")]);
+        .unwrap_or_else(|| vec![format!("hermes-{}", platform.replace('_', "-"))]);
         let mut allowed: BTreeSet<String> = BTreeSet::new();
         for name in names {
             // Older configs name the composite just "hermes".
@@ -366,5 +366,14 @@ mod tests {
     fn without_a_policy_everything_is_allowed() {
         assert!(ToolPolicy::allow_all().allows("anything"));
         assert!(ToolPolicy::default().allows("anything"));
+    }
+
+    #[test]
+    fn api_server_platform_defaults_to_hermes_api_server_toolset() {
+        let cfg: serde_yaml::Value = serde_yaml::from_str("{}").unwrap();
+        let policy = ToolPolicy::for_platform(&cfg, "api_server");
+        assert!(policy.allows("read_file"));
+        assert!(policy.allows("terminal"));
+        assert!(policy.allows("vision_analyze"));
     }
 }

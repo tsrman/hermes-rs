@@ -31,7 +31,7 @@ pub struct PromptSettings {
     pub(crate) skills: SkillSettings,
     /// Whether the memory tool is enabled, which adds its guidance to the prompt.
     #[serde(default = "enabled")]
-    pub(crate) memory_tool: bool,
+    pub memory_tool: bool,
     /// `agent.*` gates, `platform_hints` and `timezone`, which shape the prompt.
     #[serde(default)]
     pub(crate) gates: PromptGates,

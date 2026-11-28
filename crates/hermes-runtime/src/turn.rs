@@ -77,12 +77,17 @@ impl CompletedTurn {
     }
 
     /// The text of the last assistant message.
+    pub fn final_response(&self) -> &str {
+        &self.final_response
+    }
+
+    /// The text of the last assistant message.
     pub(crate) fn final_text(&self) -> String {
         self.final_response.clone()
     }
 
     /// The conversation so far, to continue it with another turn.
-    pub(crate) fn into_history(self) -> TurnHistory {
+    pub fn into_history(self) -> TurnHistory {
         let mut messages = self.replayed_history;
         messages.extend(self.messages);
         TurnHistory {
@@ -134,6 +139,14 @@ fn is_timeout_provider_error(error: &ProviderError) -> bool {
 impl TurnHistory {
     pub fn is_compacted(&self) -> bool {
         self.compaction.is_some()
+    }
+
+    /// Seed an empty history with prior conversation messages (e.g. from `POST /v1/runs`
+    /// `conversation_history` when resuming in a fresh sandbox without `state.db`).
+    pub fn seed_messages(&mut self, messages: Vec<Value>) {
+        if self.messages.is_empty() {
+            self.messages = messages;
+        }
     }
 
     pub fn capture_prompt(
@@ -681,6 +694,7 @@ pub enum TurnEvent<'a> {
     Fallback(&'a str),
     ToolStarted {
         name: &'a str,
+        call_id: &'a str,
         detail: Option<&'a str>,
     },
     /// Incremental live output chunk from a running tool (`terminal`, `execute_code`).
@@ -690,6 +704,7 @@ pub enum TurnEvent<'a> {
     },
     ToolFinished {
         name: &'a str,
+        call_id: &'a str,
         succeeded: bool,
         summary: Option<&'a str>,
     },
@@ -782,6 +797,9 @@ pub struct TurnOptions<'a> {
     /// Per-turn approval policy (used by multi-turn/multi-profile hosts such as `hsr owner`).
     /// When `None`, falls back to the process-wide `approval_policy::installed()`.
     pub approval_policy: Option<&'a crate::approval_policy::ApprovalPolicy>,
+    /// `agent.image_input_mode: "text"` — keep images out of tool results so the model calls
+    /// `vision_analyze` instead of receiving raw multimodal image attachments.
+    pub image_input_mode_text: bool,
 }
 
 impl TurnOptions<'_> {
@@ -1134,6 +1152,7 @@ where
             let start_detail = summarize_tool_args(&name, &arguments, options.keep_phone_numbers);
             on_event(TurnEvent::ToolStarted {
                 name: &name,
+                call_id: &call.id,
                 detail: start_detail.as_deref(),
             });
             let started = std::time::Instant::now();
@@ -1199,11 +1218,14 @@ where
                 json!({"error": format!("Unknown tool: {name}")})
             };
             // Strip internal multimodal image envelopes before persisting or feeding tool JSON,
-            // and attach the images natively as a follow-up multimodal user turn on `sent`.
+            // and attach the images natively as a follow-up multimodal user turn on `sent` unless
+            // `agent.image_input_mode == "text"` suppresses inline multimodal tool attachments.
             let output = match output {
                 Value::Object(mut map) => {
                     if let Some(Value::Array(imgs)) = map.remove("_hermes_multimodal_images") {
-                        attached_images.extend(imgs);
+                        if !options.image_input_mode_text {
+                            attached_images.extend(imgs);
+                        }
                     }
                     Value::Object(map)
                 }
@@ -1253,6 +1275,7 @@ where
                 summarize_tool_result(&name, &structured, succeeded, options.keep_phone_numbers);
             on_event(TurnEvent::ToolFinished {
                 name: &name,
+                call_id: &call.id,
                 succeeded,
                 summary: finish_summary.as_deref(),
             });

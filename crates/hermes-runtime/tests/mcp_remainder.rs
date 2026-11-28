@@ -275,6 +275,8 @@ impl SseFixture {
             connect_timeout_secs: 10,
             resources: true,
             prompts,
+            include: None,
+            exclude: Vec::new(),
         }
     }
 }
