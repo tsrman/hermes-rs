@@ -111,32 +111,39 @@ fn plain_host(url: &str) -> Option<(reqwest::Url, String)> {
     Some((parsed, host))
 }
 
-/// Whether `url` targets only public addresses (or private ones when `allow_private`).
-pub async fn is_safe_url(url: &str, allow_private: bool) -> bool {
-    let Some((parsed, host)) = plain_host(url) else {
-        return false;
-    };
+/// Resolve `url` once, verify every resolved address is permitted, and return `(host, addrs)` so
+/// callers can pin `reqwest::ClientBuilder::resolve_to_addrs` and prevent DNS rebinding.
+pub(crate) async fn resolve_and_verify_url(
+    url: &str,
+    allow_private: bool,
+) -> Option<(String, Vec<std::net::SocketAddr>)> {
+    let (parsed, host) = plain_host(url)?;
     if BLOCKED_HOSTNAMES.contains(&host.as_str()) {
-        return false;
-    }
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        return address_block_reason(ip, allow_private).is_none();
-    }
-    if !allow_private && (host == "localhost" || host.ends_with(".localhost")) {
-        return false;
+        return None;
     }
     let port = parsed.port_or_known_default().unwrap_or(80);
-    let Ok(addresses) = tokio::net::lookup_host((host.as_str(), port)).await else {
-        return false;
-    };
-    let mut any = false;
-    for address in addresses {
-        any = true;
-        if address_block_reason(address.ip(), allow_private).is_some() {
-            return false;
-        }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return address_block_reason(ip, allow_private)
+            .is_none()
+            .then(|| (host, vec![std::net::SocketAddr::new(ip, port)]));
     }
-    any
+    if !allow_private && (host == "localhost" || host.ends_with(".localhost")) {
+        return None;
+    }
+    let addresses = tokio::net::lookup_host((host.as_str(), port)).await.ok()?;
+    let mut verified = Vec::new();
+    for address in addresses {
+        if address_block_reason(address.ip(), allow_private).is_some() {
+            return None;
+        }
+        verified.push(address);
+    }
+    (!verified.is_empty()).then_some((host, verified))
+}
+
+/// Whether `url` targets only public addresses (or private ones when `allow_private`).
+pub async fn is_safe_url(url: &str, allow_private: bool) -> bool {
+    resolve_and_verify_url(url, allow_private).await.is_some()
 }
 
 /// Whether `url` targets the always-blocked floor, whatever the privacy setting.

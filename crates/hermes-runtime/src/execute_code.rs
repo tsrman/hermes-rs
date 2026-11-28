@@ -773,16 +773,6 @@ pub(crate) async fn sandbox_http_request(
     let allow_private = web.is_some_and(|w| w.allow_private_urls);
     let website_policy = web.map(|w| &w.website_policy);
 
-    let client = match reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(req_timeout)
-        .user_agent("hermes-rs-sandbox/1.0")
-        .build()
-    {
-        Ok(c) => c,
-        Err(err) => return Ok(json!({"error": format!("failed creating HTTP client: {err}")})),
-    };
-
     let mut current_url = initial_url.to_owned();
     let mut current_method = method;
     let mut current_body = body_bytes;
@@ -797,12 +787,28 @@ pub(crate) async fn sandbox_http_request(
                 }));
             }
         }
-        if !crate::url_safety::is_safe_url(&current_url, allow_private).await {
+        let Some((resolved_host, verified_addrs)) =
+            crate::url_safety::resolve_and_verify_url(&current_url, allow_private).await
+        else {
             return Ok(json!({
                 "error": "Blocked: URL targets a private, internal, metadata, or unsupported address",
                 "blocked": true,
             }));
+        };
+
+        // Pin the DNS resolution verified above so a rebinding DNS server cannot redirect
+        // reqwest's dial to a private or cloud-metadata address on a second lookup (C3).
+        let mut client_builder = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(req_timeout)
+            .user_agent("hermes-rs-sandbox/1.0");
+        if resolved_host.parse::<std::net::IpAddr>().is_err() {
+            client_builder = client_builder.resolve_to_addrs(&resolved_host, &verified_addrs);
         }
+        let client = match client_builder.build() {
+            Ok(c) => c,
+            Err(err) => return Ok(json!({"error": format!("failed creating HTTP client: {err}")})),
+        };
 
         let mut req = client
             .request(current_method.clone(), &current_url)
@@ -811,7 +817,7 @@ pub(crate) async fn sandbox_http_request(
             req = req.body(b.clone());
         }
 
-        let resp = match tokio::time::timeout_at(deadline.into(), req.send()).await {
+        let mut resp = match tokio::time::timeout_at(deadline.into(), req.send()).await {
             Err(_) => return Err(()),
             Ok(Err(err)) => return Ok(json!({"error": format!("HTTP request failed: {err}")})),
             Ok(Ok(r)) => r,
@@ -842,6 +848,17 @@ pub(crate) async fn sandbox_http_request(
             continue;
         }
 
+        if let Some(cl) = resp.content_length() {
+            if cl > MAX_HTTP_RESP_BYTES as u64 {
+                return Ok(json!({
+                    "error": format!(
+                        "HTTP response Content-Length ({cl} bytes) exceeds limit of {} bytes",
+                        MAX_HTTP_RESP_BYTES
+                    )
+                }));
+            }
+        }
+
         let mut resp_headers = Map::new();
         for (k, v) in resp.headers() {
             if let Ok(s) = v.to_str() {
@@ -849,21 +866,37 @@ pub(crate) async fn sandbox_http_request(
             }
         }
         let final_url = resp.url().to_string();
-        let bytes = match tokio::time::timeout_at(deadline.into(), resp.bytes()).await {
-            Err(_) => return Err(()),
-            Ok(Err(err)) => {
-                return Ok(json!({"error": format!("failed reading HTTP body: {err}")}))
+
+        // Stream chunks up to MAX_HTTP_RESP_BYTES + 1 so an adversarial response cannot exhaust
+        // host memory (C2).
+        let mut buf: Vec<u8> = Vec::new();
+        let mut truncated = false;
+        loop {
+            let next = match tokio::time::timeout_at(deadline.into(), resp.chunk()).await {
+                Err(_) => return Err(()),
+                Ok(Err(err)) => {
+                    return Ok(json!({"error": format!("failed reading HTTP body: {err}")}))
+                }
+                Ok(Ok(chunk)) => chunk,
+            };
+            let Some(chunk) = next else {
+                break;
+            };
+            let remaining_cap = MAX_HTTP_RESP_BYTES.saturating_sub(buf.len());
+            if chunk.len() > remaining_cap {
+                buf.extend_from_slice(&chunk[..remaining_cap]);
+                truncated = true;
+                break;
             }
-            Ok(Ok(b)) => b,
-        };
-        let truncated = bytes.len() > MAX_HTTP_RESP_BYTES;
-        let slice = &bytes[..bytes.len().min(MAX_HTTP_RESP_BYTES)];
+            buf.extend_from_slice(&chunk);
+        }
+
         return Ok(json!({
             "status": status.as_u16(),
             "ok": status.is_success(),
             "url": final_url,
             "headers": resp_headers,
-            "body_b64": encode_http_b64(slice),
+            "body_b64": encode_http_b64(&buf),
             "truncated": truncated,
         }));
     }
@@ -1966,5 +1999,80 @@ mod tests {
             .unwrap();
             assert_eq!(res["status"], "approval_denied", "{res}");
         }
+    }
+
+    #[tokio::test]
+    async fn sandbox_http_request_caps_content_length_and_streaming_body_size() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = [0u8; 2048];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                if req.starts_with("GET /huge-cl ") {
+                    let resp =
+                        "HTTP/1.1 200 OK\r\nContent-Length: 50000000\r\nConnection: close\r\n\r\n";
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                } else {
+                    // Chunked response exceeding MAX_HTTP_RESP_BYTES (4 MiB)
+                    let header = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+                    let _ = sock.write_all(header.as_bytes()).await;
+                    let chunk = vec![b'A'; 65536];
+                    let chunk_hdr = format!("{:x}\r\n", chunk.len());
+                    for _ in 0..80 {
+                        if sock.write_all(chunk_hdr.as_bytes()).await.is_err()
+                            || sock.write_all(&chunk).await.is_err()
+                            || sock.write_all(b"\r\n").await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                    let _ = sock.write_all(b"0\r\n\r\n").await;
+                }
+            }
+        });
+
+        let priv_web = crate::web_tools::WebSettings {
+            allow_private_urls: true,
+            ..Default::default()
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+
+        // 1. Oversized Content-Length rejected before reading body.
+        let huge = sandbox_http_request(
+            &json!({"url": format!("http://{addr}/huge-cl")}),
+            Some(&priv_web),
+            deadline,
+        )
+        .await
+        .unwrap();
+        assert!(
+            huge["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("Content-Length")),
+            "{huge}"
+        );
+
+        // 2. Oversized chunked stream stops at MAX_HTTP_RESP_BYTES and marks truncated=true.
+        let streamed = sandbox_http_request(
+            &json!({"url": format!("http://{addr}/chunked-huge")}),
+            Some(&priv_web),
+            deadline,
+        )
+        .await
+        .unwrap();
+        assert_eq!(streamed["status"], 200, "{streamed}");
+        assert_eq!(streamed["truncated"], true, "{streamed}");
+        let body = decode_http_b64(streamed["body_b64"].as_str().unwrap()).unwrap();
+        assert_eq!(body.len(), MAX_HTTP_RESP_BYTES);
+
+        server.abort();
     }
 }
