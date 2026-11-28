@@ -689,6 +689,18 @@ pub fn kill_all() {
     }
 }
 
+#[cfg(test)]
+fn kill_sessions(ids: &[String]) {
+    let list: Vec<Arc<Session>> = sessions().clone();
+    for session in list {
+        if ids.iter().any(|id| id == &session.id)
+            && session.mark_exited(Some(-15), "killed", "test_cleanup")
+        {
+            signal_group(&session, rustix::process::Signal::KILL);
+        }
+    }
+}
+
 // ── Lookup ───────────────────────────────────────────────────────────────────────────────────────
 
 fn find(session_id: &str) -> Option<Arc<Session>> {
@@ -1317,6 +1329,7 @@ mod tests {
         assert!(cases.len() >= 9);
         let directory = tempfile::tempdir().unwrap();
         let cwd = directory.path().to_str().unwrap();
+        let mut spawned_ids: Vec<String> = Vec::new();
         for case in &cases {
             let name = case["name"].as_str().unwrap();
             let owner = case["owner"].as_str().unwrap();
@@ -1327,7 +1340,9 @@ mod tests {
                     command.args(["-c", text]).current_dir(cwd);
                     let started =
                         spawn(command, text, cwd, owner, SpawnOptions::default()).unwrap();
-                    ids.push(started["session_id"].as_str().unwrap().to_owned());
+                    let sid = started["session_id"].as_str().unwrap().to_owned();
+                    spawned_ids.push(sid.clone());
+                    ids.push(sid);
                     continue;
                 }
                 let caller = match step["caller"].as_str() {
@@ -1340,7 +1355,7 @@ mod tests {
                 assert_eq!(result, expected, "{name}: {}", step["call"]);
             }
         }
-        kill_all();
+        kill_sessions(&spawned_ids);
     }
 
     #[tokio::test]

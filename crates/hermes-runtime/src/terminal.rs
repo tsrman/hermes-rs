@@ -1917,10 +1917,11 @@ mod tests {
     #[tokio::test]
     async fn a_background_command_runs_after_approval_and_is_managed_by_session_id() {
         let directory = tempfile::tempdir().unwrap();
+        let owner = format!("terminal-test-bg-{}", directory.path().display());
         let started = run(
             directory.path(),
             json!({"command": "echo started in $(pwd | xargs basename); exit 2", "background": true}),
-            Some("terminal-test"),
+            Some(&owner),
             ApprovalDecision::Approved,
         )
         .await;
@@ -1929,7 +1930,7 @@ mod tests {
         assert!(started["hint"].as_str().unwrap().contains("SILENTLY"));
         let id = started["session_id"].as_str().unwrap();
         let waited = crate::process::call(
-            "terminal-test",
+            &owner,
             &json!({"action": "wait", "session_id": id, "timeout": 10}).to_string(),
         )
         .await;
@@ -1941,6 +1942,7 @@ mod tests {
     #[tokio::test]
     async fn a_background_command_needs_process_manage_and_approval() {
         let directory = tempfile::tempdir().unwrap();
+        let owner = format!("terminal-test-approval-{}", directory.path().display());
         let marker = directory.path().join("ran");
         let command = json!({"command": format!("touch {}", marker.display()), "background": true});
         let unmanaged = run(
@@ -1957,7 +1959,7 @@ mod tests {
         let denied = run(
             directory.path(),
             command,
-            Some("terminal-test"),
+            Some(&owner),
             ApprovalDecision::Denied,
         )
         .await;
