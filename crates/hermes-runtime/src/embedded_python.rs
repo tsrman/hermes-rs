@@ -551,6 +551,15 @@ const SANDBOX_O_NOINHERIT: i32 = 0x80;
 const SANDBOX_O_TEXT: i32 = 0x4000;
 const SANDBOX_O_BINARY: i32 = 0x8000;
 
+fn ensure_read_allowed(target: &Path, vm: &VirtualMachine) -> PyResult<()> {
+    crate::file_tools::check_protected_read_path(target, None).map_err(|msg| {
+        vm.new_exception(
+            vm.ctx.exceptions.permission_error.to_owned(),
+            vec![vm.ctx.new_int(13i32).into(), vm.ctx.new_str(msg).into()],
+        )
+    })
+}
+
 fn sandbox_open(
     path: PyObjectRef,
     flags: i32,
@@ -559,6 +568,7 @@ fn sandbox_open(
     vm: &VirtualMachine,
 ) -> PyResult<i32> {
     let target = resolve_py_path(path, vm)?;
+    ensure_read_allowed(&target, vm)?;
     let acc = flags & 3;
     let read = acc == SANDBOX_O_RDONLY || acc == SANDBOX_O_RDWR;
     let write = acc == SANDBOX_O_WRONLY || acc == SANDBOX_O_RDWR;
@@ -1425,6 +1435,7 @@ mod _hermes_bridge {
             None
         } else {
             let resolved = resolve_in_session(Some(trimmed.to_owned()));
+            ensure_read_allowed(&resolved, vm)?;
             if !read_only {
                 ensure_mutation_allowed(&resolved, vm)?;
             }
@@ -2579,6 +2590,8 @@ def _install_http_shims():
             headers = {}
             body = data
         res = _do_http(target, method=method, headers=headers, data=body, timeout=timeout)
+        if res.get("status") in ("approval_denied", "approval_unavailable"):
+            raise PermissionError(res.get("error") or res.get("message") or "HTTP request approval denied")
         if "error" in res:
             raise URLError(res["error"])
         body_bytes = _b64.b64decode(res.get("body_b64", ""))
@@ -2664,6 +2677,8 @@ def _install_http_shims():
         if isinstance(timeout, (tuple, list)) and timeout:
             timeout = timeout[-1]
         res = _do_http(url, method=method, headers=hdrs, data=body, timeout=timeout or 30)
+        if res.get("status") in ("approval_denied", "approval_unavailable"):
+            raise PermissionError(res.get("error") or res.get("message") or "HTTP request approval denied")
         if "error" in res:
             msg = str(res["error"])
             if "timed out" in msg.lower():
@@ -2778,6 +2793,17 @@ def _install_subprocess_shim():
                 result.append('"')
         return "".join(result)
 
+    def _quote_cmd_arg(s):
+        if "\r" in s or "\n" in s:
+            raise ValueError("newlines are not supported in Windows subprocess argument lists")
+        # Quote any argument containing whitespace or cmd.exe metacharacters so shell=False does
+        # not let cmd.exe interpret &, |, <, >, ^, %, !, (, ) as command separators.
+        meta = set(' \t&|<>^%!()')
+        if not s or any(c in meta for c in s) or '"' in s:
+            escaped = s.replace('"', '""').replace('%', '%%')
+            return '"' + escaped + '"'
+        return s
+
     def _format_cmd(args, shell):
         if isinstance(args, (str, bytes)):
             return args.decode("utf-8", errors="replace") if isinstance(args, bytes) else args
@@ -2787,7 +2813,9 @@ def _install_subprocess_shim():
         if shell and len(parts) == 1:
             return parts[0]
         if os.name == "nt":
-            return list2cmdline(parts)
+            if shell:
+                return list2cmdline(parts)
+            return " ".join(_quote_cmd_arg(p) for p in parts)
         return " ".join(shlex.quote(p) for p in parts)
 
     def run(args, *, stdin=None, input=None, stdout=None, stderr=None, capture_output=False,
@@ -2795,6 +2823,8 @@ def _install_subprocess_shim():
             text=None, env=None, universal_newlines=None):
         if not _TERMINAL_ENABLED:
             raise PermissionError("subprocess is disabled because the terminal tool is not enabled in this session")
+        if input is not None or stdin is not None or env is not None:
+            raise NotImplementedError("sandbox subprocess does not support input, stdin, or env overrides")
         cmd = _format_cmd(args, shell)
         payload = {"command": cmd}
         if timeout is not None:
@@ -3707,7 +3737,10 @@ print("STDLIB_FS_OK")
         let outside_attach = outside_dir.path().join("attached.db");
         let outside_vacuum = outside_dir.path().join("vacuumed.db");
 
-        // Create a minimal valid PDF inside workspace for pdf_read testing.
+        // Create a minimal valid PDF and synthetic secret files inside workspace for C1 testing.
+        std::fs::write(dir.path().join(".env"), "API_KEY=synthetic-secret\n").unwrap();
+        std::fs::create_dir_all(dir.path().join(".ssh")).unwrap();
+        std::fs::write(dir.path().join(".ssh").join("id_rsa"), "synthetic-key\n").unwrap();
         let minimal_pdf = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 4 0 R>>endobj\n4 0 obj<</Length 44>>stream\nBT /F1 12 Tf 10 100 Td (Hello Hermes PDF) Tj ET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f \n0000000009 00000 n \n0000000056 00000 n \n0000000111 00000 n \n0000000190 00000 n \ntrailer<</Size 5/Root 1 0 R>>\nstartxref\n283\n%%EOF\n";
         std::fs::write(dir.path().join("sample.pdf"), minimal_pdf).unwrap();
 
@@ -3841,6 +3874,22 @@ except PermissionError:
     sub_blocked = True
 assert sub_blocked, "subprocess without terminal must raise PermissionError"
 
+# C1 regression: secret/credential files cannot be read via open() or sqlite3 even inside workspace
+assert os.path.exists(".env")
+env_read_blocked = False
+try:
+    open(".env", "r").read()
+except PermissionError:
+    env_read_blocked = True
+assert env_read_blocked, "reading .env must raise PermissionError"
+
+ssh_read_blocked = False
+try:
+    open(".ssh/id_rsa", "r").read()
+except PermissionError:
+    ssh_read_blocked = True
+assert ssh_read_blocked, "reading .ssh/id_rsa must raise PermissionError"
+
 print("ALL_6_PART_A_OK")
 "#,
                 outside_db = outside_db.display().to_string(),
@@ -3889,6 +3938,15 @@ try:
 except PermissionError:
     denied = True
 assert denied
+
+# H2 regression: unsupported input/stdin/env arguments raise NotImplementedError
+for bad_kw in ({"input": "abc"}, {"stdin": subprocess.PIPE}, {"env": {"FOO": "1"}}):
+    hit_ni = False
+    try:
+        subprocess.run(["echo", "hi"], **bad_kw)
+    except NotImplementedError:
+        hit_ni = True
+    assert hit_ni, f"expected NotImplementedError for {bad_kw}"
 
 print("ALL_6_PART_B_OK")
 "#;

@@ -997,6 +997,44 @@ pub(crate) fn check_protected_workspace_path(
     Ok(())
 }
 
+/// Read-path guard for embedded Python (`sandbox_open`, `sqlite_open`): blocks reading active or
+/// sibling Hermes/HSR profile stores (except read-only `<profile>/skills/`), `.env`/credential
+/// files, `.ssh`/`.aws` stores, and shell rc files even via symlinks.
+pub(crate) fn check_protected_read_path(
+    target: &Path,
+    profile: Option<&Path>,
+) -> Result<(), String> {
+    let canon = target.canonical().unwrap_or_else(|_| target.to_path_buf());
+    let active = profile.map(|p| p.canonical().unwrap_or_else(|_| p.to_owned()));
+    let protected_profiles = collect_protected_profiles(active.as_deref());
+    let in_profile_skills = protected_profiles
+        .iter()
+        .any(|prof| canon.starts_with(prof.join("skills")));
+
+    if !in_profile_skills {
+        if protected_profiles
+            .iter()
+            .any(|prof| canon.starts_with(prof))
+        {
+            return Err("Refusing to read protected profile or credential store".into());
+        }
+        if canon.components().any(protected_component) {
+            return Err("Refusing to read protected secret or credential path".into());
+        }
+    } else if canon
+        .file_name()
+        .is_some_and(|n| protected_component(Component::Normal(n)))
+    {
+        return Err("Refusing to read protected secret file".into());
+    }
+
+    let profile_refs: Vec<&Path> = protected_profiles.iter().map(PathBuf::as_path).collect();
+    if crate::redact::is_secret_file_arg(&canon.display().to_string(), &profile_refs) {
+        return Err("Refusing to read secret or credential file".into());
+    }
+    Ok(())
+}
+
 fn protected_component(component: Component<'_>) -> bool {
     let name = component.as_os_str().to_string_lossy().to_ascii_lowercase();
     (name != ".env.example" && (name == ".env" || name.starts_with(".env.")))

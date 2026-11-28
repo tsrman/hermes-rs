@@ -111,7 +111,7 @@ pub(crate) fn schema(tools: &[&str]) -> Value {
         }
         #[cfg(not(unix))]
         text.push_str(
-            "\n\nBuilt-in RustPython + Office/Document/HTTP helpers (no system Python or Office required): `from hermes_tools import xlsx_read, xlsx_write, docx_read, docx_write, pptx_read, pptx_write, pdf_read, http_request`.\n- xlsx_read(path, sheet=None, max_rows=5000) / xlsx_write(path, sheets): read .xlsx/.xls/.xlsb/.ods sheets or write .xlsx workbooks (formulas like '=SUM(B2:B10)', bold headers, autofit).\n- docx_read(path, max_paragraphs=5000) / docx_write(path, content=None, title=None, subtitle=None, blocks=None, author=None): read .docx paragraphs & tables or create formatted Word .docx documents from Markdown (`content`) or structured `blocks` (heading, paragraph, bullets, numbered, table, quote, code, rule, page_break).\n- pptx_read(path, max_slides=200) / pptx_write(path, slides, title=None, author=None, theme='corporate'): read .pptx slides/tables/notes or create formatted 16:9 PowerPoint .pptx decks from `slides` dicts (title, subtitle, layout='title'|'content'|'section', bullets, body, table, left/right columns, notes; themes: 'corporate', 'dark', 'minimal').\n- pdf_read(path, max_chars=100000): extract text from a workspace .pdf file.\n- http_request(url, method='GET', headers=None, body=None, timeout=30): policy-gated HTTP(S) request enforced by SSRF and website blocklist guards (also backs sandboxed `urllib.request` and `requests`).\n- Stdlib + built-in modules: workspace-scoped `open()`, `pathlib`, `glob`, `shutil`, `tempfile`, `zipfile`, `tarfile`, `sqlite3`, `yaml`, `unittest`, and approval-gated `subprocess` (when `terminal` is enabled).",
+            "\n\nBuilt-in RustPython + Office/Document/HTTP helpers (no system Python or Office required): `from hermes_tools import xlsx_read, xlsx_write, docx_read, docx_write, pptx_read, pptx_write, pdf_read, http_request`.\n- xlsx_read(path, sheet=None, max_rows=5000) / xlsx_write(path, sheets): read .xlsx/.xls/.xlsb/.ods sheets or write .xlsx workbooks (formulas like '=SUM(B2:B10)', bold headers, autofit).\n- docx_read(path, max_paragraphs=5000) / docx_write(path, content=None, title=None, subtitle=None, blocks=None, author=None): read .docx paragraphs & tables or create formatted Word .docx documents from Markdown (`content`) or structured `blocks` (heading, paragraph, bullets, numbered, table, quote, code, rule, page_break).\n- pptx_read(path, max_slides=200) / pptx_write(path, slides, title=None, author=None, theme='corporate'): read .pptx slides/tables/notes or create formatted 16:9 PowerPoint .pptx decks from `slides` dicts (title, subtitle, layout='title'|'content'|'section', bullets, body, table, left/right columns, notes; themes: 'corporate', 'dark', 'minimal').\n- pdf_read(path, max_chars=100000): extract text from a workspace .pdf file.\n- http_request(url, method='GET', headers=None, body=None, timeout=30): policy-gated HTTP(S) request (available when web tools are configured; enforced by SSRF/DNS-pin and website blocklist guards; mutating methods require approval; also backs sandboxed `urllib.request` and `requests`).\n- Stdlib + built-in modules: `open()` (writes restricted to workspace/temp; secret/profile reads blocked), `pathlib`, `glob`, `shutil`, `tempfile`, `zipfile`, `tarfile`, `sqlite3`, `yaml`, `unittest`, and approval-gated `subprocess` (when `terminal` is enabled).",
         );
         function["description"] = Value::String(text);
     }
@@ -647,6 +647,19 @@ pub(crate) fn pdf_read_tool(workspace_root: &Path, profile: Option<&Path>, args:
         .and_then(Value::as_u64)
         .map(|n| (n as usize).clamp(1_000, 500_000))
         .unwrap_or(100_000);
+    let meta = match std::fs::metadata(&resolved) {
+        Ok(m) => m,
+        Err(err) => return json!({"error": format!("failed inspecting {raw_path}: {err}")}),
+    };
+    if meta.len() > crate::doc_extract::MAX_DOCUMENT_BYTES {
+        return json!({
+            "error": format!(
+                "Document too large to convert ({} bytes, limit is {} bytes)",
+                meta.len(),
+                crate::doc_extract::MAX_DOCUMENT_BYTES
+            )
+        });
+    }
     let data = match std::fs::read(&resolved) {
         Ok(bytes) => bytes,
         Err(err) => return json!({"error": format!("failed reading {raw_path}: {err}")}),
@@ -906,7 +919,45 @@ async fn dispatch_sandbox_tool(
     }
     if name == "http_request" {
         *calls += 1;
-        return sandbox_http_request(raw_args, cx.options.web, deadline).await;
+        let Some(web) = cx.options.web else {
+            return Ok(json!({
+                "error": "http_request is disabled because web tools are not configured in this session",
+                "blocked": true,
+            }));
+        };
+        let method = raw_args
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or("GET")
+            .trim()
+            .to_ascii_uppercase();
+        if !matches!(method.as_str(), "GET" | "HEAD") {
+            let Some(timeout_secs) = cx.options.approval_timeout_secs else {
+                return Ok(approval_error(ApprovalDecision::Unavailable));
+            };
+            let target = raw_args
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_owned();
+            let mut ask = |request: ApprovalRequest| (cx.approve)(request);
+            let decision = request_approval(
+                ApprovalRequest {
+                    target: target.clone(),
+                    content: format!("HTTP {method} {target}"),
+                    action: ApprovalAction::RunCommand,
+                    timeout_secs,
+                },
+                cx.options.approval_policy,
+                &mut ask,
+            )
+            .await;
+            if !matches!(decision, ApprovalDecision::Approved) {
+                return Ok(approval_error(decision));
+            }
+        }
+        return sandbox_http_request(raw_args, Some(web), deadline).await;
     }
     if matches!(name, "xlsx_write" | "docx_write" | "pptx_write") {
         *calls += 1;
@@ -1825,5 +1876,95 @@ mod tests {
         assert_eq!(redir_blocked["blocked"], true, "{redir_blocked}");
 
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn dispatch_http_request_requires_web_config_and_approval_for_mutating_methods() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = ToolPolicy::default();
+        let intent_ack = IntentAckContinuation::default();
+        let skills = SkillCatalog::default();
+        let route = ModelRoute {
+            provider: Provider::OpenAi(
+                OpenAiProvider::new("http://127.0.0.1:1/v1", "test-key", Duration::from_secs(5))
+                    .unwrap(),
+            ),
+            provider_name: "openai",
+            model: "test-model".into(),
+        };
+
+        // 1. When cx.options.web is None, http_request is disabled even for GET.
+        {
+            let options = test_turn_options(dir.path(), &policy, &intent_ack, Some(5));
+            let mut files = FileWorkspace::new(dir.path(), None);
+            let mut memory_turn = MemoryTurn::default();
+            let mut todo = TodoStore::default();
+            let mut approve = |_: ApprovalRequest| -> BoxFuture<'_, ApprovalDecision> {
+                Box::pin(async { ApprovalDecision::Approved })
+            };
+            let mut cx = ToolContext {
+                options: &options,
+                skills: &skills,
+                files: &mut files,
+                memory_turn: &mut memory_turn,
+                todo: &mut todo,
+                approve: &mut approve,
+                route: &route,
+                fallbacks: &[],
+                tool_output: None,
+            };
+            let mut calls = 0;
+            let res = dispatch_sandbox_tool(
+                "http_request",
+                &json!({"url": "https://example.com/", "method": "GET"}),
+                &SANDBOX_TOOLS,
+                dir.path(),
+                &mut cx,
+                Instant::now() + Duration::from_secs(10),
+                10,
+                &mut calls,
+            )
+            .await
+            .unwrap();
+            assert_eq!(res["blocked"], true, "{res}");
+        }
+
+        // 2. When cx.options.web is Some, POST requires approval and denies if rejected.
+        {
+            let web = crate::web_tools::WebSettings::default();
+            let mut options = test_turn_options(dir.path(), &policy, &intent_ack, Some(5));
+            options.web = Some(&web);
+            let mut files = FileWorkspace::new(dir.path(), None);
+            let mut memory_turn = MemoryTurn::default();
+            let mut todo = TodoStore::default();
+            let mut approve = |_: ApprovalRequest| -> BoxFuture<'_, ApprovalDecision> {
+                Box::pin(async { ApprovalDecision::Denied })
+            };
+            let mut cx = ToolContext {
+                options: &options,
+                skills: &skills,
+                files: &mut files,
+                memory_turn: &mut memory_turn,
+                todo: &mut todo,
+                approve: &mut approve,
+                route: &route,
+                fallbacks: &[],
+                tool_output: None,
+            };
+            let mut calls = 0;
+            let res = dispatch_sandbox_tool(
+                "http_request",
+                &json!({"url": "https://example.com/upload", "method": "POST", "body": "data"}),
+                &SANDBOX_TOOLS,
+                dir.path(),
+                &mut cx,
+                Instant::now() + Duration::from_secs(10),
+                10,
+                &mut calls,
+            )
+            .await
+            .unwrap();
+            assert_eq!(res["status"], "approval_denied", "{res}");
+        }
     }
 }
