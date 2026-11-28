@@ -422,7 +422,7 @@ pub fn parse_inline(input: &str) -> RenderedInline {
 pub fn parse_inline_with_refs(input: &str, refs: &HashMap<String, String>) -> RenderedInline {
     let mut plain = String::with_capacity(input.len());
     let mut spans = Vec::new();
-    parse_inline_into(input, refs, None, &mut plain, &mut spans);
+    parse_inline_into(input, refs, None, 0, &mut plain, &mut spans);
     RenderedInline { plain, spans }
 }
 
@@ -460,13 +460,21 @@ fn combine_emphasis(base: Option<InlineStyle>, added: InlineStyle) -> InlineStyl
     }
 }
 
+const MAX_INLINE_DEPTH: usize = 32;
+
 fn parse_inline_into(
     input: &str,
     refs: &HashMap<String, String>,
     outer: Option<InlineStyle>,
+    depth: usize,
     plain: &mut String,
     spans: &mut Vec<(Range<usize>, InlineStyle)>,
 ) {
+    if depth >= MAX_INLINE_DEPTH {
+        push_with_style(plain, spans, input, outer);
+        return;
+    }
+    let next_depth = depth + 1;
     let bytes = input.as_bytes();
     let len = input.len();
     let mut i = 0;
@@ -523,7 +531,7 @@ fn parse_inline_into(
                 if html_style == Some(InlineStyle::Code) {
                     push_with_style(plain, spans, inner, Some(InlineStyle::Code));
                 } else {
-                    parse_inline_into(inner, refs, combined, plain, spans);
+                    parse_inline_into(inner, refs, combined, next_depth, plain, spans);
                 }
                 i = next_i;
                 continue;
@@ -580,7 +588,14 @@ fn parse_inline_into(
         if input[i..].starts_with("~~") {
             if let Some(rel_end) = find_closing_delim(input, i + 2, "~~", false) {
                 let inner = &input[i + 2..i + 2 + rel_end];
-                parse_inline_into(inner, refs, Some(InlineStyle::Strikethrough), plain, spans);
+                parse_inline_into(
+                    inner,
+                    refs,
+                    Some(InlineStyle::Strikethrough),
+                    next_depth,
+                    plain,
+                    spans,
+                );
                 i += 2 + rel_end + 2;
                 continue;
             }
@@ -590,7 +605,14 @@ fn parse_inline_into(
         if input[i..].starts_with("***") {
             if let Some(rel_end) = find_closing_delim(input, i + 3, "***", false) {
                 let inner = &input[i + 3..i + 3 + rel_end];
-                parse_inline_into(inner, refs, Some(InlineStyle::BoldItalic), plain, spans);
+                parse_inline_into(
+                    inner,
+                    refs,
+                    Some(InlineStyle::BoldItalic),
+                    next_depth,
+                    plain,
+                    spans,
+                );
                 i += 3 + rel_end + 3;
                 continue;
             }
@@ -598,7 +620,14 @@ fn parse_inline_into(
         if input[i..].starts_with("___") && is_word_boundary_before(input, i) {
             if let Some(rel_end) = find_closing_delim(input, i + 3, "___", true) {
                 let inner = &input[i + 3..i + 3 + rel_end];
-                parse_inline_into(inner, refs, Some(InlineStyle::BoldItalic), plain, spans);
+                parse_inline_into(
+                    inner,
+                    refs,
+                    Some(InlineStyle::BoldItalic),
+                    next_depth,
+                    plain,
+                    spans,
+                );
                 i += 3 + rel_end + 3;
                 continue;
             }
@@ -609,7 +638,7 @@ fn parse_inline_into(
             if let Some(rel_end) = find_closing_delim(input, i + 2, "**", false) {
                 let inner = &input[i + 2..i + 2 + rel_end];
                 let style = combine_emphasis(outer, InlineStyle::Bold);
-                parse_inline_into(inner, refs, Some(style), plain, spans);
+                parse_inline_into(inner, refs, Some(style), next_depth, plain, spans);
                 i += 2 + rel_end + 2;
                 continue;
             }
@@ -618,7 +647,7 @@ fn parse_inline_into(
             if let Some(rel_end) = find_closing_delim(input, i + 2, "__", true) {
                 let inner = &input[i + 2..i + 2 + rel_end];
                 let style = combine_emphasis(outer, InlineStyle::Bold);
-                parse_inline_into(inner, refs, Some(style), plain, spans);
+                parse_inline_into(inner, refs, Some(style), next_depth, plain, spans);
                 i += 2 + rel_end + 2;
                 continue;
             }
@@ -629,7 +658,7 @@ fn parse_inline_into(
             if let Some(rel_end) = find_closing_single(input, i + 1, b'*', false) {
                 let inner = &input[i + 1..i + 1 + rel_end];
                 let style = combine_emphasis(outer, InlineStyle::Italic);
-                parse_inline_into(inner, refs, Some(style), plain, spans);
+                parse_inline_into(inner, refs, Some(style), next_depth, plain, spans);
                 i += 1 + rel_end + 1;
                 continue;
             }
@@ -641,7 +670,7 @@ fn parse_inline_into(
             if let Some(rel_end) = find_closing_single(input, i + 1, b'_', true) {
                 let inner = &input[i + 1..i + 1 + rel_end];
                 let style = combine_emphasis(outer, InlineStyle::Italic);
-                parse_inline_into(inner, refs, Some(style), plain, spans);
+                parse_inline_into(inner, refs, Some(style), next_depth, plain, spans);
                 i += 1 + rel_end + 1;
                 continue;
             }
@@ -1520,5 +1549,23 @@ $$
         assert!(py_spans.iter().any(|(_, s)| *s == InlineStyle::CodeKeyword));
         assert!(py_spans.iter().any(|(_, s)| *s == InlineStyle::CodeNumber));
         assert!(py_spans.iter().any(|(_, s)| *s == InlineStyle::CodeComment));
+    }
+
+    #[test]
+    fn deeply_nested_inline_html_and_emphasis_do_not_overflow_stack() {
+        let mut nested_html = String::new();
+        for _ in 0..500 {
+            nested_html.push_str("<b>");
+        }
+        nested_html.push_str("core");
+        for _ in 0..500 {
+            nested_html.push_str("</b>");
+        }
+        let parsed = parse_inline(&nested_html);
+        assert!(parsed.plain.contains("core"));
+
+        let deep_inline_math = format!("${}$", "{".repeat(50_000));
+        let parsed_math = parse_inline(&deep_inline_math);
+        assert!(!parsed_math.plain.is_empty());
     }
 }

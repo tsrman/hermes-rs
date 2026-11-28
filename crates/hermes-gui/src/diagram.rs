@@ -2547,4 +2547,33 @@ flowchart LR
             matches!(xy, Some(Diagram::Xy(c)) if c.bars.len() == 1 && c.lines.len() == 1 && c.x_labels.len() == 3)
         );
     }
+
+    #[test]
+    fn handles_er_diagrams_large_graphs_and_streaming_fallbacks() {
+        // Unsupported or partial mid-stream Mermaid returns None (falls back to code block).
+        assert!(parse_mermaid("").is_none());
+        assert!(parse_mermaid("flowchart TD").is_none());
+        assert!(parse_mermaid("gitGraph\n  commit").is_none());
+        assert!(parse_mermaid("pie\n  title Empty").is_none());
+
+        // ER diagram parsing
+        let er = parse_mermaid(
+            "erDiagram\nCUSTOMER ||--o{ ORDER : places\nORDER ||--|{ ITEM : contains",
+        );
+        assert!(matches!(er, Some(Diagram::Flow(g)) if g.nodes.len() == 3 && g.edges.len() == 2));
+
+        // Large graph (120 nodes + back-edges) lays out cleanly without panicking or hanging.
+        let mut big = String::from("flowchart TD\n");
+        for i in 0..119 {
+            big.push_str(&format!("N{i} --> N{}\n", i + 1));
+        }
+        big.push_str("N119 --> N0\nN50 --> N50\n");
+        let Some(Diagram::Flow(g)) = parse_mermaid(&big) else {
+            panic!("expected large flowchart");
+        };
+        assert_eq!(g.nodes.len(), 120);
+        let (placed, w, h) = compute_flow_layout(&g);
+        assert_eq!(placed.len(), 120);
+        assert!(w > 100.0 && h > 100.0);
+    }
 }

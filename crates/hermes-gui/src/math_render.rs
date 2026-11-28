@@ -3,6 +3,10 @@
 
 use gpui::{div, prelude::*, px, rgb, AnyElement, FontWeight, SharedString};
 
+/// Hard recursion ceiling for LaTeX parsing, flattening, and GPUI rendering so deeply nested
+/// inputs (e.g. `"{".repeat(100_000)` or nested `\frac`) can never trigger a stack overflow.
+const MAX_LATEX_DEPTH: usize = 64;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccentKind {
     Overline,
@@ -99,6 +103,7 @@ pub fn render_math_formula(raw: &str) -> AnyElement {
         size: 16.0,
         bold: false,
         force_upright: false,
+        depth: 0,
     };
     div()
         .w_full()
@@ -117,7 +122,7 @@ pub fn render_math_formula(raw: &str) -> AnyElement {
 pub fn prettify_latex_inline(raw: &str) -> String {
     let nodes = parse_latex(raw);
     let mut out = String::new();
-    flatten_nodes(&nodes, &mut out);
+    flatten_nodes(&nodes, &mut out, 0);
     let trimmed = out.trim();
     if trimmed.is_empty() {
         raw.trim().to_owned()
@@ -131,12 +136,21 @@ struct RenderCtx {
     size: f32,
     bold: bool,
     force_upright: bool,
+    depth: usize,
 }
 
 impl RenderCtx {
+    fn deeper(self) -> Self {
+        Self {
+            depth: self.depth.saturating_add(1),
+            ..self
+        }
+    }
+
     fn script(self) -> Self {
         Self {
             size: (self.size * 0.72).max(10.0),
+            depth: self.depth.saturating_add(1),
             ..self
         }
     }
@@ -144,6 +158,7 @@ impl RenderCtx {
     fn frac_part(self) -> Self {
         Self {
             size: (self.size * 0.86).max(11.0),
+            depth: self.depth.saturating_add(1),
             ..self
         }
     }
@@ -162,7 +177,17 @@ fn math_dim_color() -> gpui::Rgba {
 }
 
 fn render_nodes(nodes: &[MathNode], ctx: RenderCtx) -> AnyElement {
-    let children: Vec<AnyElement> = nodes.iter().map(|n| render_node(n, ctx)).collect();
+    if ctx.depth >= MAX_LATEX_DEPTH {
+        let mut flat = String::new();
+        flatten_nodes(nodes, &mut flat, 0);
+        return div()
+            .text_size(px(ctx.size))
+            .text_color(math_color())
+            .child(SharedString::from(flat))
+            .into_any_element();
+    }
+    let next_ctx = ctx.deeper();
+    let children: Vec<AnyElement> = nodes.iter().map(|n| render_node(n, next_ctx)).collect();
     div()
         .flex()
         .flex_row()
@@ -172,6 +197,15 @@ fn render_nodes(nodes: &[MathNode], ctx: RenderCtx) -> AnyElement {
 }
 
 fn render_node(node: &MathNode, ctx: RenderCtx) -> AnyElement {
+    if ctx.depth >= MAX_LATEX_DEPTH {
+        let mut flat = String::new();
+        flatten_nodes(std::slice::from_ref(node), &mut flat, 0);
+        return div()
+            .text_size(px(ctx.size))
+            .text_color(math_color())
+            .child(SharedString::from(flat))
+            .into_any_element();
+    }
     let weight = if ctx.bold {
         FontWeight::BOLD
     } else {
@@ -643,11 +677,32 @@ fn render_delim_box(left: &str, right: &str, inner: AnyElement, ctx: RenderCtx) 
 struct LatexParser<'a> {
     src: &'a str,
     pos: usize,
+    depth: usize,
 }
 
 impl<'a> LatexParser<'a> {
     fn new(src: &'a str) -> Self {
-        Self { src, pos: 0 }
+        Self {
+            src,
+            pos: 0,
+            depth: 0,
+        }
+    }
+
+    fn consume_raw_fallback(&mut self, stop_char: Option<char>) -> MathNode {
+        let start = self.pos;
+        let mut consumed = 0usize;
+        while let Some(ch) = self.peek() {
+            if stop_char == Some(ch) && consumed > 0 {
+                break;
+            }
+            self.pos += ch.len_utf8();
+            consumed += 1;
+            if consumed >= 256 {
+                break;
+            }
+        }
+        MathNode::Text(self.src[start..self.pos].to_owned())
     }
 
     fn rest(&self) -> &'a str {
@@ -746,6 +801,13 @@ impl<'a> LatexParser<'a> {
     }
 
     fn parse_atom_with_scripts(&mut self, inside_left: bool) -> Option<MathNode> {
+        if self.depth >= MAX_LATEX_DEPTH {
+            self.skip_ws();
+            if self.pos >= self.src.len() {
+                return None;
+            }
+            return Some(self.consume_raw_fallback(None));
+        }
         let base = self.parse_atom(inside_left)?;
         let mut sub: Option<Vec<MathNode>> = None;
         let mut sup: Option<Vec<MathNode>> = None;
@@ -763,11 +825,15 @@ impl<'a> LatexParser<'a> {
             match self.peek() {
                 Some('_') if sub.is_none() => {
                     self.pos += 1;
+                    self.depth += 1;
                     sub = Some(self.parse_arg_nodes());
+                    self.depth -= 1;
                 }
                 Some('^') if sup.is_none() => {
                     self.pos += 1;
+                    self.depth += 1;
                     sup = Some(self.parse_arg_nodes());
+                    self.depth -= 1;
                 }
                 Some('\'') => {
                     // Prime notation `f'`, `f''`
@@ -809,9 +875,20 @@ impl<'a> LatexParser<'a> {
 
     fn parse_arg_nodes(&mut self) -> Vec<MathNode> {
         self.skip_ws();
+        if self.depth >= MAX_LATEX_DEPTH {
+            let raw = self.parse_raw_group();
+            return if raw.is_empty() {
+                Vec::new()
+            } else {
+                vec![MathNode::Text(raw)]
+            };
+        }
         if self.peek() == Some('{') {
             self.pos += 1;
-            self.parse_nodes_until_close(Some('}'), false)
+            self.depth += 1;
+            let nodes = self.parse_nodes_until_close(Some('}'), false);
+            self.depth -= 1;
+            nodes
         } else if let Some(atom) = self.parse_atom(false) {
             vec![atom]
         } else {
@@ -882,13 +959,24 @@ impl<'a> LatexParser<'a> {
         }
 
         if ch == '{' {
+            if self.depth >= MAX_LATEX_DEPTH {
+                return Some(self.consume_raw_fallback(Some('}')));
+            }
             self.pos += 1;
+            self.depth += 1;
             let inner = self.parse_nodes_until_close(Some('}'), false);
+            self.depth -= 1;
             return Some(MathNode::Group(inner));
         }
 
         if ch == '\\' {
-            return self.parse_command();
+            if self.depth >= MAX_LATEX_DEPTH {
+                return Some(self.consume_raw_fallback(None));
+            }
+            self.depth += 1;
+            let res = self.parse_command();
+            self.depth -= 1;
+            return res;
         }
 
         if ch == '~' {
@@ -1390,7 +1478,14 @@ fn lookup_latex_symbol(cmd: &str) -> Option<(&'static str, bool)> {
 // Inline Unicode flattener (for `$...$` / `\(...\)` inside paragraphs)
 // ---------------------------------------------------------------------------
 
-fn flatten_nodes(nodes: &[MathNode], out: &mut String) {
+fn flatten_nodes(nodes: &[MathNode], out: &mut String, depth: usize) {
+    if depth >= MAX_LATEX_DEPTH {
+        if !out.ends_with('…') {
+            out.push('…');
+        }
+        return;
+    }
+    let next = depth + 1;
     for node in nodes {
         match node {
             MathNode::Text(s) | MathNode::Ident(s) | MathNode::Func(s) => out.push_str(s),
@@ -1407,13 +1502,13 @@ fn flatten_nodes(nodes: &[MathNode], out: &mut String) {
                 }
             }
             MathNode::Group(inner) | MathNode::Styled { body: inner, .. } => {
-                flatten_nodes(inner, out);
+                flatten_nodes(inner, out, next);
             }
             MathNode::Frac { num, den, bar } => {
                 let mut n = String::new();
                 let mut d = String::new();
-                flatten_nodes(num, &mut n);
-                flatten_nodes(den, &mut d);
+                flatten_nodes(num, &mut n, next);
+                flatten_nodes(den, &mut d, next);
                 let n = n.trim();
                 let d = d.trim();
                 if *bar {
@@ -1439,13 +1534,13 @@ fn flatten_nodes(nodes: &[MathNode], out: &mut String) {
             MathNode::Sqrt { index, body } => {
                 if let Some(idx) = index {
                     let mut idx_s = String::new();
-                    flatten_nodes(idx, &mut idx_s);
+                    flatten_nodes(idx, &mut idx_s, next);
                     if let Some(sup) = convert_script(&idx_s, true) {
                         out.push_str(&sup);
                     }
                 }
                 let mut b = String::new();
-                flatten_nodes(body, &mut b);
+                flatten_nodes(body, &mut b, next);
                 let b = b.trim();
                 out.push('√');
                 if b.chars().count() > 1 {
@@ -1465,7 +1560,7 @@ fn flatten_nodes(nodes: &[MathNode], out: &mut String) {
                 out.push_str(symbol);
                 if let Some(lo) = lower {
                     let mut s = String::new();
-                    flatten_nodes(lo, &mut s);
+                    flatten_nodes(lo, &mut s, next);
                     let s = s.trim();
                     if let Some(sub) = convert_script(s, false) {
                         out.push_str(&sub);
@@ -1475,7 +1570,7 @@ fn flatten_nodes(nodes: &[MathNode], out: &mut String) {
                 }
                 if let Some(up) = upper {
                     let mut s = String::new();
-                    flatten_nodes(up, &mut s);
+                    flatten_nodes(up, &mut s, next);
                     let s = s.trim();
                     if let Some(sup) = convert_script(s, true) {
                         out.push_str(&sup);
@@ -1486,10 +1581,10 @@ fn flatten_nodes(nodes: &[MathNode], out: &mut String) {
                 out.push(' ');
             }
             MathNode::Script { base, sub, sup } => {
-                flatten_nodes(std::slice::from_ref(base), out);
+                flatten_nodes(std::slice::from_ref(base), out, next);
                 if let Some(lo) = sub {
                     let mut s = String::new();
-                    flatten_nodes(lo, &mut s);
+                    flatten_nodes(lo, &mut s, next);
                     let s = s.trim();
                     if let Some(pretty) = convert_script(s, false) {
                         out.push_str(&pretty);
@@ -1499,7 +1594,7 @@ fn flatten_nodes(nodes: &[MathNode], out: &mut String) {
                 }
                 if let Some(up) = sup {
                     let mut s = String::new();
-                    flatten_nodes(up, &mut s);
+                    flatten_nodes(up, &mut s, next);
                     let s = s.trim();
                     if let Some(pretty) = convert_script(s, true) {
                         out.push_str(&pretty);
@@ -1510,7 +1605,7 @@ fn flatten_nodes(nodes: &[MathNode], out: &mut String) {
             }
             MathNode::Accent { kind, body } => {
                 let mut b = String::new();
-                flatten_nodes(body, &mut b);
+                flatten_nodes(body, &mut b, next);
                 out.push_str(b.trim());
                 match kind {
                     AccentKind::Hat => out.push('\u{0302}'),
@@ -1523,7 +1618,7 @@ fn flatten_nodes(nodes: &[MathNode], out: &mut String) {
             }
             MathNode::Delim { left, right, body } => {
                 out.push_str(left);
-                flatten_nodes(body, out);
+                flatten_nodes(body, out, next);
                 out.push_str(right);
             }
             MathNode::Matrix { rows, .. } => {
@@ -1536,7 +1631,7 @@ fn flatten_nodes(nodes: &[MathNode], out: &mut String) {
                         if c_idx > 0 {
                             out.push_str(", ");
                         }
-                        flatten_nodes(cell, out);
+                        flatten_nodes(cell, out, next);
                     }
                 }
                 out.push(']');
@@ -1546,7 +1641,7 @@ fn flatten_nodes(nodes: &[MathNode], out: &mut String) {
                     if idx > 0 {
                         out.push('\n');
                     }
-                    flatten_nodes(line, out);
+                    flatten_nodes(line, out, next);
                 }
             }
         }
@@ -1658,5 +1753,29 @@ mod tests {
         assert_eq!(prettify_latex_inline(r"\sum_{i=1}^{n} x_i"), "∑ᵢ₌₁ⁿ xᵢ");
         assert_eq!(prettify_latex_inline(r"\frac{a+b}{2}"), "(a + b)/2");
         assert_eq!(prettify_latex_inline(r"\alpha \leq \beta"), "α ≤ β");
+    }
+
+    #[test]
+    fn deeply_nested_latex_never_overflows_stack() {
+        let braces = "{".repeat(100_000);
+        let parsed = parse_latex(&braces);
+        assert!(!parsed.is_empty());
+        let inline = prettify_latex_inline(&braces);
+        assert!(!inline.is_empty());
+
+        let nested_frac = r"\frac{1}{".repeat(5_000);
+        let frac_parsed = parse_latex(&nested_frac);
+        assert!(!frac_parsed.is_empty());
+        let frac_inline = prettify_latex_inline(&nested_frac);
+        assert!(!frac_inline.is_empty());
+
+        // Manually construct a deeply nested AST beyond MAX_LATEX_DEPTH and verify flattener bounds it.
+        let mut deep = MathNode::Ident("x".into());
+        for _ in 0..200 {
+            deep = MathNode::Group(vec![deep]);
+        }
+        let mut flat = String::new();
+        flatten_nodes(&[deep], &mut flat, 0);
+        assert!(flat.contains('…'));
     }
 }
