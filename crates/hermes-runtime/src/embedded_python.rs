@@ -891,6 +891,57 @@ fn sandbox_exit(code: OptionalArg<i32>, vm: &VirtualMachine) -> PyResult<()> {
     Err(vm.new_system_exit(vec![arg].into()))
 }
 
+/// Split a Windows path into `(root, tail)` matching `nt._path_splitroot` as required by
+/// Python's frozen `importlib._bootstrap_external` (`_path_isabs` and `_path_join`).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_path_splitroot(path: &str) -> (&str, &str) {
+    let is_sep = |b: u8| b == b'\\' || b == b'/';
+    let bytes = path.as_bytes();
+    if bytes.first().copied().is_some_and(is_sep) {
+        if bytes.get(1).copied().is_some_and(is_sep) {
+            // UNC (`\\server\share\...`), extended UNC (`\\?\UNC\server\share\...`),
+            // or device prefix (`\\?\C:\...`, `\\.\device\...`).
+            let is_extended_unc = bytes.len() >= 8
+                && is_sep(bytes[0])
+                && is_sep(bytes[1])
+                && bytes[2] == b'?'
+                && is_sep(bytes[3])
+                && bytes[4].eq_ignore_ascii_case(&b'u')
+                && bytes[5].eq_ignore_ascii_case(&b'n')
+                && bytes[6].eq_ignore_ascii_case(&b'c')
+                && is_sep(bytes[7]);
+            let start = if is_extended_unc { 8 } else { 2 };
+            let Some(first_rel) = bytes[start..].iter().position(|&b| is_sep(b)) else {
+                return (path, "");
+            };
+            let first = start + first_rel;
+            let Some(second_rel) = bytes[first + 1..].iter().position(|&b| is_sep(b)) else {
+                return (path, "");
+            };
+            let split = first + 1 + second_rel + 1;
+            return (&path[..split], &path[split..]);
+        }
+        return (&path[..1], &path[1..]);
+    }
+    if bytes.first().is_some_and(u8::is_ascii) && bytes.get(1) == Some(&b':') {
+        if bytes.get(2).copied().is_some_and(is_sep) {
+            return (&path[..3], &path[3..]);
+        }
+        return (&path[..2], &path[2..]);
+    }
+    ("", path)
+}
+
+#[cfg(windows)]
+fn sandbox_nt_path_splitroot(path: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyTupleRef> {
+    let raw = extract_path_string(path, vm)?;
+    let (root, tail) = windows_path_splitroot(&raw);
+    Ok(vm.ctx.new_tuple(vec![
+        vm.ctx.new_str(root).into(),
+        vm.ctx.new_str(tail).into(),
+    ]))
+}
+
 macro_rules! define_sandbox_os {
     ($mod_name:literal) => {
         #[rustpython_vm::pymodule(name = $mod_name)]
@@ -1175,6 +1226,12 @@ macro_rules! define_sandbox_os {
             #[pyfunction]
             fn _exit(code: OptionalArg<i32>, vm: &VirtualMachine) -> PyResult<()> {
                 sandbox_exit(code, vm)
+            }
+
+            #[cfg(windows)]
+            #[pyfunction]
+            fn _path_splitroot(path: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyTupleRef> {
+                sandbox_nt_path_splitroot(path, vm)
             }
         }
     };
@@ -1639,8 +1696,7 @@ time.sleep = _hermes_bridge.sleep
 
 _SANDBOX_TMP = _hermes_bridge.get_temp_dir()
 for _tmp_var in ("TMPDIR", "TEMP", "TMP"):
-    if not os.environ.get(_tmp_var):
-        os.environ[_tmp_var] = _SANDBOX_TMP
+    os.environ[_tmp_var] = _SANDBOX_TMP
 
 class _StatResult(tuple):
     st_mode = property(lambda self: self[0])
@@ -4012,6 +4068,46 @@ print("ALL_6_PART_B_OK")
                 "embedded worker thread remained blocked in time.sleep after shutdown"
             );
         }
+    }
+
+    #[test]
+    fn windows_path_splitroot_matches_importlib_expectations() {
+        assert_eq!(
+            windows_path_splitroot(r"C:\Users\runner\Temp"),
+            (r"C:\", r"Users\runner\Temp")
+        );
+        assert_eq!(
+            windows_path_splitroot("C:/Users/runner/Temp"),
+            ("C:/", "Users/runner/Temp")
+        );
+        assert_eq!(
+            windows_path_splitroot(r"C:relative\path"),
+            ("C:", r"relative\path")
+        );
+        assert_eq!(
+            windows_path_splitroot(r"\root_rel\file"),
+            (r"\", r"root_rel\file")
+        );
+        assert_eq!(
+            windows_path_splitroot(r"\\server\share\dir\mod.py"),
+            (r"\\server\share\", r"dir\mod.py")
+        );
+        assert_eq!(
+            windows_path_splitroot(r"\\server\share"),
+            (r"\\server\share", "")
+        );
+        assert_eq!(
+            windows_path_splitroot(r"\\?\C:\Users\demo"),
+            (r"\\?\C:\", r"Users\demo")
+        );
+        assert_eq!(
+            windows_path_splitroot(r"\\?\UNC\server\share\dir"),
+            (r"\\?\UNC\server\share\", "dir")
+        );
+        assert_eq!(windows_path_splitroot(r"rel\path"), ("", r"rel\path"));
+        assert_eq!(windows_path_splitroot(""), ("", ""));
+        // Non-ASCII leading char must not panic on UTF-8 boundaries.
+        assert_eq!(windows_path_splitroot("é:foo"), ("", "é:foo"));
     }
 
     #[test]
