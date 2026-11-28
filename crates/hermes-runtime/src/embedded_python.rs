@@ -2293,8 +2293,11 @@ def _hermes_run_cell(code, cwd, _emit=_BRIDGE_EMIT_OUTPUT):
         "traceback": _trace,
     }}, ensure_ascii=False)
 
-# Hide internal bridge module and installer helpers from user code once closures have captured
-# their individual handles (H1: ensures `_hermes_bridge` is unreachable via `__defaults__`).
+# Defence-in-depth: hide internal bridge module and installer helpers from globals and
+# sys.modules. Builtin functions captured in closures still retain a `__self__` reference to the
+# native module object (H2), so security does not depend on hiding `_hermes_bridge` — every
+# bridge method enforces host-side Rust validation (workspace root is set only by the host, and
+# all filesystem/SQLite/tool calls are validated in Rust).
 sys.modules["_hermes_bridge"] = None
 for _priv_name in (
     "_hermes_bridge",
@@ -4261,6 +4264,112 @@ print("ALL_6_PART_B_OK")
                 "embedded worker thread remained blocked in time.sleep after shutdown"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn embedded_rustpython_imports_promised_stdlib_and_blocks_ntfs_secret_variants() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "API_KEY=ntfs-secret\n").unwrap();
+        std::fs::create_dir_all(dir.path().join(".hermes")).unwrap();
+        std::fs::write(
+            dir.path().join(".hermes").join("auth.json"),
+            "{\"tok\":1}\n",
+        )
+        .unwrap();
+
+        #[cfg_attr(not(windows), allow(unused_mut))]
+        let mut ntfs_candidates: Vec<String> = vec![
+            ".env::$DATA".into(),
+            ".env ".into(),
+            ".env.".into(),
+            ".env. ".into(),
+            ".env:altstream".into(),
+            ".hermes/auth.json::$DATA".into(),
+            ".hermes/auth.json ".into(),
+        ];
+
+        // On Windows, if the test volume generates an 8.3 short name for `.env`, verify it is
+        // also blocked after canonicalization.
+        #[cfg(windows)]
+        {
+            if let Ok(out) = std::process::Command::new("cmd")
+                .args(["/C", "for %I in (.env) do @echo %~sI"])
+                .current_dir(dir.path())
+                .output()
+            {
+                let short = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+                if !short.is_empty() && short != ".env" {
+                    ntfs_candidates.push(short);
+                }
+            }
+        }
+
+        let mut kernel = EmbeddedKernel::spawn(&[], Vec::new(), None).expect("spawn kernel");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let candidates_json = serde_json::to_string(&ntfs_candidates).unwrap();
+        let code = format!(
+            r#"
+# H1: broad sweep importing the full stdlib surface promised by the sandbox on Linux & Windows.
+import argparse, asyncio, base64, bz2, calendar, collections, configparser, csv
+import dataclasses, datetime, decimal, difflib, enum, fractions, functools, glob
+import gzip, hashlib, hmac, html.parser, io, itertools, json, logging, lzma, math
+import mimetypes, os, pathlib, pprint, random, re, requests, secrets, shlex, shutil
+import signal, sqlite3, statistics, string, struct, subprocess, tarfile, tempfile
+import textwrap, tomllib, typing, unittest, unittest.mock, urllib.request, uuid
+import xml.etree.ElementTree as ET, yaml, zipfile, zoneinfo
+
+# Smoke-test key stdlib modules that touch platform/OS/time/text internals.
+buf = io.StringIO()
+writer = csv.writer(buf)
+writer.writerow(["k", "v"])
+writer.writerow(["a", 1])
+assert list(csv.reader(io.StringIO(buf.getvalue()))) == [["k", "v"], ["a", "1"]]
+assert datetime.datetime(2026, 11, 28, tzinfo=datetime.timezone.utc).year == 2026
+assert tomllib.loads("[sec]\nnum = 7\n") == {{"sec": {{"num": 7}}}}
+assert ET.fromstring("<root><item>ok</item></root>").find("item").text == "ok"
+cp = configparser.ConfigParser()
+cp.read_string("[a]\nx = 1\n")
+assert cp["a"]["x"] == "1"
+ap = argparse.ArgumentParser(prog="demo")
+ap.add_argument("--flag", action="store_true")
+assert ap.parse_args(["--flag"]).flag is True
+assert mimetypes.guess_type("report.pdf")[0] == "application/pdf"
+assert len(str(uuid.uuid4())) == 36
+assert gzip.decompress(gzip.compress(b"hello")) == b"hello"
+assert bz2.decompress(bz2.compress(b"hello")) == b"hello"
+assert lzma.decompress(lzma.compress(b"hello")) == b"hello"
+logger = logging.getLogger("hermes.sandbox.test")
+logger.setLevel(logging.INFO)
+async def _coro():
+    await asyncio.sleep(0)
+    return 123
+assert asyncio.run(_coro()) == 123
+
+# NTFS secret variants (`.env::$DATA`, `.env `, `.env.`, 8.3 short names) must be blocked for
+# both read and write.
+for cand in json.loads({candidates_json:?}):
+    for mode in ("r", "w"):
+        blocked = False
+        try:
+            open(cand, mode)
+        except PermissionError:
+            blocked = True
+        assert blocked, f"expected PermissionError for open({{cand!r}}, {{mode!r}})"
+
+print("STDLIB_AND_NTFS_OK")
+"#
+        );
+
+        let payload = run_test_cell(&mut kernel, &code, dir.path(), deadline).await;
+        assert_eq!(payload["status"], "ok", "{payload}");
+        assert!(
+            payload["stdout"]
+                .as_str()
+                .unwrap()
+                .contains("STDLIB_AND_NTFS_OK"),
+            "{payload}"
+        );
+        kernel.shutdown();
     }
 
     #[test]

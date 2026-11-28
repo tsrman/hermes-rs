@@ -1018,18 +1018,27 @@ pub(crate) fn check_protected_read_path(
         {
             return Err("Refusing to read protected profile or credential store".into());
         }
-        if canon.components().any(protected_component) {
+        if canon.components().any(protected_component)
+            || target.components().any(protected_component)
+        {
             return Err("Refusing to read protected secret or credential path".into());
         }
     } else if canon
         .file_name()
         .is_some_and(|n| protected_component(Component::Normal(n)))
+        || target
+            .file_name()
+            .is_some_and(|n| protected_component(Component::Normal(n)))
     {
         return Err("Refusing to read protected secret file".into());
     }
 
     let profile_refs: Vec<&Path> = protected_profiles.iter().map(PathBuf::as_path).collect();
-    if crate::redact::is_secret_file_arg(&canon.display().to_string(), &profile_refs) {
+    let canon_str = canon.display().to_string();
+    let normalized_str = normalize_ntfs_path_for_secret_check(&canon);
+    if crate::redact::is_secret_file_arg(&canon_str, &profile_refs)
+        || crate::redact::is_secret_file_arg(&normalized_str, &profile_refs)
+    {
         return Err("Refusing to read secret or credential file".into());
     }
     Ok(())
@@ -1053,11 +1062,38 @@ pub(crate) fn check_not_ancestor_of_protected_profile(
     Ok(())
 }
 
+fn strip_ntfs_component_suffix(raw: &str) -> &str {
+    // Strip NTFS Alternate Data Streams (e.g. `.env::$DATA`, `auth.json:stream`) and trailing
+    // spaces/dots that Windows silently trims when resolving paths.
+    let without_ads = raw.split(':').next().unwrap_or(raw);
+    without_ads.trim_end_matches([' ', '.'])
+}
+
+fn normalize_ntfs_path_for_secret_check(path: &Path) -> String {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::Normal(seg) => {
+                let raw = seg.to_string_lossy();
+                let cleaned = strip_ntfs_component_suffix(&raw);
+                out.push(if cleaned.is_empty() {
+                    raw.as_ref()
+                } else {
+                    cleaned
+                });
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out.display().to_string()
+}
+
 fn protected_component(component: Component<'_>) -> bool {
-    let name = component.as_os_str().to_string_lossy().to_ascii_lowercase();
+    let raw = component.as_os_str().to_string_lossy().to_ascii_lowercase();
+    let name = strip_ntfs_component_suffix(&raw);
     (name != ".env.example" && (name == ".env" || name.starts_with(".env.")))
         || matches!(
-            name.as_str(),
+            name,
             ".envrc"
                 | ".git"
                 | ".ssh"
