@@ -1483,6 +1483,16 @@ mod _sandbox_winapi {
     fn need_current_directory_for_exe_path(_exe_name: PyObjectRef) -> bool {
         false
     }
+
+    #[pyfunction(name = "GetModuleFileName")]
+    fn get_module_file_name(_module_handle: PyObjectRef) -> String {
+        "python3.dll".to_owned()
+    }
+
+    #[pyfunction(name = "GetLongPathName")]
+    fn get_long_path_name(path: PyObjectRef, vm: &VirtualMachine) -> PyResult<String> {
+        extract_path_string(path, vm)
+    }
 }
 
 fn set_host_workspace_root(path: &str) {
@@ -4281,6 +4291,8 @@ print("ALL_6_PART_B_OK")
                                 "assert winreg.HKEY_LOCAL_MACHINE > 0\n",
                                 "assert not hasattr(_winapi, 'CopyFile2')\n",
                                 "assert _winapi.NeedCurrentDirectoryForExePath('cmd.exe') is False\n",
+                                "assert _winapi.GetModuleFileName(0) == 'python3.dll'\n",
+                                "assert _winapi.GetLongPathName('C:\\\\tmp') == 'C:\\\\tmp'\n",
                                 "raised = False\n",
                                 "try:\n",
                                 "    winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Software')\n",
