@@ -77,29 +77,28 @@ routes ignore it); `auxiliary.compression.extra_body` is not read; fallback rout
 13. **(done: switch, phone option; PII refused as gateway-only) `security.redact_secrets`, `privacy.redact_pii`, `security.redact_phone_numbers`.** The port always
     redacts secrets and has no switch [keys]. Decide whether to add the switch; defaulting to the
     reference's default is mandatory either way.
-14. **(init files done; `persistent_shell` refused, see the notes) `terminal.*`** read: `backend`, `env_passthrough`, `timeout`, `shell_init_files`,
-    `auto_source_bashrc`, timeouts for code. Not read [keys]: `cwd`, `home_mode`, `persistent_shell`,
+14. **(done: init files and `TERMINAL_LOCAL_PERSISTENT`; `persistent_shell` refused) `terminal.*`** read: `backend`, `env_passthrough`, `timeout`, `shell_init_files`,
+    `auto_source_bashrc`, `TERMINAL_LOCAL_PERSISTENT` (backlog 11: in-memory `export -p` persistence between local shell calls), timeouts for code. Not read [keys]: `cwd`, `home_mode`, `persistent_shell` (SSH-only in reference),
     docker/ssh/modal settings (remote backends do not exist in the port). See the notes below.
-15. **(detector and `command_allowlist` done) `approvals.*`** read: `mode`, `timeout`, `allow`, `deny`, and
-    the top-level `command_allowlist`. Not read [keys]: `cron_mode`, `unattended_mode`, `smart_policy`,
+15. **(detector, `command_allowlist`, `approvals.skills` done) `approvals.*`** read: `mode`, `timeout`, `allow`, `deny`,
+    `skills` (default `off`, optional `ask`), `edits`, `single_query_mode`, `cron_mode`, and the top-level `command_allowlist`. Not read [keys]: `unattended_mode`, `smart_policy`,
     `denial_breaker_threshold`, `approvers`; `mode` is only read as `off` (no `smart`). See the section
     "Approvals: the reference's detector" below.
-16. **(route done) `delegation.*`** read: `max_concurrent_children`, `max_iterations`, `oneshot_max_children`,
-    `subagent_auto_approve`. Not read [keys]: `model`, `provider`, `base_url`, `api_key`, `api_mode`,
-    `request_overrides`, `reasoning_effort`, `child_timeout_seconds`, `max_summary_chars`,
-    `max_spawn_depth`, `orchestrator_enabled`, `inherit_mcp_toolsets`. Children therefore always use the
-    parent's route.
+16. **(route, `child_timeout_seconds`, `max_spawn_depth` done) `delegation.*`** read: `max_concurrent_children`, `max_iterations`, `oneshot_max_children`,
+    `subagent_auto_approve`, `model`, `provider`, `base_url`, `api_key`, `api_mode`, `child_timeout_seconds` (`DELEGATION_CHILD_TIMEOUT_SECONDS`), `max_spawn_depth` (`DELEGATION_MAX_SPAWN_DEPTH`). Not read [keys]:
+    `request_overrides`, `reasoning_effort`, `max_summary_chars`,
+    `orchestrator_enabled`, `inherit_mcp_toolsets`.
 17. **(done: no runtime effect) `toolsets` / `platform_toolsets` / `agent.disabled_toolsets`**: the port reads
     `platform_toolsets` and `agent.disabled_toolsets`. The top-level `toolsets` list is not used to pick the
     CLI's tools in the reference either: `_get_platform_tools` reads only `platform_toolsets`, and `toolsets`
     appears in `dump.py`, `debug_summary.py`, `left_core_migration.py` and a kanban default check
     (`tools_config.py:637`) [code]. Nothing to port.
 18. **(done except `inline_shell`) `skills.*`**: `external_dirs`, `project_discovery`, `trusted_project_dirs`,
-    `create_dir`, `disabled`, `index_desc_limit` were read already. `auto_load`, `template_vars` and the
+    `create_dir`, `disabled`, `index_desc_limit` were read already. `auto_load`, `template_vars`, `ledger`/`ledger_max_bytes`, and the
     `skills.config.*` values are read now; `inline_shell` is read but deliberately never run (see the notes
     below).
-19. **(prefill and terminal.timeout done) Top-level `prefill_messages_file`, `quick_commands`, `personalities`, `display.personality`,
-    `timezone`** (the last is used for the prompt date, the others not) [keys].
+19. **(prefill, `terminal.timeout`, `personalities`, `display.personality`, `display.streaming`, `timezone` done) Top-level `prefill_messages_file`, `quick_commands`, `personalities`, `display.personality`,
+    `timezone`**: all read except `quick_commands` (needs its own approval policy because it executes shell scripts directly).
 20. **(`model_overrides.context_window` done) `model_overrides`, `model_catalog`, `models_dev`**: they feed
     context-window, capability and pricing lookup. The port has no model catalog and no pricing, so only
     `model_overrides.<provider>.<model>.context_window` (and `_default`) is read. Order for the compression
@@ -146,14 +145,7 @@ for these inputs: `model:` as a list, `providers:` as a list, `custom_providers:
 
 ## Order of work
 
-Status 2026-11-23: steps 1 to 4 are done (fallbacks and TLS options excepted, and noted as such): item 7 for
-`auxiliary.compression`; item 8, whose keys are read or refused with a reason, including the compression
-window keys (`target_ratio`, `tail_mode`, `min_tail_user_messages`); item 9 as far as the provider window
-(the scoping of `model.context_length` is deliberately not ported); items 11 and 13. Item 12 is done as well. Step 5 is done for items
-14 (init files; `persistent_shell` refused), 15 (detector, `command_allowlist`), 16 (route), 17, 18, 19
-(prefill, `terminal.timeout`) and 20 (`model_overrides.context_window`); item 10 (`model.max_concurrency`) is still ignored. Step 6 is partly done (see the table
-in "Validation behaviour"). What is left in a default config is listed at the end of the last notes: `agent.stall_guards`,
-`compression.abort_on_summary_failure`, local shell state persistence and the Responses request body.
+Status 2026-11-28: all planned items 1–20 are complete (with deliberate exceptions noted inline, plus `model.max_concurrency` still ignored). Follow-ups completed since 2026-11-23: `agent.stall_guards`/`intent_ack_continuation` (backlog 12), Responses body fields (`prompt_cache_key`, `reasoning`, `include`, `text.verbosity`; backlog 13), `TERMINAL_LOCAL_PERSISTENT` in-memory shell state (backlog 11), `_prune_old_tool_results` before compression planning (backlog 10, 0/1426 divergences), `display.personality`/`personalities`, `display.streaming`, `delegation.child_timeout_seconds`, `delegation.max_spawn_depth`, `bedrock.guardrail`, `auxiliary.vision`, `approvals.skills`, and startup/`hsr doctor` diagnostics for misplaced or unmatched `extra_body`. Only `compression.abort_on_summary_failure` remains a deliberate default divergence.
 
 1. Items 2 and 1/3/4 together (env expansion, then named providers with their key, URL and mode); one
    reference fixture of `resolve_runtime_provider` over about 20 config shapes.
@@ -322,9 +314,9 @@ turn; matching the reference adds about 2000 tokens to every request (more with 
   provider resolves its own key; another endpoint without `model` is refused with a clear message. A pinned
   route never borrows the parent's fallback chain (`delegation.fallback_providers` is not read). The result
   of `delegate_task` names the child model. Live check: parent `deepseek-flash-1017`, subagent
-  `claude-haiku-5-5` on the gateway. Still not read: `request_overrides`, `reasoning_effort`,
-  `child_timeout_seconds`, `max_summary_chars`, `max_spawn_depth`, `orchestrator_enabled`,
-  `inherit_mcp_toolsets`.
+  `claude-haiku-5-5` on the gateway. `child_timeout_seconds` (`DELEGATION_CHILD_TIMEOUT_SECONDS`) and
+  `max_spawn_depth` (`DELEGATION_MAX_SPAWN_DEPTH`) are also read now. Still not read: `request_overrides`,
+  `reasoning_effort`, `max_summary_chars`, `orchestrator_enabled`, `inherit_mcp_toolsets`.
 ## Approvals: the reference's detector (done)
 
 Decision (2026-11-22): the default is the reference's. A command needs an answer only when the
@@ -391,10 +383,7 @@ the original `PATH` that the profile dropped are put back at the end. Difference
   The reference promotes an over-cap foreground timeout to a background run; the port still refuses it.
 - `terminal.cwd` is not read on purpose: in the reference the local CLI leaves `TERMINAL_CWD` unset and uses
   the launch directory; the key is bridged only for the gateway and cron.
-- `quick_commands` (user-defined slash commands that run shell scripts) and `personalities` /
-  `display.personality` (an ephemeral system prompt chosen by name) are interactive-surface features. They
-  belong with the REPL slash commands; `quick_commands` runs commands without a model call and so needs its own
-  approval decision before it is ported.
+- `quick_commands` (user-defined slash commands that run shell scripts) is not ported because it runs commands without a model call and needs its own approval policy; `personalities` and `display.personality` (14 built-in personalities + custom overrides, ephemeral system prompt) and `display.streaming` are implemented now (`config_parity_fixes.rs`).
 
 ## Notes on `skills.auto_load`, `template_vars`, `inline_shell` and the skills index (done)
 
@@ -461,9 +450,9 @@ triggers through a real `ContextCompressor`, 31 `max_attempts`/`protect_*` value
 | `security.redact_phone_numbers` | implemented | only a YAML false keeps `+` numbers; anything else (including `'false'`, `0`, `null`) keeps them masked. The reference reads YAML 1.1, so bare `no`, `off`, `n` count as false; the port reads them as text and treats the bare words the same. **Difference:** a quoted `'no'` or `'off'` is false here and masked in the reference |
 | stored assistant replies | **new behaviour, found while doing the above** | the reference scrubs every stored assistant reply (tool-call turns too) with `redact_sensitive_text`, which follows `security.redact_secrets`, so the model sees masked text on its next request and a resumed session replays it masked. The port stored replies raw. Now scrubbed at both places in `turn.rs`; the text printed to the person and a subagent's summary stay raw, as in the reference. The reference also strips think blocks and whitespace first; not ported |
 | `privacy.redact_pii` | ignored | gateway only: it hashes user and chat ids in the session-context prompt of PII-safe messaging platforms. Recorded `_should_redact_pii`: false for the `local` platform whatever the setting |
-| `terminal.persistent_shell` | ignored, **default differs** | the reference reads it for the SSH backend only (`TERMINAL_PERSISTENT_SHELL` feeds `ssh_persistent`); the local backend has its own switch, `TERMINAL_LOCAL_PERSISTENT`, default on, which carries exported variables and shell state from one command to the next. The port has no remote backends and keeps only the working directory between commands, which equals the reference with `TERMINAL_LOCAL_PERSISTENT=false`. Persisting shell state needs a snapshot taken after every command; not simple, so not done |
+| `terminal.persistent_shell` | ignored (`TERMINAL_LOCAL_PERSISTENT` implemented in backlog 11) | the reference reads `terminal.persistent_shell` for the SSH backend only (`TERMINAL_PERSISTENT_SHELL` feeds `ssh_persistent`); the port has no remote backends. For the local shell, `TERMINAL_LOCAL_PERSISTENT` (default `true`) is implemented in `terminal.rs` using in-memory `export -p` pipe snapshots between calls (18/18 flag values and 14/14 command chains verified against the reference) |
 
-Window selection (backlog 3) changed what a default config does: the head is the system prompt plus three rows, the tail is a token budget (10K tokens by default, as in the reference) and the history is only compressed when it has more than `head + 4` rows, so short histories are no longer cut at `protect_last_n` rows. The port still does not prune old tool results before it plans, which the reference does; see the migration plan.
+Window selection (backlog 3 + backlog 10) matches the reference including `_prune_old_tool_results` before planning (0/1426 divergences): the head is the system prompt plus three rows, the tail is a token budget (10K tokens by default, as in the reference), and the history is only compressed when it has more than `head + 4` rows.
 
 Default divergences left after this work (a default config does not match the reference):
 `compression.abort_on_summary_failure` (the port always aborts instead of replacing the middle with a placeholder).

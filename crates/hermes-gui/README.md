@@ -2,15 +2,16 @@
 
 Standalone desktop frontend for Hermes Agent built with [GPUI](https://gpui.rs/).
 
-This crate lives outside the root Cargo workspace (`exclude = ["crates/hermes-gui"]`) so CLI builds and musl releases stay free of graphics/windowing dependencies.
+This crate is a member of the root Cargo workspace (sharing the root `Cargo.lock`), but is omitted from `default-members` so headless CLI builds and static musl releases stay free of graphics/windowing dependencies.
 
 ## Architecture
 
-- `hsr-gui` connects to the shared local session owner (`hsr owner`, implemented on `hermes-runtime::local_owner`).
+- `hsr-gui` is a standalone binary that embeds `hermes-cli` (`owner` and `__embedded-python` subcommands) and connects to the shared local session owner (`hermes-runtime::local_owner`) without requiring a separate `hsr` binary.
 - **Unix (Linux/macOS):** Unix domain socket `<profile>/rust-owner/owner.sock` with profile-scoped `owner.lock`.
 - **Windows:** Authenticated loopback TCP (`127.0.0.1:<port>` stored in `<profile>/rust-owner/owner.addr` with a 256-bit per-owner token).
-- Protocol v2 supports profile discovery, session list/search, transcript loading, streaming turn execution with sequenced event replay (`SubscribeTurn { after_seq }`), cancellation, and interactive tool approval survival across UI reconnects.
+- Protocol v2 supports profile discovery, session list/search/delete, transcript loading, streaming turn execution with sequenced event replay (`SubscribeTurn { after_seq }`), cancellation, and interactive tool approval survival across UI reconnects.
 - Sessions created in `hsr-gui` are written to the same `<profile>/state.db` and can be resumed directly in `hsr chat --resume <id>`.
+- Built-in desktop features include Setup & Settings (OAuth login and bundled skills sync), project folder picker, file and clipboard image attachments, `@`/`/` autocomplete, extended Markdown (GFM tables, task lists, footnotes, callouts, `<details>`), native LaTeX math rendering, native Mermaid vector diagrams, and quote-in-reply (`Ctrl+Shift+Q`).
 
 ## System Dependencies
 
@@ -54,7 +55,7 @@ Build on Alpine musl:
 
 ```bash
 RUSTFLAGS="-C target-feature=-crt-static" \
-  cargo build --manifest-path crates/hermes-gui/Cargo.toml --release --locked --target x86_64-unknown-linux-musl
+  cargo build -p hermes-gui --release --locked --target x86_64-unknown-linux-musl
 ```
 
 ### Windows
@@ -63,26 +64,20 @@ RUSTFLAGS="-C target-feature=-crt-static" \
 
 ## Building and Running
 
-First build the CLI binary (used as the local session owner process):
-
-```bash
-cargo build --locked -p hermes-cli
-```
-
-Then build and run the GUI:
+Build and run the standalone GUI directly from the workspace root:
 
 ```bash
 # Default (Wayland + X11 on Linux, Win32 on Windows)
-cargo run --manifest-path crates/hermes-gui/Cargo.toml --locked
+cargo run -p hermes-gui --locked
 
 # Linux Wayland-only (when libxkbcommon-x11-dev is not installed)
-cargo run --manifest-path crates/hermes-gui/Cargo.toml --no-default-features --features wayland --locked
+cargo run -p hermes-gui --no-default-features --features wayland --locked
 ```
 
 Run tests and lints:
 
 ```bash
-cargo fmt --manifest-path crates/hermes-gui/Cargo.toml --all -- --check
-cargo clippy --manifest-path crates/hermes-gui/Cargo.toml --all-targets --locked -- -D warnings
-cargo test --manifest-path crates/hermes-gui/Cargo.toml --locked
+cargo fmt --all -- --check
+cargo clippy -p hermes-gui --all-targets --locked -- -D warnings
+cargo test -p hermes-gui --locked
 ```

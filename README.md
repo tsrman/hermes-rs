@@ -151,14 +151,20 @@ An entry applies only when its `base_url` equals the active base URL (a trailing
 
 | Command | Description |
 | --- | --- |
+| `hsr setup [--portal] [--non-interactive]` | Interactive setup wizard: initializes profile directories, starter files, `config.yaml`, `.env`, `state.db`, provider, and skills. |
+| `hsr model` | Show or switch the default LLM provider and model. |
+| `hsr doctor [--json] [--fix]` | Diagnose profile directories, `config.yaml`, credentials, database, local owner, and `extra_body` matching. |
+| `hsr skills [sync\|list]` | Download, sync, or inspect bundled Markdown skills in the selected profile. |
+| `hsr auth <login\|status\|refresh\|logout>` | Authenticate with OAuth providers (PKCE / device code) and inspect stored credentials. |
+| `hsr browser <connect\|status\|disconnect>` | Connect to, inspect, or disconnect a live local CDP browser session. |
 | `hsr chat [OPTIONS]` | Interactive REPL/TUI or single-turn `-q` chat (`--ui`, `--model`, `--provider`, `--base-url`, `--save-session`, `--resume`, `--continue`, `--yolo`, `--oneshot`, `--events-json`, `--max-turns`). |
 | `hsr sessions <list\|show\|search\|migrate>` | Inspect, full-text search, or migrate SQLite `state.db` sessions (`v1..v32 → v33`). |
 | `hsr profile <check\|migrate>` | Inspect a profile directory and prepare a verified migration copy (Linux). |
 | `hsr cron <list\|add\|edit\|pause\|resume\|run\|cancel\|remove\|status\|runs\|incidents\|notepad\|doctor\|tick\|preview>` | Manage and execute local scheduled jobs in the shared `cron/jobs.json` / `executions.db` / `notepad.db` format. |
 | `hsr config set <key> <value>` | Update nested keys in the selected profile's `config.yaml`. |
-| `hsr owner` | Run the local Unix-socket session authority daemon for the selected profile (Unix). |
+| `hsr owner` | Run the local session authority daemon for the selected profile (Unix socket / Windows loopback TCP). |
 
-Inside interactive `hsr chat`, available slash commands include `/help`, `/new`, `/sessions`, `/resume`, `/model`, `/compress` (`/compact`), `/yolo`, `/retry`, `/ui [inline|tui|plain]`, and `/exit`.
+Inside interactive `hsr chat`, available slash commands include `/help`, `/new`, `/sessions`, `/resume`, `/model`, `/compress` (`/compact`), `/yolo`, `/retry`, `/ui [inline|tui|plain]`, `/browser`, `/skills`, `/<skill>`, `/clear`, `/reset`, `/undo`, `/copy`, and `/exit`, alongside `@` context refs (`@file`, `@folder`, `@diff`, `@staged`, `@git`, `@url`) and local `!<cmd>`.
 
 ## Workspace Architecture
 
