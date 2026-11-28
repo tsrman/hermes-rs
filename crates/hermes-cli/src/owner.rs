@@ -250,7 +250,7 @@ async fn read_controls(
             CONTROL_CANCEL => return Ok(()),
             CONTROL_APPROVAL_RESPONSE => {
                 let response: ApprovalResponse = timeout(IO_TIMEOUT, read_frame(reader)).await??;
-                let mut waiting = pending.lock().unwrap();
+                let mut waiting = pending.lock().unwrap_or_else(|e| e.into_inner());
                 if waiting.as_ref().is_some_and(|(id, _)| *id == response.id) {
                     let (_, sender) = waiting.take().expect("matched approval");
                     let _ = sender.send(response.decision);
@@ -333,7 +333,7 @@ async fn handle_v1(mut stream: OwnerStream, home: &Path, request: ChatRequest) -
         let approve = |request| {
             let (sender, receiver) = oneshot::channel();
             let id = next_id.fetch_add(1, Relaxed);
-            *pending.lock().unwrap() = Some((id, sender));
+            *pending.lock().unwrap_or_else(|e| e.into_inner()) = Some((id, sender));
             let queued = queue(Event::Approval { id, request });
             async move {
                 if queued {

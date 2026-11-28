@@ -6,7 +6,7 @@
 
 use std::fmt::Write as _;
 use std::fs;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::Path;
 
 use serde_json::{json, Value};
@@ -17,7 +17,7 @@ use crate::doc_extract::{
     collect_docx_paragraph, find_descendants, parse_xml, slide_number, XmlNode, ZipArchive,
     MAX_DOCUMENT_BYTES,
 };
-use crate::excel_tools::resolve_workspace_path;
+use crate::excel_tools::{resolve_workspace_path, write_file_atomically};
 
 const DEFAULT_MAX_PARAGRAPHS: usize = 5_000;
 const HARD_MAX_PARAGRAPHS: usize = 50_000;
@@ -46,25 +46,52 @@ fn xml_escape(input: &str) -> String {
 }
 
 fn write_zip_entries<S: AsRef<str>>(path: &Path, entries: &[(S, String)]) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("failed creating parent directory: {e}"))?;
-    }
-    let file = fs::File::create(path).map_err(|e| format!("failed creating output file: {e}"))?;
-    let mut writer = ZipWriter::new(file);
-    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-    for (name, content) in entries {
-        let entry_name = name.as_ref();
+    write_file_atomically(path, |file| {
+        let mut writer = ZipWriter::new(file);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        for (name, content) in entries {
+            let entry_name = name.as_ref();
+            writer
+                .start_file(entry_name, options)
+                .map_err(|e| format!("failed writing ZIP entry '{entry_name}': {e}"))?;
+            writer
+                .write_all(content.as_bytes())
+                .map_err(|e| format!("failed writing ZIP payload '{entry_name}': {e}"))?;
+        }
         writer
-            .start_file(entry_name, options)
-            .map_err(|e| format!("failed writing ZIP entry '{entry_name}': {e}"))?;
-        writer
-            .write_all(content.as_bytes())
-            .map_err(|e| format!("failed writing ZIP payload '{entry_name}': {e}"))?;
+            .finish()
+            .map_err(|e| format!("failed finalizing ZIP archive: {e}"))?;
+        Ok(())
+    })
+}
+
+/// Read an Office archive with size verification *before* allocating memory and a bounded `.take()`
+/// cap so oversized or growing files cannot exhaust RAM.
+fn read_bounded_office_file(path: &Path, kind: &str) -> Result<Vec<u8>, String> {
+    let file = fs::File::open(path).map_err(|e| format!("failed opening {kind} file: {e}"))?;
+    let meta = file
+        .metadata()
+        .map_err(|e| format!("failed inspecting {kind} file: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{kind} path is not a regular file"));
     }
-    writer
-        .finish()
-        .map_err(|e| format!("failed finalizing ZIP archive: {e}"))?;
-    Ok(())
+    if meta.len() > MAX_DOCUMENT_BYTES {
+        return Err(format!(
+            "{kind} exceeds maximum size ({} bytes)",
+            MAX_DOCUMENT_BYTES
+        ));
+    }
+    let mut data = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
+    file.take(MAX_DOCUMENT_BYTES + 1)
+        .read_to_end(&mut data)
+        .map_err(|e| format!("failed reading {kind} file: {e}"))?;
+    if data.len() as u64 > MAX_DOCUMENT_BYTES {
+        return Err(format!(
+            "{kind} exceeds maximum size ({} bytes)",
+            MAX_DOCUMENT_BYTES
+        ));
+    }
+    Ok(data)
 }
 
 fn value_to_string(val: &Value) -> String {
@@ -843,13 +870,10 @@ pub(crate) fn docx_read(workspace_root: &Path, args: &Value) -> Value {
         .unwrap_or(DEFAULT_MAX_PARAGRAPHS)
         .clamp(1, HARD_MAX_PARAGRAPHS);
 
-    let data = match fs::read(&resolved) {
+    let data = match read_bounded_office_file(&resolved, "docx") {
         Ok(b) => b,
-        Err(err) => return json!({"error": format!("failed reading docx file: {err}")}),
+        Err(err) => return json!({"error": err}),
     };
-    if data.len() as u64 > MAX_DOCUMENT_BYTES {
-        return json!({"error": format!("docx exceeds maximum size ({} bytes)", MAX_DOCUMENT_BYTES)});
-    }
     let zip = match ZipArchive::from_bytes(&data, "DOCX") {
         Ok(z) => z,
         Err(err) => return json!({"error": err}),
@@ -1540,13 +1564,10 @@ pub(crate) fn pptx_read(workspace_root: &Path, args: &Value) -> Value {
         .unwrap_or(DEFAULT_MAX_SLIDES)
         .clamp(1, HARD_MAX_SLIDES);
 
-    let data = match fs::read(&resolved) {
+    let data = match read_bounded_office_file(&resolved, "pptx") {
         Ok(b) => b,
-        Err(err) => return json!({"error": format!("failed reading pptx file: {err}")}),
+        Err(err) => return json!({"error": err}),
     };
-    if data.len() as u64 > MAX_DOCUMENT_BYTES {
-        return json!({"error": format!("pptx exceeds maximum size ({} bytes)", MAX_DOCUMENT_BYTES)});
-    }
     let zip = match ZipArchive::from_bytes(&data, "PPTX") {
         Ok(z) => z,
         Err(err) => return json!({"error": err}),
@@ -3071,5 +3092,160 @@ mod tests {
             &json!({"path": "../outside.pptx", "slides": [{"title": "x"}]}),
         );
         assert!(escaped["error"].as_str().is_some());
+    }
+
+    #[test]
+    fn docx_write_markdown_tables_lists_headings_code_and_quotes_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let md = "\
+# Ежеквартальный отчёт
+
+Вводный абзац с **жирным**, *курсивом* и `inline_code`.
+
+## Показатели
+
+| Квартал | Выручка | Рост |
+| :--- | ---: | :---: |
+| Q1 | 100 | +10% |
+| Q2 | 125 | +25% |
+
+- Первый пункт списка
+- Второй пункт списка
+1. Шаг один
+2. Шаг два
+
+> Важная цитата руководства
+
+```rust
+fn main() {}
+```";
+        let res = docx_write(
+            dir.path(),
+            &json!({
+                "path": "reports/markdown_doc.docx",
+                "title": "Отчёт",
+                "content": md
+            }),
+        );
+        assert_eq!(res["status"], "ok", "{res}");
+        let full_path = dir.path().join("reports/markdown_doc.docx");
+        assert_all_xml_parts_well_formed(&full_path, "DOCX");
+
+        let read_res = docx_read(dir.path(), &json!({"path": "reports/markdown_doc.docx"}));
+        assert!(read_res.get("error").is_none(), "{read_res}");
+        let paragraphs = read_res["paragraphs"].as_array().unwrap();
+        assert!(paragraphs.iter().any(|p| p == "Ежеквартальный отчёт"));
+        assert!(paragraphs.iter().any(|p| p == "Первый пункт списка"));
+        assert!(paragraphs.iter().any(|p| p == "Шаг два"));
+        assert!(paragraphs.iter().any(|p| p == "Важная цитата руководства"));
+        assert!(paragraphs.iter().any(|p| p == "fn main() {}"));
+        let tables = read_res["tables"].as_array().unwrap();
+        assert_eq!(tables.len(), 1);
+        assert_eq!(
+            tables[0],
+            json!([
+                ["Квартал", "Выручка", "Рост"],
+                ["Q1", "100", "+10%"],
+                ["Q2", "125", "+25%"]
+            ])
+        );
+    }
+
+    #[test]
+    fn office_atomic_write_preserves_existing_file_on_failure_and_leaves_no_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("existing.docx");
+        fs::write(&target, b"ORIGINAL-CONTENT").unwrap();
+
+        let err = write_file_atomically(&target, |file| {
+            file.write_all(b"PARTIAL-DATA").unwrap();
+            Err("simulated mid-write failure".into())
+        });
+        assert!(err.is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"ORIGINAL-CONTENT");
+
+        // No leftover temporary files remain in the directory.
+        let names: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok().and_then(|e| e.file_name().into_string().ok()))
+            .collect();
+        assert_eq!(names, vec!["existing.docx".to_owned()]);
+
+        // Atomic overwrite succeeds cleanly and replaces contents.
+        write_file_atomically(&target, |file| {
+            file.write_all(b"NEW-CONTENT").map_err(|e| e.to_string())
+        })
+        .unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"NEW-CONTENT");
+    }
+
+    #[test]
+    fn office_tools_reject_protected_paths_and_corrupt_or_oversized_or_zipbomb_archives() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // 1. Protected repository/credential/profile directories are refused even inside workspace.
+        for bad in [
+            ".git/config.docx",
+            ".ssh/id_rsa.docx",
+            ".hsr/config.yaml",
+            ".hermes/auth.json",
+            ".env",
+        ] {
+            let w = docx_write(dir.path(), &json!({"path": bad, "paragraphs": ["x"]}));
+            assert!(w["error"].as_str().is_some(), "expected refusal for {bad}");
+            assert!(!dir.path().join(bad).exists());
+            let p = pptx_write(
+                dir.path(),
+                &json!({"path": bad, "slides": [{"title": "x"}]}),
+            );
+            assert!(p["error"].as_str().is_some(), "expected refusal for {bad}");
+        }
+
+        // 2. Corrupt / truncated archive returns a clean error without panicking.
+        let corrupt = dir.path().join("broken.docx");
+        fs::write(&corrupt, b"PK\x03\x04not-a-real-zip").unwrap();
+        let bad_docx = docx_read(dir.path(), &json!({"path": "broken.docx"}));
+        assert!(bad_docx["error"].as_str().is_some());
+        let bad_pptx = pptx_read(dir.path(), &json!({"path": "broken.docx"}));
+        assert!(bad_pptx["error"].as_str().is_some());
+
+        // 3. Multi-entry zip bomb: 6 slides x 10 MiB of compressible text (~60 MiB uncompressed
+        //    total > 50 MiB budget, while compressed ZIP is tiny). Must be rejected!
+        let bomb_path = dir.path().join("bomb.pptx");
+        let chunk = "A".repeat(10 * 1024 * 1024);
+        let entries: Vec<(String, String)> = (1..=6)
+            .map(|n| {
+                (
+                    format!("ppt/slides/slide{n}.xml"),
+                    format!("<p>{chunk}</p>"),
+                )
+            })
+            .collect();
+        write_zip_entries(&bomb_path, &entries).unwrap();
+        assert!(
+            fs::metadata(&bomb_path).unwrap().len() < 500_000,
+            "compressed bomb fixture should be small on disk"
+        );
+        let bomb_res = pptx_read(dir.path(), &json!({"path": "bomb.pptx"}));
+        let bomb_err = bomb_res["error"]
+            .as_str()
+            .expect("zip bomb must be rejected by cumulative decompression budget");
+        assert!(
+            bomb_err.contains("uncompressed size limit") || bomb_err.contains("exceeds"),
+            "unexpected error: {bomb_err}"
+        );
+
+        // 4. Oversized file (> MAX_DOCUMENT_BYTES) rejected via metadata before reading into RAM.
+        let huge_path = dir.path().join("huge.docx");
+        let huge_file = fs::File::create(&huge_path).unwrap();
+        huge_file.set_len(MAX_DOCUMENT_BYTES + 1024).unwrap();
+        drop(huge_file);
+        let huge_res = docx_read(dir.path(), &json!({"path": "huge.docx"}));
+        assert!(
+            huge_res["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("exceeds maximum size")),
+            "expected size error, got: {huge_res}"
+        );
     }
 }

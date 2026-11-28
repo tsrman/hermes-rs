@@ -1204,3 +1204,236 @@ pub(crate) fn call<'a>(
         Value::Object(result)
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::file_tools::FileWorkspace;
+    use crate::memory_tool::MemoryTurn;
+    use crate::providers::{OpenAiProvider, Provider};
+    use crate::skills::SkillCatalog;
+    use crate::stall_guards::IntentAckContinuation;
+    use crate::todo_tool::TodoStore;
+    use crate::tool_policy::ToolPolicy;
+    use crate::turn::{ModelRoute, TurnOptions};
+    use std::sync::{Arc, Mutex as StdMutex};
+
+    fn test_turn_options<'a>(
+        root: &'a Path,
+        policy: &'a ToolPolicy,
+        intent_ack: &'a IntentAckContinuation,
+        approval_timeout_secs: Option<u32>,
+    ) -> TurnOptions<'a> {
+        TurnOptions {
+            mcp: None,
+            web: None,
+            browser: None,
+            memory: None,
+            vision: None,
+            vision_route: None,
+            image_gen: None,
+            tts: None,
+            x_search: None,
+            root,
+            profile: None,
+            session_id: None,
+            single_query: false,
+            max_turns: 4,
+            approval_timeout_secs,
+            terminal_approval_timeout_secs: approval_timeout_secs,
+            terminal_local: false,
+            compression: None,
+            summarizer: None,
+            compaction_guard: None,
+            keep_phone_numbers: false,
+            stall_guards: true,
+            intent_ack_continuation: intent_ack,
+            terminal_env: None,
+            clarify_timeout_secs: 0,
+            tools: policy,
+            journal: None,
+            delegation: None,
+            system_prompt_override: None,
+            ephemeral_system_prompt: None,
+            child: None,
+            delegate_depth: 0,
+            cancel_flag: None,
+            steer_queue: None,
+            prefill: None,
+            state_scope: None,
+            approval_policy: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn office_writes_in_execute_code_require_write_capability_and_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills = SkillCatalog::default();
+        let policy = ToolPolicy::default();
+        let intent_ack = IntentAckContinuation::default();
+        let route = ModelRoute {
+            provider: Provider::OpenAi(
+                OpenAiProvider::new("http://127.0.0.1:1/v1", "test-key", Duration::from_secs(5))
+                    .unwrap(),
+            ),
+            provider_name: "openai",
+            model: "test-model".into(),
+        };
+
+        let cases = [
+            (
+                "docx_write",
+                "out/report.docx",
+                json!({"path": "out/report.docx", "content": "hello"}),
+            ),
+            (
+                "pptx_write",
+                "out/deck.pptx",
+                json!({"path": "out/deck.pptx", "slides": [{"title": "hi"}]}),
+            ),
+            (
+                "xlsx_write",
+                "out/book.xlsx",
+                json!({"path": "out/book.xlsx", "sheets": {"S1": [["a", 1]]}}),
+            ),
+        ];
+
+        for (tool_name, rel_path, payload) in cases {
+            // 1. Without write capability (`approval_timeout_secs: None`), write is refused.
+            {
+                let options = test_turn_options(dir.path(), &policy, &intent_ack, None);
+                let mut files = FileWorkspace::new(dir.path(), None);
+                let mut memory_turn = MemoryTurn::default();
+                let mut todo = TodoStore::default();
+                let mut approve = |_: ApprovalRequest| -> BoxFuture<'_, ApprovalDecision> {
+                    Box::pin(async { ApprovalDecision::Approved })
+                };
+                let mut cx = ToolContext {
+                    options: &options,
+                    skills: &skills,
+                    files: &mut files,
+                    memory_turn: &mut memory_turn,
+                    todo: &mut todo,
+                    approve: &mut approve,
+                    route: &route,
+                    fallbacks: &[],
+                    tool_output: None,
+                };
+                let mut calls = 0;
+                let res = dispatch_sandbox_tool(
+                    tool_name,
+                    &payload,
+                    &SANDBOX_TOOLS,
+                    dir.path(),
+                    &mut cx,
+                    Instant::now() + Duration::from_secs(10),
+                    10,
+                    &mut calls,
+                )
+                .await
+                .unwrap();
+                assert_eq!(res["status"], "approval_unavailable", "{tool_name}: {res}");
+                assert!(!dir.path().join(rel_path).exists());
+            }
+
+            // 2. With write capability enabled, denied approval blocks creation.
+            {
+                let options = test_turn_options(dir.path(), &policy, &intent_ack, Some(5));
+                let mut files = FileWorkspace::new(dir.path(), None);
+                let mut memory_turn = MemoryTurn::default();
+                let mut todo = TodoStore::default();
+                let seen: Arc<StdMutex<Vec<ApprovalAction>>> = Arc::new(StdMutex::new(Vec::new()));
+                let seen_cb = Arc::clone(&seen);
+                let mut approve = move |req: ApprovalRequest| -> BoxFuture<'_, ApprovalDecision> {
+                    seen_cb.lock().unwrap().push(req.action);
+                    Box::pin(async { ApprovalDecision::Denied })
+                };
+                let mut cx = ToolContext {
+                    options: &options,
+                    skills: &skills,
+                    files: &mut files,
+                    memory_turn: &mut memory_turn,
+                    todo: &mut todo,
+                    approve: &mut approve,
+                    route: &route,
+                    fallbacks: &[],
+                    tool_output: None,
+                };
+                let mut calls = 0;
+                let res = dispatch_sandbox_tool(
+                    tool_name,
+                    &payload,
+                    &SANDBOX_TOOLS,
+                    dir.path(),
+                    &mut cx,
+                    Instant::now() + Duration::from_secs(10),
+                    10,
+                    &mut calls,
+                )
+                .await
+                .unwrap();
+                assert_eq!(res["status"], "approval_denied", "{tool_name}: {res}");
+                assert_eq!(*seen.lock().unwrap(), vec![ApprovalAction::CreateFile]);
+                assert!(!dir.path().join(rel_path).exists());
+            }
+
+            // 3. Approved first write requests CreateFile; overwriting requests ReplaceFile.
+            {
+                let options = test_turn_options(dir.path(), &policy, &intent_ack, Some(5));
+                let mut files = FileWorkspace::new(dir.path(), None);
+                let mut memory_turn = MemoryTurn::default();
+                let mut todo = TodoStore::default();
+                let seen: Arc<StdMutex<Vec<ApprovalAction>>> = Arc::new(StdMutex::new(Vec::new()));
+                let seen_cb = Arc::clone(&seen);
+                let mut approve = move |req: ApprovalRequest| -> BoxFuture<'_, ApprovalDecision> {
+                    seen_cb.lock().unwrap().push(req.action);
+                    Box::pin(async { ApprovalDecision::Approved })
+                };
+                let mut cx = ToolContext {
+                    options: &options,
+                    skills: &skills,
+                    files: &mut files,
+                    memory_turn: &mut memory_turn,
+                    todo: &mut todo,
+                    approve: &mut approve,
+                    route: &route,
+                    fallbacks: &[],
+                    tool_output: None,
+                };
+                let mut calls = 0;
+                let first = dispatch_sandbox_tool(
+                    tool_name,
+                    &payload,
+                    &SANDBOX_TOOLS,
+                    dir.path(),
+                    &mut cx,
+                    Instant::now() + Duration::from_secs(10),
+                    10,
+                    &mut calls,
+                )
+                .await
+                .unwrap();
+                assert_eq!(first["status"], "ok", "{tool_name}: {first}");
+                assert!(dir.path().join(rel_path).exists());
+
+                let second = dispatch_sandbox_tool(
+                    tool_name,
+                    &payload,
+                    &SANDBOX_TOOLS,
+                    dir.path(),
+                    &mut cx,
+                    Instant::now() + Duration::from_secs(10),
+                    10,
+                    &mut calls,
+                )
+                .await
+                .unwrap();
+                assert_eq!(second["status"], "ok", "{tool_name}: {second}");
+                assert_eq!(
+                    *seen.lock().unwrap(),
+                    vec![ApprovalAction::CreateFile, ApprovalAction::ReplaceFile]
+                );
+            }
+        }
+    }
+}

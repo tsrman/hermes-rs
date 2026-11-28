@@ -9,6 +9,7 @@
 //! - `.pdf`: `pdftotext` with scanned-page coverage warnings, plus pure-Rust DEFLATE text fallback
 //!   and `[NEEDS OCR]` recovery hint for image-only PDFs
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::path::Path;
@@ -455,6 +456,8 @@ pub(crate) struct ZipArchive<'a> {
     data: &'a [u8],
     entries: HashMap<String, ZipEntry>,
     order: Vec<String>,
+    /// Cumulative decompressed bytes read across all entries of this archive (zip-bomb defense).
+    decompressed_bytes: Cell<usize>,
 }
 
 fn u16_le(slice: &[u8], at: usize) -> Result<u16, String> {
@@ -537,6 +540,7 @@ impl<'a> ZipArchive<'a> {
             data,
             entries,
             order,
+            decompressed_bytes: Cell::new(0),
         })
     }
 
@@ -567,21 +571,34 @@ impl<'a> ZipArchive<'a> {
             .data
             .get(payload_start..payload_end)
             .ok_or_else(|| format!("Truncated ZIP entry {}", entry.name))?;
-        let max_out = MAX_DOCUMENT_BYTES as usize;
-        if entry.uncompressed_size > max_out {
+        let max_total = MAX_DOCUMENT_BYTES as usize;
+        let used = self.decompressed_bytes.get();
+        let remaining = max_total.saturating_sub(used);
+        if entry.uncompressed_size > remaining || (entry.method == 0 && payload.len() > remaining) {
             return Err(format!(
-                "ZIP entry {} exceeds max document size",
+                "ZIP archive exceeds total uncompressed size limit ({max_total} bytes) while reading {}",
                 entry.name
             ));
         }
-        match entry.method {
-            0 => Ok(payload.to_vec()),
-            8 => inflate_raw(payload, max_out),
-            other => Err(format!(
-                "Unsupported ZIP compression method {other} for {}",
+        let bytes = match entry.method {
+            0 => payload.to_vec(),
+            8 => inflate_raw(payload, remaining)?,
+            other => {
+                return Err(format!(
+                    "Unsupported ZIP compression method {other} for {}",
+                    entry.name
+                ));
+            }
+        };
+        let next_total = used.saturating_add(bytes.len());
+        if next_total > max_total {
+            return Err(format!(
+                "ZIP archive exceeds total uncompressed size limit ({max_total} bytes) while reading {}",
                 entry.name
-            )),
+            ));
         }
+        self.decompressed_bytes.set(next_total);
+        Ok(bytes)
     }
 }
 

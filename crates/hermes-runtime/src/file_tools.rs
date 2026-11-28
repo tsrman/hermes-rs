@@ -114,40 +114,7 @@ impl Observation {
 impl<'a> FileWorkspace<'a> {
     pub(crate) fn new(root: &'a Path, profile: Option<&Path>) -> Self {
         let cache_home = profile.map(|path| path.canonical().unwrap_or_else(|_| path.to_owned()));
-        let mut protected_profiles = Vec::new();
-        let mut push_profile = |path: PathBuf| {
-            let store = match path.parent() {
-                Some(parent) if parent.ends_with("profiles") => {
-                    parent.parent().unwrap_or(&path).to_owned()
-                }
-                _ => path,
-            };
-            if let Ok(canon) = store.canonical() {
-                if !protected_profiles.contains(&canon) {
-                    protected_profiles.push(canon);
-                }
-            }
-            if !protected_profiles.contains(&store) {
-                protected_profiles.push(store);
-            }
-        };
-        if let Some(active) = cache_home.clone() {
-            push_profile(active);
-        }
-        // Protect sibling Hermes/HSR profile homes even when the workspace is `$HOME`.
-        for var in ["HERMES_HOME", "HSR_HOME"] {
-            if let Some(val) = std::env::var_os(var).filter(|v| !v.is_empty()) {
-                push_profile(PathBuf::from(val));
-            }
-        }
-        if let Some(home) = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .filter(|v| !v.is_empty())
-        {
-            let home = PathBuf::from(home);
-            push_profile(home.join(".hermes"));
-            push_profile(home.join(".hsr"));
-        }
+        let protected_profiles = collect_protected_profiles(cache_home.as_deref());
         Self {
             root,
             protected_profiles,
@@ -922,6 +889,82 @@ fn is_protected_windows_system_path(target: &Path) -> bool {
         let _ = target;
         false
     }
+}
+
+fn collect_protected_profiles(active: Option<&Path>) -> Vec<PathBuf> {
+    let mut protected_profiles = Vec::new();
+    let mut push_profile = |path: PathBuf| {
+        let store = match path.parent() {
+            Some(parent) if parent.ends_with("profiles") => {
+                parent.parent().unwrap_or(&path).to_owned()
+            }
+            _ => path,
+        };
+        if let Ok(canon) = store.canonical() {
+            if !protected_profiles.contains(&canon) {
+                protected_profiles.push(canon);
+            }
+        }
+        if !protected_profiles.contains(&store) {
+            protected_profiles.push(store);
+        }
+    };
+    if let Some(active) = active {
+        push_profile(active.to_owned());
+    }
+    // Protect sibling Hermes/HSR profile homes even when the workspace is `$HOME`.
+    for var in ["HERMES_HOME", "HSR_HOME"] {
+        if let Some(val) = std::env::var_os(var).filter(|v| !v.is_empty()) {
+            push_profile(PathBuf::from(val));
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|v| !v.is_empty())
+    {
+        let home = PathBuf::from(home);
+        push_profile(home.join(".hermes"));
+        push_profile(home.join(".hsr"));
+    }
+    protected_profiles
+}
+
+/// Shared workspace path guard used by both `file_tools` and Office (`xlsx`/`docx`/`pptx`) tools:
+/// rejects paths outside `root`, protected profile stores (`~/.hsr`, `~/.hermes`, `HERMES_HOME`,
+/// `HSR_HOME`), sensitive metadata components (`.git`, `.ssh`, `.aws`, `.env`, `vault`, etc.),
+/// and protected OS system paths.
+pub(crate) fn check_protected_workspace_path(root: &Path, path: &Path) -> Result<(), String> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| "Path is outside the working directory")?;
+    let protected_profiles = collect_protected_profiles(None);
+    if protected_profiles
+        .iter()
+        .any(|profile| path.starts_with(profile))
+        || relative.components().any(protected_component)
+    {
+        return Err(
+            "Path belongs to a protected profile, credential store or repository metadata".into(),
+        );
+    }
+    if [
+        "/etc",
+        "/boot",
+        "/usr/lib/systemd",
+        "/dev",
+        "/proc",
+        "/sys",
+        "/run",
+        "/System",
+        "/Library/LaunchDaemons",
+    ]
+    .iter()
+    .any(|directory| path.starts_with(directory))
+        || is_protected_windows_system_path(path)
+    {
+        return Err("Refusing to access a protected system path".into());
+    }
+    Ok(())
 }
 
 fn protected_component(component: Component<'_>) -> bool {

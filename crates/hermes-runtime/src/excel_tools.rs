@@ -4,9 +4,13 @@
 //! Runs natively inside `hermes-runtime` on every platform (Windows, Linux GNU/musl, macOS) with
 //! zero external Python packages required.
 
+use crate::doc_extract::MAX_DOCUMENT_BYTES;
+use crate::file_tools::check_protected_workspace_path;
 use crate::paths::PathExt;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use calamine::{open_workbook_auto, Data, Reader};
 use rust_xlsxwriter::{Color, Format, Formula, Workbook};
@@ -16,6 +20,102 @@ use crate::redact::is_secret_file_arg;
 
 const DEFAULT_MAX_ROWS: usize = 5_000;
 const HARD_MAX_ROWS: usize = 50_000;
+static ATOMIC_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Write a file atomically by streaming into a unique sibling temporary file in the same
+/// directory, syncing it to disk, preserving existing permissions, and replacing `target`.
+/// On any failure, the temporary file is removed and any pre-existing `target` remains intact.
+pub(crate) fn write_file_atomically<F>(target: &Path, write_fn: F) -> Result<(), String>
+where
+    F: FnOnce(&mut File) -> Result<(), String>,
+{
+    let parent = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|e| format!("failed creating parent directory: {e}"))?;
+
+    let existing_perms = fs::metadata(target).ok().map(|m| m.permissions());
+    let pid = std::process::id();
+    let mut created: Option<(PathBuf, File)> = None;
+    for _ in 0..64 {
+        let seq = ATOMIC_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp_path = parent.join(format!(".hermes-office-tmp-{pid}-{seq}"));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+        {
+            Ok(file) => {
+                created = Some((tmp_path, file));
+                break;
+            }
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(format!("failed creating temporary output file: {err}")),
+        }
+    }
+    let (tmp_path, mut file) =
+        created.ok_or_else(|| "failed allocating unique temporary output file".to_owned())?;
+
+    let result = (|| -> Result<(), String> {
+        write_fn(&mut file)?;
+        file.flush()
+            .map_err(|e| format!("failed flushing temporary output file: {e}"))?;
+        file.sync_all()
+            .map_err(|e| format!("failed syncing temporary output file: {e}"))?;
+        drop(file);
+        if let Some(perms) = existing_perms {
+            let _ = fs::set_permissions(&tmp_path, perms);
+        }
+        replace_file_atomically(&tmp_path, target)
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+    result
+}
+
+#[cfg(unix)]
+fn replace_file_atomically(tmp: &Path, target: &Path) -> Result<(), String> {
+    fs::rename(tmp, target).map_err(|e| format!("failed replacing output file atomically: {e}"))
+}
+
+#[cfg(windows)]
+fn replace_file_atomically(tmp: &Path, target: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(src: *const u16, dst: *const u16, flags: u32) -> i32;
+    }
+
+    let src: Vec<u16> = tmp.as_os_str().encode_wide().chain(Some(0)).collect();
+    let dst: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    let ok = unsafe {
+        MoveFileExW(
+            src.as_ptr(),
+            dst.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if ok != 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "failed replacing output file atomically: {}",
+            io::Error::last_os_error()
+        ))
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn replace_file_atomically(tmp: &Path, target: &Path) -> Result<(), String> {
+    fs::rename(tmp, target).map_err(|e| format!("failed replacing output file atomically: {e}"))
+}
 
 /// Resolve a user/script path safely inside `workspace_root`, rejecting `..` escapes and
 /// credential/secret files.
@@ -87,6 +187,7 @@ pub(crate) fn resolve_workspace_path(
             canon_root.display()
         ));
     }
+    check_protected_workspace_path(&canon_root, &checked)?;
     if checked.to_str().is_some_and(|p| is_secret_file_arg(p, &[])) {
         return Err(format!(
             "refused to access secret/credential file: {trimmed}"
@@ -131,6 +232,16 @@ pub(crate) fn xlsx_read(workspace_root: &Path, args: &Value) -> Value {
         Ok(p) => p,
         Err(err) => return json!({"error": err}),
     };
+    match fs::metadata(&resolved) {
+        Ok(meta) if !meta.is_file() => {
+            return json!({"error": format!("spreadsheet path is not a regular file: {path_str}")});
+        }
+        Ok(meta) if meta.len() > MAX_DOCUMENT_BYTES => {
+            return json!({"error": format!("spreadsheet exceeds maximum size ({} bytes)", MAX_DOCUMENT_BYTES)});
+        }
+        Ok(_) => {}
+        Err(err) => return json!({"error": format!("failed inspecting spreadsheet: {err}")}),
+    }
     let requested_sheet = args["sheet"].as_str();
     let max_rows = args["max_rows"]
         .as_u64()
@@ -397,8 +508,15 @@ pub(crate) fn xlsx_write(workspace_root: &Path, args: &Value) -> Value {
         }
     }
 
-    if let Err(err) = workbook.save(&resolved) {
-        return json!({"error": format!("failed saving workbook: {err}")});
+    let buffer = match workbook.save_to_buffer() {
+        Ok(buf) => buf,
+        Err(err) => return json!({"error": format!("failed serializing workbook: {err}")}),
+    };
+    if let Err(err) = write_file_atomically(&resolved, |file| {
+        file.write_all(&buffer)
+            .map_err(|e| format!("failed writing workbook: {e}"))
+    }) {
+        return json!({"error": err});
     }
 
     json!({
