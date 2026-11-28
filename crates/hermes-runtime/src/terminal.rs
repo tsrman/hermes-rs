@@ -410,15 +410,17 @@ where
     }
     #[cfg(target_os = "windows")]
     {
+        let _ = background;
         windows_shell::execute(
-            workspace,
-            arguments,
-            approval_timeout,
-            background,
-            settings,
-            session,
-            policy,
-            live_output,
+            windows_shell::ExecContext {
+                workspace,
+                arguments,
+                approval_timeout,
+                settings,
+                session,
+                policy,
+                live_output,
+            },
             approve,
         )
         .await
@@ -1213,9 +1215,35 @@ mod windows_shell {
     use super::*;
 
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    const CREATE_SUSPENDED: u32 = 0x0000_0004;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const TH32CS_SNAPTHREAD: u32 = 0x0000_0004;
+    const THREAD_SUSPEND_RESUME: u32 = 0x0002;
     const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: u32 = 9;
     const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+
+    #[repr(C)]
+    struct ThreadEntry32 {
+        dw_size: u32,
+        cnt_usage: u32,
+        th32_thread_id: u32,
+        th32_owner_process_id: u32,
+        tp_base_pri: i32,
+        tp_delta_pri: i32,
+        dw_flags: u32,
+    }
+
+    const _: () = assert!(std::mem::size_of::<ThreadEntry32>() == 28);
+
+    pub(super) struct ExecContext<'a> {
+        pub(super) workspace: &'a FileWorkspace<'a>,
+        pub(super) arguments: &'a str,
+        pub(super) approval_timeout: u32,
+        pub(super) settings: &'a TerminalSettings,
+        pub(super) session: &'a str,
+        pub(super) policy: Option<&'a crate::approval_policy::ApprovalPolicy>,
+        pub(super) live_output: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    }
 
     #[repr(C)]
     #[derive(Default)]
@@ -1267,7 +1295,73 @@ mod windows_shell {
         ) -> i32;
         fn AssignProcessToJobObject(job: *mut c_void, process: *mut c_void) -> i32;
         fn TerminateJobObject(job: *mut c_void, exit_code: u32) -> i32;
+        fn CreateToolhelp32Snapshot(flags: u32, process_id: u32) -> *mut c_void;
+        fn Thread32First(snapshot: *mut c_void, entry: *mut ThreadEntry32) -> i32;
+        fn Thread32Next(snapshot: *mut c_void, entry: *mut ThreadEntry32) -> i32;
+        fn OpenThread(desired_access: u32, inherit_handle: i32, thread_id: u32) -> *mut c_void;
+        fn ResumeThread(thread: *mut c_void) -> u32;
         fn CloseHandle(object: *mut c_void) -> i32;
+    }
+
+    /// Resume the initial suspended thread(s) of a newly spawned child process after assigning it
+    /// to its Job Object so no descendant can ever spawn outside the job.
+    fn resume_process_threads(pid: u32) -> io::Result<()> {
+        let invalid = (-1isize) as *mut c_void;
+        // SAFETY: TH32CS_SNAPTHREAD enumerates threads system-wide; handle is closed below.
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+        if snapshot.is_null() || snapshot == invalid {
+            return Err(io::Error::last_os_error());
+        }
+        let mut entry = ThreadEntry32 {
+            dw_size: std::mem::size_of::<ThreadEntry32>() as u32,
+            cnt_usage: 0,
+            th32_thread_id: 0,
+            th32_owner_process_id: 0,
+            tp_base_pri: 0,
+            tp_delta_pri: 0,
+            dw_flags: 0,
+        };
+        let mut resumed_any = false;
+        let mut last_err: Option<io::Error> = None;
+        // SAFETY: `snapshot` is valid and `entry.dw_size` is initialized to `size_of::<ThreadEntry32>()`.
+        let mut ok = unsafe { Thread32First(snapshot, &mut entry) };
+        while ok != 0 {
+            if entry.th32_owner_process_id == pid {
+                // SAFETY: `OpenThread` returns null on failure; valid handles are closed below.
+                let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32_thread_id) };
+                if thread.is_null() {
+                    last_err = Some(io::Error::last_os_error());
+                } else {
+                    // SAFETY: `thread` is an open handle with THREAD_SUSPEND_RESUME access.
+                    let prev = unsafe { ResumeThread(thread) };
+                    unsafe {
+                        let _ = CloseHandle(thread);
+                    }
+                    if prev == u32::MAX {
+                        last_err = Some(io::Error::last_os_error());
+                    } else {
+                        resumed_any = true;
+                    }
+                }
+            }
+            entry.dw_size = std::mem::size_of::<ThreadEntry32>() as u32;
+            // SAFETY: `snapshot` and `entry` remain valid throughout enumeration.
+            ok = unsafe { Thread32Next(snapshot, &mut entry) };
+        }
+        // SAFETY: `snapshot` is closed exactly once.
+        unsafe {
+            let _ = CloseHandle(snapshot);
+        }
+        if resumed_any {
+            Ok(())
+        } else {
+            Err(last_err.unwrap_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "no suspended thread found for spawned process",
+                )
+            }))
+        }
     }
 
     /// Win32 Job Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. Terminates the
@@ -1367,22 +1461,23 @@ mod windows_shell {
         Ok(canon)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn execute<A, F>(
-        workspace: &FileWorkspace<'_>,
-        arguments: &str,
-        approval_timeout: u32,
-        _background: Option<&str>,
-        settings: &TerminalSettings,
-        session: &str,
-        policy: Option<&crate::approval_policy::ApprovalPolicy>,
-        live_output: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+        ctx: ExecContext<'_>,
         approve: &mut A,
     ) -> Result<Value, String>
     where
         A: FnMut(ApprovalRequest) -> F,
         F: Future<Output = ApprovalDecision>,
     {
+        let ExecContext {
+            workspace,
+            arguments,
+            approval_timeout,
+            settings,
+            session,
+            policy,
+            live_output,
+        } = ctx;
         let args: Arguments = serde_json::from_str(arguments)
             .map_err(|_| "terminal expects a command and optional workdir and timeout")?;
         if args.command.trim().is_empty()
@@ -1529,20 +1624,33 @@ mod windows_shell {
         let job = JobObject::create().map_err(|e| format!("Failed creating job object: {e}"))?;
 
         let mut cmd = Command::new(comspec);
-        cmd.args(["/D", "/C", command])
+        // Use `raw_arg` with `/S` so `cmd.exe` strips only the outer quotes and passes inner
+        // quotes verbatim (standard `args()` applies MSVC `\"` escaping, which `cmd.exe` does
+        // not unescape).
+        cmd.raw_arg(format!("/D /S /C \"{command}\""))
             .current_dir(directory)
             .env_clear()
             .envs(settings.environment())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .creation_flags(CREATE_NO_WINDOW)
+            .creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED)
             .kill_on_drop(true);
         let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+        let mut job_warning: Option<String> = None;
         if let Some(raw_handle) = child.raw_handle() {
-            // Best-effort assignment: in nested restricted environments where job assignment is
-            // disallowed, fall back to `kill_on_drop` rather than failing the user's command.
-            let _ = job.assign(raw_handle);
+            if let Err(err) = job.assign(raw_handle) {
+                job_warning = Some(format!(
+                    "Warning: could not assign process to Windows Job Object ({err}); descendant cleanup on timeout is best-effort."
+                ));
+            }
+        }
+        if let Some(pid) = child.id() {
+            if let Err(err) = resume_process_threads(pid) {
+                job.terminate();
+                let _ = child.kill().await;
+                return Err(format!("Failed resuming spawned Windows command: {err}"));
+            }
         }
 
         let stdout = child.stdout.take();
@@ -1586,13 +1694,17 @@ mod windows_shell {
                     (guard.render(), guard.omitted())
                 };
                 let text = redact_terminal_output(&text, Some(command), &[]);
-                Ok(json!({
+                let mut payload = json!({
                     "output": text,
                     "exit_code": status.code().unwrap_or(-1),
                     "status": "completed",
                     "truncated": omitted > 0,
                     "cwd": directory.display().to_string(),
-                }))
+                });
+                if let Some(note) = job_warning {
+                    payload["note"] = json!(note);
+                }
+                Ok(payload)
             }
             Ok(Err(error)) => {
                 job.terminate();
@@ -1665,6 +1777,40 @@ mod windows_tests {
             .as_str()
             .unwrap_or("")
             .contains("windows-terminal-ok"));
+    }
+
+    #[tokio::test]
+    async fn quoted_arguments_and_spaced_paths_reach_programs_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let spaced = dir.path().join("spaced dir");
+        std::fs::create_dir_all(&spaced).unwrap();
+        std::fs::write(spaced.join("sample.txt"), "hello world\nother line\n").unwrap();
+
+        let found = run_win(
+            dir.path(),
+            json!({"command": "findstr /C:\"hello world\" \"spaced dir\\sample.txt\""}),
+            ApprovalDecision::Approved,
+        )
+        .await;
+        assert_eq!(found["status"], "completed", "{found}");
+        assert_eq!(found["exit_code"], 0, "{found}");
+        let output = found["output"].as_str().unwrap_or("");
+        assert!(output.contains("hello world"), "{found}");
+        assert!(!output.contains("other line"), "{found}");
+
+        let echoed = run_win(
+            dir.path(),
+            json!({"command": "echo \"quoted phrase\""}),
+            ApprovalDecision::Approved,
+        )
+        .await;
+        assert_eq!(echoed["status"], "completed", "{echoed}");
+        let out = echoed["output"].as_str().unwrap_or("");
+        assert!(out.contains("\"quoted phrase\""), "{echoed}");
+        assert!(
+            !out.contains("\\\""),
+            "quotes must not be escaped: {echoed}"
+        );
     }
 
     #[tokio::test]
