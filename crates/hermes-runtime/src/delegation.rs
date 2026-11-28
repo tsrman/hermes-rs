@@ -672,13 +672,15 @@ async fn run_child(
         .delegation
         .register_live(subagent_id.clone(), task.goal.clone());
     let inner = run_child_inner(
-        index,
-        subagent_id.clone(),
-        task,
-        initial_history,
-        followup_query,
-        Arc::clone(&stop_flag),
-        Arc::clone(&steer_queue),
+        ChildRunSpec {
+            index,
+            subagent_id: subagent_id.clone(),
+            task,
+            initial_history,
+            followup_query,
+            stop_flag: Arc::clone(&stop_flag),
+            steer_queue: Arc::clone(&steer_queue),
+        },
         family,
     );
     let mut run = match family.delegation.settings.child_timeout_seconds {
@@ -711,17 +713,26 @@ async fn run_child(
     run
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn run_child_inner(
+struct ChildRunSpec<'a> {
     index: usize,
     subagent_id: String,
-    task: &Task,
+    task: &'a Task,
     initial_history: Option<TurnHistory>,
     followup_query: Option<String>,
     stop_flag: Arc<AtomicBool>,
     steer_queue: Arc<Mutex<Vec<String>>>,
-    family: &Family<'_>,
-) -> ChildRun {
+}
+
+async fn run_child_inner(spec: ChildRunSpec<'_>, family: &Family<'_>) -> ChildRun {
+    let ChildRunSpec {
+        index,
+        subagent_id,
+        task,
+        initial_history,
+        followup_query,
+        stop_flag,
+        steer_queue,
+    } = spec;
     let Family {
         options: parent,
         delegation,

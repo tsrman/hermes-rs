@@ -1330,7 +1330,6 @@ pub(crate) async fn ensure(
     Ok(supervisor)
 }
 
-#[allow(dead_code)]
 pub(crate) async fn stop(task_id: &str) {
     let key = if task_id.trim().is_empty() {
         "default"

@@ -221,11 +221,13 @@ impl<'a> FileWorkspace<'a> {
                         path,
                         &resolved,
                         &extracted,
-                        raw_bytes.len(),
-                        offset,
-                        limit,
-                        observe,
-                        true,
+                        PageSlice {
+                            size: raw_bytes.len(),
+                            offset,
+                            limit,
+                            observe,
+                            extracted_document: true,
+                        },
                     );
                 }
                 Err(err) if crate::doc_extract::is_binary_document(&resolved) => {
@@ -246,26 +248,30 @@ impl<'a> FileWorkspace<'a> {
             path,
             &resolved,
             &data,
-            data.len(),
-            offset,
-            limit,
-            true,
-            false,
+            PageSlice {
+                size: data.len(),
+                offset,
+                limit,
+                observe: true,
+                extracted_document: false,
+            },
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn paginate_text_result(
         &mut self,
         path: &str,
         resolved: &Path,
         data: &str,
-        size: usize,
-        offset: u64,
-        limit: u64,
-        observe: bool,
-        extracted_document: bool,
+        page: PageSlice,
     ) -> Result<Value, String> {
+        let PageSlice {
+            size,
+            offset,
+            limit,
+            observe,
+            extracted_document,
+        } = page;
         // A leading BOM belongs to the first page only, and is not shown.
         let shown_data = if offset == 1 {
             data.strip_prefix('\u{feff}').unwrap_or(data)
@@ -671,15 +677,15 @@ impl<'a> FileWorkspace<'a> {
         let found =
             crate::fuzzy::find_and_replace(&original, old, new, args.replace_all, &mut notes);
         if found.error.is_some() || found.count == 0 {
-            return Ok(Prepared::Done(self.patch_miss(
-                &target.path,
-                &args.path,
-                &original,
+            return Ok(Prepared::Done(self.patch_miss(PatchMissArgs {
+                path: &target.path,
+                shown: &args.path,
+                content: &original,
                 old,
                 new,
-                found.count,
-                found.error,
-            )));
+                count: found.count,
+                error: found.error,
+            })));
         }
         // Models send bare-LF strings; keep the file's line endings.
         let mut content = found.content;
@@ -730,17 +736,16 @@ impl<'a> FileWorkspace<'a> {
 
     /// The answer for a patch that matched nothing: an already-applied edit is a no-op success;
     /// otherwise the error carries a "Did you mean" snippet and, after repeated misses, a hint.
-    #[allow(clippy::too_many_arguments)]
-    fn patch_miss(
-        &mut self,
-        path: &Path,
-        shown: &str,
-        content: &str,
-        old: &str,
-        new: &str,
-        count: usize,
-        error: Option<String>,
-    ) -> Value {
+    fn patch_miss(&mut self, args: PatchMissArgs<'_>) -> Value {
+        let PatchMissArgs {
+            path,
+            shown,
+            content,
+            old,
+            new,
+            count,
+            error,
+        } = args;
         if crate::fuzzy::is_already_applied(content, old, new) {
             return json!({"success": true, "no_change": true, "note": format!(
                 "File already contains the target text — the edit appears to be already applied to {}. No write performed; do not re-send this patch.",
@@ -764,6 +769,26 @@ impl<'a> FileWorkspace<'a> {
         }
         result
     }
+}
+
+/// Parameters for paginating a text/document read result.
+struct PageSlice {
+    size: usize,
+    offset: u64,
+    limit: u64,
+    observe: bool,
+    extracted_document: bool,
+}
+
+/// Parameters describing a failed patch match.
+struct PatchMissArgs<'a> {
+    path: &'a Path,
+    shown: &'a str,
+    content: &'a str,
+    old: &'a str,
+    new: &'a str,
+    count: usize,
+    error: Option<String>,
 }
 
 /// What preparing a patch produced.

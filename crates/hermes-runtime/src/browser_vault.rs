@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
 use chrono::DateTime;
 use ring::hmac;
 use ring::rand::{SecureRandom, SystemRandom};
@@ -190,7 +191,7 @@ fn add_round_key(state: &mut [u8; 16], rk: &[u8; 16]) {
     }
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn aes128_encrypt_block(rk: &[[u8; 16]; 11], block: &[u8; 16]) -> [u8; 16] {
     let mut s = *block;
     add_round_key(&mut s, &rk[0]);
@@ -267,7 +268,7 @@ fn aes128_decrypt_block(rk: &[[u8; 16]; 11], block: &[u8; 16]) -> [u8; 16] {
     s
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn aes128_cbc_encrypt(key: &[u8; 16], iv: &[u8; 16], plaintext: &[u8]) -> Vec<u8> {
     let rk = aes128_expand_key(key);
     let pad_len = 16 - (plaintext.len() % 16);
@@ -348,7 +349,7 @@ fn fernet_generate_key() -> Result<String, String> {
     Ok(fernet_b64_encode(&raw))
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn fernet_encrypt_with_time(
     raw_key: &[u8],
     plaintext: &[u8],
@@ -368,7 +369,7 @@ fn fernet_encrypt_with_time(
     Ok(fernet_b64_encode(&payload).into_bytes())
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn fernet_encrypt(raw_key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -454,7 +455,7 @@ fn base32_decode(input: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn normalize_otp_secret(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -682,7 +683,7 @@ impl VaultStore {
         Ok(env.items)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn write_all_locked(&self, items: &[VaultRecord]) -> Result<(), String> {
         self.ensure_dir()?;
         let key = self.load_or_create_key()?;
@@ -723,7 +724,7 @@ impl VaultStore {
         Ok((meta, rec.secret))
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn add_item(
         &self,
         kind: &str,
