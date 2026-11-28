@@ -38,7 +38,7 @@ fn names(clients: &McpClients) -> Vec<String> {
 
 #[tokio::test]
 async fn lists_paginated_tools_and_returns_results() {
-    let (mut clients, warnings) = McpClients::start(&[config("my-server", 10)]).await;
+    let (clients, warnings) = McpClients::start(&[config("my-server", 10)]).await;
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(
         names(&clients),
@@ -80,7 +80,7 @@ async fn server_gets_a_filtered_environment() {
     server
         .env
         .insert("HERMES_TEST_CONFIGURED".into(), "yes".into());
-    let (mut clients, _) = McpClients::start(&[server]).await;
+    let (clients, _) = McpClients::start(&[server]).await;
     let output = parsed(clients.call("mcp__env__env", "{}").await);
     let flags: Value = serde_json::from_str(output["result"].as_str().unwrap()).unwrap();
     assert_eq!(flags, json!({"parent_secret": false, "configured": "yes"}));
@@ -89,7 +89,7 @@ async fn server_gets_a_filtered_environment() {
 
 #[tokio::test]
 async fn call_timeout_is_reported_as_an_error() {
-    let (mut clients, _) = McpClients::start(&[config("s", 1)]).await;
+    let (clients, _) = McpClients::start(&[config("s", 1)]).await;
     let output = parsed(clients.call("mcp__s__slow", "{}").await);
     assert!(output["error"].as_str().unwrap().contains("timed out"));
     clients.shutdown().await;
@@ -99,7 +99,7 @@ async fn call_timeout_is_reported_as_an_error() {
 async fn unavailable_server_is_a_warning_and_others_still_work() {
     let mut missing = config("missing", 5);
     missing.command = "/nonexistent/hermes-mcp".into();
-    let (mut clients, warnings) = McpClients::start(&[missing, config("ok", 10)]).await;
+    let (clients, warnings) = McpClients::start(&[missing, config("ok", 10)]).await;
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("missing"));
     assert!(clients.owns("mcp__ok__echo"));
@@ -109,7 +109,7 @@ async fn unavailable_server_is_a_warning_and_others_still_work() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn shutdown_stops_the_server_process_group() {
-    let (mut clients, _) = McpClients::start(&[config("g", 10)]).await;
+    let (clients, _) = McpClients::start(&[config("g", 10)]).await;
     let output = parsed(clients.call("mcp__g__spawn_child", "{}").await);
     let pid: u32 = output["result"].as_str().unwrap().parse().unwrap();
     let alive = |pid: u32| {
@@ -176,7 +176,7 @@ fn assert_cancelled_as_recorded(log: &PathBuf) {
 #[tokio::test]
 async fn a_dropped_call_is_cancelled_on_the_server_as_the_reference_does() {
     let (server, log, _dir) = logging("s", 30);
-    let (mut clients, _) = McpClients::start(&[server]).await;
+    let (clients, _) = McpClients::start(&[server]).await;
     // The turn is cancelled while the call waits: its future is dropped.
     let waited = tokio::time::timeout(
         std::time::Duration::from_millis(400),
@@ -192,7 +192,7 @@ async fn a_dropped_call_is_cancelled_on_the_server_as_the_reference_does() {
 #[tokio::test]
 async fn a_call_that_times_out_is_cancelled_and_the_connection_stays_usable() {
     let (server, log, _dir) = logging("s", 1);
-    let (mut clients, _) = McpClients::start(&[server]).await;
+    let (clients, _) = McpClients::start(&[server]).await;
     let output = parsed(clients.call("mcp__s__slow", "{}").await);
     assert_eq!(
         output["error"],
@@ -208,7 +208,7 @@ async fn a_call_that_times_out_is_cancelled_and_the_connection_stays_usable() {
 #[tokio::test]
 async fn finished_calls_are_never_cancelled() {
     let (server, log, _dir) = logging("s", 10);
-    let (mut clients, _) = McpClients::start(&[server]).await;
+    let (clients, _) = McpClients::start(&[server]).await;
     parsed(clients.call("mcp__s__echo", r#"{"text":"a"}"#).await);
     parsed(clients.call("mcp__s__fail", "{}").await);
     clients.shutdown().await;
@@ -219,13 +219,13 @@ async fn finished_calls_are_never_cancelled() {
 
 #[tokio::test]
 async fn resources_are_offered_only_when_the_server_advertises_them() {
-    let (mut clients, _) = McpClients::start(&[config("plain", 10)]).await;
+    let (clients, _) = McpClients::start(&[config("plain", 10)]).await;
     assert!(!clients.owns("mcp__plain__list_resources"));
     clients.shutdown().await;
 
     let mut server = config("docs", 10);
     server.env.insert("HERMES_MCP_RESOURCES".into(), "1".into());
-    let (mut clients, _) = McpClients::start(&[server.clone()]).await;
+    let (clients, _) = McpClients::start(&[server.clone()]).await;
     // The utilities come after the server's own tools.
     let all = names(&clients);
     assert_eq!(
@@ -251,7 +251,7 @@ async fn resources_are_offered_only_when_the_server_advertises_them() {
     clients.shutdown().await;
 
     server.resources = false;
-    let (mut clients, _) = McpClients::start(&[server]).await;
+    let (clients, _) = McpClients::start(&[server]).await;
     assert!(!clients.owns("mcp__docs__list_resources"));
     clients.shutdown().await;
 }
@@ -260,7 +260,7 @@ async fn resources_are_offered_only_when_the_server_advertises_them() {
 async fn answers_are_the_reference_text_with_python_separators() {
     let mut server = config("my-server", 10);
     server.env.insert("HERMES_MCP_EXTRA".into(), "1".into());
-    let (mut clients, warnings) = McpClients::start(&[server]).await;
+    let (clients, warnings) = McpClients::start(&[server]).await;
     assert!(warnings.is_empty(), "{warnings:?}");
     let echoed = clients
         .call("mcp__my_server__echo", r#"{"text":"x"}"#)
@@ -289,7 +289,7 @@ async fn names_two_tools_share_are_given_to_neither_and_a_server_keeps_what_it_h
     first.env.insert("HERMES_MCP_RESOURCES".into(), "1".into());
     let mut second = config("a_b", 10);
     second.env.insert("HERMES_MCP_EXTRA".into(), "1".into());
-    let (mut clients, warnings) = McpClients::start(&[first, second]).await;
+    let (clients, warnings) = McpClients::start(&[first, second]).await;
     assert!(warnings.is_empty(), "{warnings:?}");
     // `dup-x` and `dup_x` are the same name once sanitised: neither is exposed. A tool listed
     // twice is exposed once. `list.resources` and `list-resources` are one name, so neither is exposed and the utility
@@ -320,7 +320,7 @@ async fn a_server_that_lists_its_tools_too_slowly_gets_the_connect_timeout_not_t
     server.connect_timeout_secs = 1;
     server.env.insert("HERMES_MCP_SLOW_LIST".into(), "1".into());
     let started = std::time::Instant::now();
-    let (mut clients, warnings) = McpClients::start(&[server]).await;
+    let (clients, warnings) = McpClients::start(&[server]).await;
     assert!(started.elapsed() < std::time::Duration::from_secs(10));
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert!(warnings[0].contains("timed out"), "{warnings:?}");

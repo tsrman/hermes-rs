@@ -972,11 +972,7 @@ where
             request.mcp_result_size_chars,
         )
         .await;
-        (
-            std::sync::Arc::new(tokio::sync::Mutex::new(clients)),
-            warnings,
-            false,
-        )
+        (std::sync::Arc::new(clients), warnings, false)
     };
     for warning in warnings {
         if json_mode {
@@ -1197,7 +1193,7 @@ where
     };
     if !receiving || (!json_mode && !emit(Event::Stdout("\n".into()))) {
         if !shared_mcp {
-            mcp.lock().await.shutdown().await;
+            mcp.shutdown().await;
         }
         return Err("chat output was interrupted".into());
     }
@@ -1230,7 +1226,7 @@ where
                 }
             }
             if !shared_mcp {
-                mcp.lock().await.shutdown().await;
+                mcp.shutdown().await;
             }
             if json_mode {
                 emit(Event::Stdout(json_done(0, "completed")));
@@ -1239,7 +1235,7 @@ where
         }
         TurnOutcome::Interrupted(_) => {
             if !shared_mcp {
-                mcp.lock().await.shutdown().await;
+                mcp.shutdown().await;
             }
             if json_mode {
                 emit(Event::Stdout(json_done(130, "interrupted")));
@@ -1248,7 +1244,7 @@ where
         }
         TurnOutcome::IterationLimit => {
             if !shared_mcp {
-                mcp.lock().await.shutdown().await;
+                mcp.shutdown().await;
             }
             if json_mode {
                 emit(Event::Stdout(json_done(1, "iteration_limit")));

@@ -708,7 +708,7 @@ pub enum TurnEvent<'a> {
 #[derive(Clone, Copy)]
 pub struct TurnOptions<'a> {
     /// Connected MCP servers whose tools are added to every request.
-    pub mcp: Option<&'a tokio::sync::Mutex<McpClients>>,
+    pub mcp: Option<&'a McpClients>,
     /// Web backends; the web tools are offered only when one is configured.
     pub web: Option<&'a WebSettings>,
     /// The browser's DevTools endpoint; `browser_cdp` is offered when one is configured.
@@ -861,7 +861,7 @@ where
     env.skill_desc_limit = history.skills.desc_limit();
     let mut tools = tools::offered_schemas(&env);
     if let Some(mcp) = options.mcp {
-        tools.extend(mcp.lock().await.schemas());
+        tools.extend(mcp.schemas());
     }
     tools::sort_by_name(&mut tools);
     tools::append_bridge(&env, &mut tools);
@@ -1139,7 +1139,6 @@ where
             let started = std::time::Instant::now();
             let mcp_tool = match options.mcp {
                 Some(mcp) if name.starts_with("mcp__") && !through_bridge => {
-                    let mcp = mcp.lock().await;
                     mcp.owns(&name).then_some(())
                 }
                 _ => None,
@@ -1148,12 +1147,7 @@ where
                 answer
             } else if mcp_tool.is_some() {
                 match options.mcp {
-                    Some(mcp) => {
-                        mcp.lock()
-                            .await
-                            .call_with_id(&name, &arguments, &call.id)
-                            .await
-                    }
+                    Some(mcp) => mcp.call_with_id(&name, &arguments, &call.id).await,
                     None => json!({"error": format!("Unknown tool: {name}")}),
                 }
             } else if let Some(tool) = if through_bridge {

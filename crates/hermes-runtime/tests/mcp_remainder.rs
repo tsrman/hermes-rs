@@ -216,7 +216,7 @@ fn prompt_rendering_and_config_budget_parsing_match_reference() {
 
 #[tokio::test]
 async fn port_level_errors_use_python_json_separators() {
-    let mut clients = McpClients::default();
+    let clients = McpClients::default();
     let unknown = clients.call("mcp__missing__tool", "{}").await;
     assert_eq!(
         unknown.as_str(),
@@ -290,7 +290,7 @@ impl Drop for SseFixture {
 async fn legacy_sse_transport_calls_tools_prompts_cancels_and_spills_over() {
     let fixture = SseFixture::start(&["--prompts"]);
     let profile = tempfile::tempdir().unwrap();
-    let (mut clients, warnings) = McpClients::start_with_options(
+    let (clients, warnings) = McpClients::start_with_options(
         &[fixture.config(1.0, true)],
         Some(profile.path().to_path_buf()),
         200,
@@ -406,7 +406,7 @@ async fn legacy_sse_transport_calls_tools_prompts_cancels_and_spills_over() {
     );
 
     // prompts: false disables prompt utilities even when server advertises capability.
-    let (mut disabled, _) = McpClients::start(&[fixture.config(5.0, false)]).await;
+    let (disabled, _) = McpClients::start(&[fixture.config(5.0, false)]).await;
     assert!(disabled.owns("mcp__legacy__echo"));
     assert!(!disabled.owns("mcp__legacy__list_prompts"));
     assert!(!disabled.owns("mcp__legacy__get_prompt"));

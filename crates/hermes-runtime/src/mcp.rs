@@ -1192,7 +1192,7 @@ struct Tool {
 
 struct Server {
     config: McpServerConfig,
-    transport: Transport,
+    transport: Mutex<Transport>,
 }
 
 /// Why a request through [`McpClients::request_recovering`] gave no result.
@@ -1208,7 +1208,7 @@ enum Failure {
 
 pub struct McpClients {
     servers: Vec<Server>,
-    tools: Vec<Tool>,
+    tools: std::sync::RwLock<Vec<Tool>>,
     profile: Option<PathBuf>,
     mcp_result_size_chars: usize,
 }
@@ -1217,7 +1217,7 @@ impl Default for McpClients {
     fn default() -> Self {
         Self {
             servers: Vec::new(),
-            tools: Vec::new(),
+            tools: std::sync::RwLock::new(Vec::new()),
             profile: None,
             mcp_result_size_chars: DEFAULT_MCP_RESULT_SIZE_CHARS,
         }
@@ -1303,7 +1303,7 @@ impl McpClients {
     ) -> (Self, Vec<String>) {
         let mut clients = Self {
             servers: Vec::new(),
-            tools: Vec::new(),
+            tools: std::sync::RwLock::new(Vec::new()),
             profile,
             mcp_result_size_chars,
         };
@@ -1333,7 +1333,7 @@ impl McpClients {
         let index = self.servers.len();
         self.servers.push(Server {
             config: config.clone(),
-            transport,
+            transport: Mutex::new(transport),
         });
         self.register(index, discovered);
         Ok(())
@@ -1344,8 +1344,9 @@ impl McpClients {
     /// Names follow `_resolve_name_collisions`: a tool twice under one name is kept once, two
     /// tools that sanitise onto one name are both skipped, a resource tool never shadows a tool
     /// of the server, and a name another server holds stays with that server.
-    fn register(&mut self, index: usize, discovered: Discovered) {
-        self.tools.retain(|tool| tool.server != index);
+    fn register(&self, index: usize, discovered: Discovered) {
+        let mut tools = self.tools.write().unwrap_or_else(PoisonError::into_inner);
+        tools.retain(|tool| tool.server != index);
         let config_name = self.servers[index].config.name.clone();
         let mut natives: Vec<(String, &Value)> = Vec::new();
         for tool in &discovered.tools {
@@ -1365,7 +1366,7 @@ impl McpClients {
         };
         for (name, tool) in &natives {
             let exposed = exposed_of(name);
-            if shared(&exposed) > 1 || self.owns(&exposed) {
+            if shared(&exposed) > 1 || tools.iter().any(|t| t.exposed == exposed) {
                 continue;
             }
             let schema = json!({
@@ -1380,7 +1381,7 @@ impl McpClients {
                     }
                 }
             });
-            self.tools.push(Tool {
+            tools.push(Tool {
                 exposed,
                 server: index,
                 kind: Kind::Remote,
@@ -1437,14 +1438,14 @@ impl McpClients {
         // A tool of the server with the same name wins: the utilities are optional.
         for (kind, key, description, parameters) in utilities {
             let exposed = exposed_of(key);
-            if shared(&exposed) > 0 || self.owns(&exposed) {
+            if shared(&exposed) > 0 || tools.iter().any(|t| t.exposed == exposed) {
                 continue;
             }
             let schema = json!({
                 "type": "function",
                 "function": {"name": exposed, "description": description, "parameters": parameters}
             });
-            self.tools.push(Tool {
+            tools.push(Tool {
                 exposed,
                 server: index,
                 kind,
@@ -1456,22 +1457,23 @@ impl McpClients {
     }
 
     pub fn schemas(&self) -> Vec<Value> {
-        self.tools.iter().map(|tool| tool.schema.clone()).collect()
+        let tools = self.tools.read().unwrap_or_else(PoisonError::into_inner);
+        tools.iter().map(|tool| tool.schema.clone()).collect()
     }
 
     pub fn owns(&self, name: &str) -> bool {
-        self.tools.iter().any(|tool| tool.exposed == name)
+        let tools = self.tools.read().unwrap_or_else(PoisonError::into_inner);
+        tools.iter().any(|tool| tool.exposed == name)
     }
 
     /// Initialize server `index` again after its session expired and list its tools again.
-    async fn reconnect(&mut self, index: usize) -> bool {
-        let server = &mut self.servers[index];
-        let Transport::Http(connection) = &mut server.transport else {
+    async fn reconnect(&self, index: usize, transport: &mut Transport) -> bool {
+        let Transport::Http(connection) = transport else {
             return false;
         };
         connection.reset_session();
-        let config = server.config.clone();
-        let outcome = timeout(RECONNECT_LIMIT, handshake(&mut server.transport, &config)).await;
+        let config = self.servers[index].config.clone();
+        let outcome = timeout(RECONNECT_LIMIT, handshake(transport, &config)).await;
         match outcome {
             Ok(Ok(discovered)) => {
                 self.register(index, discovered);
@@ -1484,7 +1486,7 @@ impl McpClients {
     /// One request to server `index`. When its session has expired the server is initialized
     /// again; the request is then repeated once if `replay` allows it.
     async fn request_recovering(
-        &mut self,
+        &self,
         index: usize,
         method: &str,
         params: Value,
@@ -1496,29 +1498,23 @@ impl McpClients {
                 .timeout_secs
                 .clamp(0.001, MAX_TIMEOUT_SECS),
         );
-        if matches!(&self.servers[index].transport, Transport::Http(c) if c.down)
-            && !self.reconnect(index).await
+        let mut transport = self.servers[index].transport.lock().await;
+        if matches!(&*transport, Transport::Http(c) if c.down)
+            && !self.reconnect(index, &mut transport).await
         {
             return Err(Failure::Down);
         }
-        let first = self.servers[index]
-            .transport
-            .request(method, params.clone(), limit)
-            .await;
+        let first = transport.request(method, params.clone(), limit).await;
         if !matches!(first, Err(RpcError::SessionExpired)) {
             return first.map_err(Failure::Rpc);
         }
-        let reconnected = self.reconnect(index).await;
+        let reconnected = self.reconnect(index, &mut transport).await;
         if !replay {
             return Err(Failure::Uncertain { reconnected });
         }
         if reconnected {
             // Only an answer counts: a failed repeat leaves the first failure as the error.
-            if let Ok(value) = self.servers[index]
-                .transport
-                .request(method, params, limit)
-                .await
-            {
+            if let Ok(value) = transport.request(method, params, limit).await {
                 return Ok(value);
             }
         }
@@ -1526,17 +1522,22 @@ impl McpClients {
     }
 
     /// Call a tool and return the result in the shape of a local tool output.
-    pub async fn call(&mut self, name: &str, arguments: &str) -> Value {
+    pub async fn call(&self, name: &str, arguments: &str) -> Value {
         self.call_with_id(name, arguments, "mcp_call").await
     }
 
     /// Call a tool with its `tool_call_id` (used to name spillover files for oversized results).
-    pub async fn call_with_id(&mut self, name: &str, arguments: &str, tool_call_id: &str) -> Value {
-        let Some(tool) = self.tools.iter().find(|tool| tool.exposed == name) else {
+    pub async fn call_with_id(&self, name: &str, arguments: &str, tool_call_id: &str) -> Value {
+        let lookup = {
+            let tools = self.tools.read().unwrap_or_else(PoisonError::into_inner);
+            tools
+                .iter()
+                .find(|tool| tool.exposed == name)
+                .map(|tool| (tool.server, tool.kind, tool.name.clone(), tool.read_only))
+        };
+        let Some((index, kind, remote, read_only)) = lookup else {
             return tool_text(&json!({"error": format!("Unknown tool: {name}")}));
         };
-        let (index, kind, remote, read_only) =
-            (tool.server, tool.kind, tool.name.clone(), tool.read_only);
         let arguments = match serde_json::from_str::<Value>(arguments) {
             Ok(value) if value.is_object() => value,
             Ok(_) | Err(_) if arguments.trim().is_empty() => json!({}),
@@ -1607,7 +1608,7 @@ impl McpClients {
     }
 
     /// `resources/list`, all pages. The pages are not replayed as a whole: the first failure is the answer.
-    async fn list_resources(&mut self, index: usize, tool_call_id: &str) -> Value {
+    async fn list_resources(&self, index: usize, tool_call_id: &str) -> Value {
         let mut resources = Vec::new();
         let mut cursor: Option<String> = None;
         for _ in 0..MAX_LIST_PAGES {
@@ -1634,7 +1635,7 @@ impl McpClients {
     }
 
     /// `prompts/list`, all pages. The pages are not replayed as a whole: the first failure is the answer.
-    async fn list_prompts(&mut self, index: usize, tool_call_id: &str) -> Value {
+    async fn list_prompts(&self, index: usize, tool_call_id: &str) -> Value {
         let mut prompts = Vec::new();
         let mut cursor: Option<String> = None;
         for _ in 0..MAX_LIST_PAGES {
@@ -1681,12 +1682,17 @@ impl McpClients {
         tool_text(&error)
     }
 
-    /// Check persistent stdio servers between turns and transparently reconnect any child process
-    /// that exited unexpectedly. Healthy stdio and HTTP/SSE servers are left untouched.
-    pub async fn ensure_healthy(&mut self) -> Vec<String> {
+    /// Check persistent stdio servers between turns and transparently reconnect any idle child
+    /// process that exited unexpectedly. Busy servers (serving an in-flight call on another turn)
+    /// and healthy HTTP/SSE servers are left untouched without blocking.
+    pub async fn ensure_healthy(&self) -> Vec<String> {
         let mut warnings = Vec::new();
         for index in 0..self.servers.len() {
-            let dead = match &mut self.servers[index].transport {
+            let Ok(mut transport) = self.servers[index].transport.try_lock() else {
+                // Currently busy executing a call for another turn — alive and in use.
+                continue;
+            };
+            let dead = match &mut *transport {
                 Transport::Stdio(conn) => !conn.is_alive(),
                 Transport::Http(_) | Transport::Sse(_) => false,
             };
@@ -1696,14 +1702,18 @@ impl McpClients {
             let config = self.servers[index].config.clone();
             match spawn_stdio(&config) {
                 Ok(conn) => {
-                    let mut transport = Transport::Stdio(Box::new(conn));
-                    match handshake(&mut transport, &config).await {
+                    let mut fresh = Transport::Stdio(Box::new(conn));
+                    match handshake(&mut fresh, &config).await {
                         Ok(discovered) => {
-                            self.servers[index].transport = transport;
+                            *transport = fresh;
+                            drop(transport);
                             self.register(index, discovered);
                         }
                         Err(error) => {
-                            self.tools.retain(|tool| tool.server != index);
+                            self.tools
+                                .write()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .retain(|tool| tool.server != index);
                             warnings.push(format!(
                                 "MCP server {:?} exited and failed to reconnect: {error}",
                                 config.name
@@ -1712,7 +1722,10 @@ impl McpClients {
                     }
                 }
                 Err(error) => {
-                    self.tools.retain(|tool| tool.server != index);
+                    self.tools
+                        .write()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .retain(|tool| tool.server != index);
                     warnings.push(format!(
                         "MCP server {:?} exited and failed to restart: {error}",
                         config.name
@@ -1724,12 +1737,14 @@ impl McpClients {
     }
 
     /// Close stdin, give servers a moment to exit, then stop whatever remains.
-    pub async fn shutdown(&mut self) {
-        for server in &mut self.servers {
-            server.transport.close().await;
+    pub async fn shutdown(&self) {
+        for server in &self.servers {
+            server.transport.lock().await.close().await;
         }
-        self.servers.clear();
-        self.tools.clear();
+        self.tools
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
     }
 }
 
@@ -1737,7 +1752,7 @@ struct CachedMcp {
     configs: Vec<McpServerConfig>,
     profile: Option<PathBuf>,
     mcp_result_size_chars: usize,
-    clients: Arc<Mutex<McpClients>>,
+    clients: Arc<McpClients>,
 }
 
 impl CachedMcp {
@@ -1759,8 +1774,12 @@ impl CachedMcp {
 }
 
 /// Persistent pool of [`McpClients`] shared across turns in an interactive CLI session or
-/// local session owner daemon. Reuses live server connections while config is unchanged and
-/// transparently reconnects stdio servers that exited unexpectedly.
+/// local session owner daemon.
+///
+/// Reuses live server connections while config is unchanged without serializing turn startup or
+/// calls across unrelated servers. When config changes while another turn is still using the
+/// previous clients, the old clients are detached rather than force-closed so the in-flight turn
+/// finishes cleanly and `Drop` stops the old servers once the last reference is released.
 #[derive(Default)]
 pub struct McpPool {
     cached: Mutex<Option<CachedMcp>>,
@@ -1778,44 +1797,47 @@ impl McpPool {
         configs: &[McpServerConfig],
         profile: Option<PathBuf>,
         mcp_result_size_chars: usize,
-    ) -> (Arc<Mutex<McpClients>>, Vec<String>) {
+    ) -> (Arc<McpClients>, Vec<String>) {
         if configs.is_empty() {
             let old = self.cached.lock().await.take();
             if let Some(old) = old {
-                old.clients.lock().await.shutdown().await;
-            }
-            return (Arc::new(Mutex::new(McpClients::default())), Vec::new());
-        }
-
-        let existing = {
-            let guard = self.cached.lock().await;
-            match guard.as_ref() {
-                Some(entry)
-                    if entry.matches(configs, profile.as_deref(), mcp_result_size_chars) =>
-                {
-                    Some(Arc::clone(&entry.clients))
+                if let Ok(exclusive) = Arc::try_unwrap(old.clients) {
+                    exclusive.shutdown().await;
                 }
-                _ => None,
             }
-        };
-        if let Some(clients) = existing {
-            let warnings = clients.lock().await.ensure_healthy().await;
-            return (clients, warnings);
+            return (Arc::new(McpClients::default()), Vec::new());
         }
 
-        let old = self.cached.lock().await.take();
-        if let Some(old) = old {
-            old.clients.lock().await.shutdown().await;
+        // Hold the pool lock across miss-detection + connect so two simultaneous turns with a new
+        // config do not double-spawn servers, while cache hits release the lock immediately before
+        // calling `ensure_healthy()` (which uses non-blocking `try_lock()` per server).
+        let mut guard = self.cached.lock().await;
+        if let Some(entry) = guard.as_ref() {
+            if entry.matches(configs, profile.as_deref(), mcp_result_size_chars) {
+                let clients = Arc::clone(&entry.clients);
+                drop(guard);
+                let warnings = clients.ensure_healthy().await;
+                return (clients, warnings);
+            }
         }
+
+        let old = guard.take();
         let (started, warnings) =
             McpClients::start_with_options(configs, profile.clone(), mcp_result_size_chars).await;
-        let clients = Arc::new(Mutex::new(started));
-        *self.cached.lock().await = Some(CachedMcp {
+        let clients = Arc::new(started);
+        *guard = Some(CachedMcp {
             configs: configs.to_vec(),
             profile,
             mcp_result_size_chars,
             clients: Arc::clone(&clients),
         });
+        drop(guard);
+
+        if let Some(old) = old {
+            if let Ok(exclusive) = Arc::try_unwrap(old.clients) {
+                exclusive.shutdown().await;
+            }
+        }
         (clients, warnings)
     }
 
@@ -1823,7 +1845,7 @@ impl McpPool {
     pub async fn shutdown(&self) {
         let old = self.cached.lock().await.take();
         if let Some(old) = old {
-            old.clients.lock().await.shutdown().await;
+            old.clients.shutdown().await;
         }
     }
 }
@@ -2655,7 +2677,7 @@ mod tests {
         let pool = McpPool::new();
         let (clients, warnings) = pool.acquire(&[], None, DEFAULT_MCP_RESULT_SIZE_CHARS).await;
         assert!(warnings.is_empty());
-        assert!(clients.lock().await.schemas().is_empty());
+        assert!(clients.schemas().is_empty());
         pool.shutdown().await;
 
         let a = McpServerConfig {

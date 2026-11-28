@@ -867,6 +867,144 @@ class OwnerV2ProtocolTest(unittest.TestCase):
             time.sleep(0.05)
         self.assertFalse(alive, f"MCP server PID {pid} lingered after owner shutdown")
 
+    def test_slow_mcp_call_does_not_block_parallel_turn_startup_or_other_server(self) -> None:
+        """A long-running MCP tool call in turn 1 must not block turn 2 startup or a second MCP server."""
+        server_script = ROOT / "compat" / "mcp_fixture_server.py"
+        work_dir = Path(self.tmp.name) / "mcp-parallel-work"
+        work_dir.mkdir()
+
+        turn2_echo = []
+
+        def respond(wfile, _idx, body):
+            last = body["messages"][-1]
+            if last["role"] == "tool":
+                turn2_echo.append(json.loads(last["content"]))
+                _send_sse_chunk(wfile, {"content": "turn2-done"}, finish_reason="stop")
+                _send_sse_done(wfile)
+                return
+            query = last["content"]
+            if query == "RUN_SLOW":
+                _send_sse_chunk(
+                    wfile,
+                    {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_slow_1",
+                                "type": "function",
+                                "function": {"name": "mcp__slowsrv__slow", "arguments": "{}"},
+                            }
+                        ]
+                    },
+                )
+                _send_sse_chunk(wfile, {}, finish_reason="tool_calls")
+                _send_sse_done(wfile)
+                return
+            _send_sse_chunk(
+                wfile,
+                {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_fast_2",
+                            "type": "function",
+                            "function": {
+                                "name": "mcp__fastsrv__echo",
+                                "arguments": json.dumps({"text": "parallel-ok"}),
+                            },
+                        }
+                    ]
+                },
+            )
+            _send_sse_chunk(wfile, {}, finish_reason="tool_calls")
+            _send_sse_done(wfile)
+
+        llm = _ScriptedSseServer(respond)
+        llm.start()
+        owner = self._start_owner(self.profile, llm.base_url)
+        with (self.profile / "config.yaml").open("a", encoding="utf-8") as cfg:
+            cfg.write(
+                "mcp_servers:\n"
+                "  slowsrv:\n"
+                f"    command: {json.dumps(sys.executable)}\n"
+                f"    args: [{json.dumps(str(server_script))}]\n"
+                "  fastsrv:\n"
+                f"    command: {json.dumps(sys.executable)}\n"
+                f"    args: [{json.dumps(str(server_script))}]\n"
+            )
+
+        try:
+            # Start Turn 1, which blocks inside `mcp__slowsrv__slow` (30s).
+            tid1 = self._rpc(
+                self.profile,
+                {
+                    "type": "start_turn",
+                    "session_id": None,
+                    "query": "RUN_SLOW",
+                    "model": "fixture",
+                    "cwd": str(work_dir),
+                    "yolo": True,
+                },
+            )["turn_id"]
+            with self._connect(self.profile) as sock1:
+                _write_frame(
+                    sock1,
+                    {
+                        "version": 2,
+                        "command": {"type": "subscribe_turn", "turn_id": tid1, "after_seq": 0},
+                    },
+                )
+                while True:
+                    ev = _read_frame(sock1)["event"]
+                    if ev["kind"] == "tool_started" and ev["name"] == "mcp__slowsrv__slow":
+                        break
+
+                # While Turn 1 is still blocked in `slowsrv`, start Turn 2 using `fastsrv`.
+                t0 = time.monotonic()
+                tid2 = self._rpc(
+                    self.profile,
+                    {
+                        "type": "start_turn",
+                        "session_id": None,
+                        "query": "RUN_FAST",
+                        "model": "fixture",
+                        "cwd": str(work_dir),
+                        "yolo": True,
+                    },
+                )["turn_id"]
+                with self._connect(self.profile) as sock2:
+                    _write_frame(
+                        sock2,
+                        {
+                            "version": 2,
+                            "command": {"type": "subscribe_turn", "turn_id": tid2, "after_seq": 0},
+                        },
+                    )
+                    while True:
+                        ev2 = _read_frame(sock2)["event"]
+                        if ev2["kind"] == "done":
+                            self.assertEqual(ev2["exit_code"], 0)
+                            break
+                elapsed = time.monotonic() - t0
+                self.assertLess(
+                    elapsed,
+                    10.0,
+                    f"Turn 2 was blocked behind Turn 1's slow MCP call ({elapsed:.2f}s)",
+                )
+                self.assertEqual(len(turn2_echo), 1)
+                self.assertEqual(turn2_echo[0].get("result"), "parallel-ok")
+
+                # Cancel Turn 1 cleanly.
+                self._rpc(self.profile, {"type": "cancel_turn", "turn_id": tid1})
+                while True:
+                    ev = _read_frame(sock1)["event"]
+                    if ev["kind"] == "done":
+                        self.assertTrue(ev["cancelled"])
+                        break
+        finally:
+            self._stop_owner(owner)
+            llm.stop()
+
 
 if __name__ == "__main__":
     unittest.main()
