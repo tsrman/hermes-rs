@@ -55,7 +55,7 @@ P0 относится к первому CLI-релизу, P3 — к заключ
 | --- | --- | --- |
 | `read_file`, `search_files` | всегда | Пути ограничены рабочей папкой, защищённые пути скрыты; при явном абсолютном `path` внутри рабочей папки `search_files` возвращает абсолютные пути (как эталон); `read_file` дополнительно допускает чтение файлов в `<профиль>/cache/{spillover,documents}`, извлекает документы (`.ipynb`, `.docx`, `.xlsx`, `.pptx`, `.pdf`, `.db`/`.sqlite`/`.sqlite3`, до 50 МБ) и автоматически прикрепляет локальные изображения (PNG/JPEG/GIF/WebP, `is_image: true`) в мультимодальном ходе |
 | `write_file`, `patch` | Linux, macOS и Windows, есть кому одобрить | Атомарная запись через `openat`/`renameat`/`linkat` на Unix и `file_tools/windows.rs` (`MoveFileExW`) на Windows; блокируется перезапись бинарных документов и SQLite sidecar (`-wal`/`-shm`/`-journal`) |
-| `terminal` | Linux и macOS | Без человека предлагается, помеченная детектором команда отклоняется, если `single_query_mode`/`cron_mode` не `approve`. Файлы инициализации оболочки читаются (`terminal.shell_init_files`); экспортированные переменные и рабочий каталог сохраняются между командами сессии (`TERMINAL_LOCAL_PERSISTENT`, по умолчанию включено; снимки держатся только в памяти без записи на диск). Поддерживает `background=true`, `pty=true` (реальный POSIX PTY), `notify_on_complete` и `watch_patterns` |
+| `terminal` | Linux, macOS и Windows | Без человека предлагается, помеченная детектором команда отклоняется, если `single_query_mode`/`cron_mode` не `approve`. На Linux и macOS: файлы инициализации оболочки (`terminal.shell_init_files`), сохранение экспортированных переменных и рабочего каталога (`TERMINAL_LOCAL_PERSISTENT`, по умолчанию включено; снимки в памяти), `background=true`, `pty=true` (реальный POSIX PTY), `notify_on_complete` и `watch_patterns`. На Windows: `cmd.exe /D /C` с проверкой `workdir` и очисткой всего дерева процессов через Win32 Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) |
 | `process_manage` | вместе с `terminal` | Фоновые процессы (только Unix): `list`, `poll` (включая `acknowledge=true`), `log`, `wait`, `kill`, интерактивные `write`/`submit`/`close` для PTY и доставка `[BACKGROUND PROCESS NOTIFICATION]` в ход (`turn.rs`) |
 | `execute_code` | есть кому одобрить (на Unix вместе с `terminal`; на Windows и без `python3` работает встроенный RustPython) | Постоянное ядро: внешний `python3` (Unix, каждый запуск одобряется отдельно) или встроенное песочное ядро **RustPython** (`embedded_python.rs`, Windows / Unix без `python3` / `HERMES_PYTHON_ENGINE=embedded`) + 6 нативных Rust-хелперов `xlsx_read`/`xlsx_write`, `docx_read`/`docx_write`, `pptx_read`/`pptx_write` с атомарной записью, защитой путей с учётом активного профиля, подтверждением записи и бюджетом распаковки ZIP 50 МБ |
 | `delegate_task` | глубина `< delegation.max_spawn_depth` (по умолчанию 1) | Параллельные подагенты со своим маршрутом, таймаутом `delegation.child_timeout_seconds`, уникальными `subagent_id`, одиночным `goal`, вложенностью `max_spawn_depth` и управлением `list`/`steer`/`stop`/`continue` (в не-oneshot сессиях) |
@@ -105,12 +105,13 @@ P0 относится к первому CLI-релизу, P3 — к заключ
 
 | Возможность | Linux | macOS | Windows |
 | --- | --- | --- | --- |
-| Чат, сессии, память, MCP, web, cron | Да | Да | Чат, сессии, память, MCP, web и CI-тесты (`CLI & runtime (Windows)`) проходят; запись `cron/jobs.json` и `cron tick` только Unix |
+| Чат, сессии, память, MCP, web, cron | Да | Да | Да (включая запись `cron/jobs.json`, `cron tick` на `File::try_lock` и зелёный CI `CLI & runtime (Windows)`) |
 | Запись файлов (`write_file`, `patch`) | Да | Да | Да (атомарно через `file_tools/windows.rs`, `MoveFileExW`) |
 | `execute_code` + Office-хелперы (`xlsx`/`docx`/`pptx`) | Да (`python3` и встроенный RustPython) | Да (`python3` и встроенный RustPython) | Да (встроенный RustPython + нативные Office-хелперы) |
 | Локальный владелец (`hsr owner`) и GUI (`hsr-gui`) | Да (Unix-сокет; GNU и musl) | `owner` да (Unix-сокет); GUI-релиз не собирается | Да (аутентифицированный loopback TCP; `hsr-gui.exe` + опциональная Authenticode-подпись) |
-| `terminal`, `process_manage` | Да | Да | Нет (отложено) |
-| Детектор опасных команд | Да | Да (включая `osascript`) | Не используется без `terminal`; пути Windows не разбираются |
+| `terminal` | Да (POSIX + PTY + `TERMINAL_LOCAL_PERSISTENT`) | Да (POSIX + PTY + `TERMINAL_LOCAL_PERSISTENT`) | Да (`cmd.exe /D /C` с подтверждением и очисткой дерева процессов через Win32 Job Object) |
+| `process_manage` | Да | Да | Нет (Unix-only) |
+| Детектор опасных команд | Да | Да (включая `osascript`) | Базовые POSIX-правила работают; Windows-специфичные пути не разбираются |
 
 ## Результаты чтения исходников
 

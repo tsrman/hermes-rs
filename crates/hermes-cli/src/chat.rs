@@ -8,7 +8,7 @@ use clap::{Args, ValueEnum};
 use hermes_runtime::config::{
     load_chat_settings, CompactionSettings, ResumeDisplaySettings, UiModeSetting,
 };
-use hermes_runtime::mcp::{McpClients, McpServerConfig};
+use hermes_runtime::mcp::{McpClients, McpPool, McpServerConfig};
 use hermes_runtime::memory_tool::MemorySettings;
 use hermes_runtime::prompt::PromptSettings;
 use hermes_runtime::providers::profiles;
@@ -875,13 +875,29 @@ where
     A: FnMut(ApprovalRequest) -> F + Send,
     F: Future<Output = ApprovalDecision> + Send + 'static,
 {
-    execute_with_guard(home, request, None, emit, approve).await
+    execute_with_context(home, request, None, None, emit, approve).await
 }
 
+#[allow(dead_code)]
 pub async fn execute_with_guard<A, F>(
     home: Option<&Path>,
     request: ChatRequest,
     guard: Option<&std::sync::Mutex<CompactionGuard>>,
+    emit: impl FnMut(Event) -> bool,
+    approve: A,
+) -> Result<u8, String>
+where
+    A: FnMut(ApprovalRequest) -> F + Send,
+    F: Future<Output = ApprovalDecision> + Send + 'static,
+{
+    execute_with_context(home, request, guard, None, emit, approve).await
+}
+
+pub async fn execute_with_context<A, F>(
+    home: Option<&Path>,
+    request: ChatRequest,
+    guard: Option<&std::sync::Mutex<CompactionGuard>>,
+    mcp_pool: Option<&McpPool>,
     mut emit: impl FnMut(Event) -> bool,
     approve: A,
 ) -> Result<u8, String>
@@ -940,12 +956,28 @@ where
             emit(Event::Stdout(json_warning(warning)));
         }
     }
-    let (clients, warnings) = McpClients::start_with_options(
-        &request.mcp_servers,
-        home.map(Path::to_path_buf),
-        request.mcp_result_size_chars,
-    )
-    .await;
+    let (mcp, warnings, shared_mcp) = if let Some(pool) = mcp_pool {
+        let (clients, warnings) = pool
+            .acquire(
+                &request.mcp_servers,
+                home.map(Path::to_path_buf),
+                request.mcp_result_size_chars,
+            )
+            .await;
+        (clients, warnings, true)
+    } else {
+        let (clients, warnings) = McpClients::start_with_options(
+            &request.mcp_servers,
+            home.map(Path::to_path_buf),
+            request.mcp_result_size_chars,
+        )
+        .await;
+        (
+            std::sync::Arc::new(tokio::sync::Mutex::new(clients)),
+            warnings,
+            false,
+        )
+    };
     for warning in warnings {
         if json_mode {
             emit(Event::Stdout(json_warning(&warning)));
@@ -953,7 +985,6 @@ where
             emit(Event::Stderr(warning));
         }
     }
-    let mcp = tokio::sync::Mutex::new(clients);
     let journal = match &request.debug_log {
         Some(path) => Some(hermes_runtime::journal::Journal::open(Path::new(path))?),
         None => None,
@@ -988,7 +1019,7 @@ where
         prefill: (!request.prefill.is_empty()).then_some(request.prefill.as_slice()),
         state_scope: request.state_scope.as_deref(),
         approval_policy: request.approval_policy.as_deref(),
-        mcp: Some(&mcp),
+        mcp: Some(mcp.as_ref()),
         web: Some(&request.web),
         browser: Some(&request.browser),
         memory: Some(&request.memory),
@@ -1165,7 +1196,9 @@ where
         }
     };
     if !receiving || (!json_mode && !emit(Event::Stdout("\n".into()))) {
-        mcp.lock().await.shutdown().await;
+        if !shared_mcp {
+            mcp.lock().await.shutdown().await;
+        }
         return Err("chat output was interrupted".into());
     }
     match outcome {
@@ -1196,21 +1229,27 @@ where
                     emit(Event::Stderr(format!("Session: {id}")));
                 }
             }
-            mcp.lock().await.shutdown().await;
+            if !shared_mcp {
+                mcp.lock().await.shutdown().await;
+            }
             if json_mode {
                 emit(Event::Stdout(json_done(0, "completed")));
             }
             Ok(0)
         }
         TurnOutcome::Interrupted(_) => {
-            mcp.lock().await.shutdown().await;
+            if !shared_mcp {
+                mcp.lock().await.shutdown().await;
+            }
             if json_mode {
                 emit(Event::Stdout(json_done(130, "interrupted")));
             }
             Ok(130)
         }
         TurnOutcome::IterationLimit => {
-            mcp.lock().await.shutdown().await;
+            if !shared_mcp {
+                mcp.lock().await.shutdown().await;
+            }
             if json_mode {
                 emit(Event::Stdout(json_done(1, "iteration_limit")));
             }

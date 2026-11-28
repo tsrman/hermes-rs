@@ -2,7 +2,6 @@ use chrono::DateTime;
 use chrono_tz::Tz;
 use hermes_runtime::cron::doctor;
 use hermes_runtime::cron::incidents;
-#[cfg(unix)]
 use hermes_runtime::cron::manage::{self, AddParams};
 use hermes_runtime::cron::monitor;
 use hermes_runtime::cron::notepad;
@@ -314,9 +313,6 @@ async fn script_and_monitor_execution_and_ssrf_blocking() {
     assert!(ok, "{out}");
     assert_eq!(out, "hello-from-script");
 
-    // Windows cannot change the cron job store yet (`cron/store.rs`), so the stored-job monitor
-    // baseline only runs on Unix; the URL checks below build their jobs inline.
-    #[cfg(unix)]
     {
         // Monitor baseline -> unchanged -> changed.
         let state_file = tmp.path().join("state.txt");
@@ -378,7 +374,6 @@ async fn script_and_monitor_execution_and_ssrf_blocking() {
     assert!(pol_blocked.error.unwrap().contains("blocked.example.com"));
 }
 
-#[cfg(unix)]
 #[test]
 fn executions_cancel_and_cronjob_tool_roundtrip() {
     use hermes_runtime::cron::{cancel, executions};

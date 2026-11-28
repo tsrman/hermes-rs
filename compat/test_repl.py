@@ -440,6 +440,44 @@ class ReplCompressTest(ReplBase):
         self.assertEqual(len(summaries2), 2)
         self.assertIn('FOCUS TOPIC: "release checklist"', summaries2[-1]["messages"][0]["content"])
 
+    def test_mcp_server_persists_across_repl_turns_and_stops_on_exit(self):
+        mcp_log = self.profile / "mcp.jsonl"
+        server_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_fixture_server.py")
+        with (self.profile / "config.yaml").open("a", encoding="utf-8") as cfg:
+            cfg.write(
+                "\nmcp_servers:\n"
+                "  demo:\n"
+                f"    command: {json.dumps(sys.executable)}\n"
+                f"    args: [{json.dumps(str(server_script))}]\n"
+                "    env:\n"
+                f"      HERMES_MCP_LOG: {json.dumps(str(mcp_log))}\n"
+            )
+        process, _ = self.start(tty=False)
+        out, err = process.communicate("first turn\nsecond turn\n/exit\n", timeout=30)
+        self.assertEqual(process.returncode, 0, err)
+        self.assertGreaterEqual(out.count("Ответ модели"), 2, out)
+
+        entries = [
+            json.loads(line)
+            for line in mcp_log.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        pids = [entry["pid"] for entry in entries if "pid" in entry]
+        self.assertEqual(len(pids), 1, f"expected MCP server to start once across turns, got {pids}")
+
+        # Verify the MCP process exited cleanly when the REPL exited.
+        pid = pids[0]
+        deadline = time.monotonic() + 5
+        alive = True
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                alive = False
+                break
+            time.sleep(0.05)
+        self.assertFalse(alive, f"MCP server PID {pid} lingered after REPL exit")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,146 @@
+name: Verify CLI Upgrade & Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      from_tag:
+        description: 'Older published CLI release tag (e.g. v0.7.15)'
+        required: true
+        type: string
+      to_tag:
+        description: 'Newer published CLI release tag (e.g. v0.7.16)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify:
+    name: Upgrade & rollback (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            image: debian:trixie-slim
+            ext: tar.gz
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+            image: alpine:3.24.2
+            ext: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            image: debian:trixie-slim
+            ext: tar.gz
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            image: alpine:3.24.2
+            ext: tar.gz
+          - target: aarch64-apple-darwin
+            runner: macos-15
+            ext: tar.gz
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+            ext: tar.gz
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2025
+            ext: zip
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download published release archives (Unix)
+        if: runner.os != 'Windows'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FROM_TAG: ${{ inputs.from_tag }}
+          TO_TAG: ${{ inputs.to_tag }}
+          TARGET: ${{ matrix.target }}
+          EXT: ${{ matrix.ext }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/from" "$RUNNER_TEMP/to"
+          gh release download "$FROM_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "*-${TARGET}.${EXT}" \
+            --pattern "*-${TARGET}.${EXT}.sha256" \
+            --dir "$RUNNER_TEMP/from"
+          gh release download "$TO_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "*-${TARGET}.${EXT}" \
+            --pattern "*-${TARGET}.${EXT}.sha256" \
+            --dir "$RUNNER_TEMP/to"
+
+      - name: Download published release archives (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FROM_TAG: ${{ inputs.from_tag }}
+          TO_TAG: ${{ inputs.to_tag }}
+          TARGET: ${{ matrix.target }}
+          EXT: ${{ matrix.ext }}
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/from", "$env:RUNNER_TEMP/to" | Out-Null
+          gh release download $env:FROM_TAG `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern "*-$($env:TARGET).$($env:EXT)" `
+            --pattern "*-$($env:TARGET).$($env:EXT).sha256" `
+            --dir "$env:RUNNER_TEMP/from"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release download $env:TO_TAG `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern "*-$($env:TARGET).$($env:EXT)" `
+            --pattern "*-$($env:TARGET).$($env:EXT).sha256" `
+            --dir "$env:RUNNER_TEMP/to"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify upgrade and rollback (Linux container)
+        if: runner.os == 'Linux'
+        env:
+          IMAGE: ${{ matrix.image }}
+          TARGET: ${{ matrix.target }}
+          EXT: ${{ matrix.ext }}
+        run: |
+          from_archive=$(find "$RUNNER_TEMP/from" -maxdepth 1 -name "*-${TARGET}.${EXT}" | head -n 1)
+          to_archive=$(find "$RUNNER_TEMP/to" -maxdepth 1 -name "*-${TARGET}.${EXT}" | head -n 1)
+          test -n "$from_archive" && test -n "$to_archive"
+          python3 -m compat.verify_upgrade_rollback \
+            --from-archive "$from_archive" \
+            --to-archive "$to_archive" \
+            --image "$IMAGE"
+
+      - name: Verify upgrade and rollback (macOS)
+        if: runner.os == 'macOS'
+        env:
+          TARGET: ${{ matrix.target }}
+          EXT: ${{ matrix.ext }}
+        run: |
+          from_archive=$(find "$RUNNER_TEMP/from" -maxdepth 1 -name "*-${TARGET}.${EXT}" | head -n 1)
+          to_archive=$(find "$RUNNER_TEMP/to" -maxdepth 1 -name "*-${TARGET}.${EXT}" | head -n 1)
+          test -n "$from_archive" && test -n "$to_archive"
+          python3 -m compat.verify_upgrade_rollback \
+            --from-archive "$from_archive" \
+            --to-archive "$to_archive"
+
+      - name: Verify upgrade and rollback (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+          EXT: ${{ matrix.ext }}
+        run: |
+          $fromArchive = (Get-ChildItem "$env:RUNNER_TEMP/from" -Filter "*-$($env:TARGET).$($env:EXT)" | Select-Object -First 1).FullName
+          $toArchive = (Get-ChildItem "$env:RUNNER_TEMP/to" -Filter "*-$($env:TARGET).$($env:EXT)" | Select-Object -First 1).FullName
+          if (-not $fromArchive -or -not $toArchive) { throw "Missing release archives" }
+          python -m compat.verify_upgrade_rollback `
+            --from-archive "$fromArchive" `
+            --to-archive "$toArchive"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

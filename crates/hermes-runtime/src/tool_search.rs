@@ -1077,7 +1077,7 @@ mod tests {
             serde_json::from_str(windows).unwrap(),
             &["process_manage"][..],
         )];
-        if crate::terminal::SUPPORTED {
+        if cfg!(any(target_os = "linux", target_os = "macos")) {
             let unix = include_str!("../tests/fixtures/tool_search_cases.json");
             fixtures.push((serde_json::from_str(unix).unwrap(), &[][..]));
         }

@@ -1110,15 +1110,19 @@ fn start_turn(
             .clone()
             .for_turn(&query, &state.scope, state.session.as_deref());
     let home_owned = home.map(Path::to_path_buf);
+    let guard = Arc::clone(&state.guard);
+    let mcp_pool = Arc::clone(&state.mcp_pool);
     let (tx, rx) = mpsc::unbounded_channel::<TurnMsg>();
     *turn_rx = Some(rx);
 
     let handle = tokio::spawn(async move {
         let tx_events = tx.clone();
         let tx_approve = tx.clone();
-        let res = chat::execute(
+        let res = chat::execute_with_context(
             home_owned.as_deref(),
             turn_request,
+            Some(&guard),
+            Some(&mcp_pool),
             move |ev| tx_events.send(TurnMsg::Event(ev)).is_ok(),
             move |req| {
                 let tx_a = tx_approve.clone();

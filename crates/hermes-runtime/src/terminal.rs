@@ -1,6 +1,5 @@
-//! Approved foreground commands on the local Linux and macOS CLI.
+//! Approved foreground commands on the local Linux, macOS, and Windows CLI.
 
-#[cfg(unix)]
 use crate::paths::PathExt;
 use std::future::Future;
 
@@ -165,6 +164,25 @@ const DEFAULT_ENV: [&str; 22] = [
     "XDG_CONFIG_HOME",
     "XDG_CACHE_HOME",
 ];
+#[cfg(windows)]
+const WINDOWS_DEFAULT_ENV: [&str; 16] = [
+    "SystemRoot",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "TEMP",
+    "TMP",
+    "ProgramData",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "CommonProgramFiles",
+    "NUMBER_OF_PROCESSORS",
+    "OS",
+    "PROCESSOR_ARCHITECTURE",
+];
 /// Names that carry the profile's model credentials: refused even when listed.
 const WITHHELD_ENV: [&str; 8] = [
     "HERMES_API_KEY",
@@ -231,13 +249,24 @@ impl TerminalSettings {
 
     /// The variables a command starts with.
     pub(crate) fn environment(&self) -> Vec<(String, String)> {
+        let is_withheld = |name: &str| {
+            WITHHELD_ENV
+                .iter()
+                .any(|blocked| blocked.eq_ignore_ascii_case(name))
+        };
+        let has_var = |out: &[(String, String)], name: &str| {
+            if cfg!(windows) {
+                out.iter().any(|(seen, _)| seen.eq_ignore_ascii_case(name))
+            } else {
+                out.iter().any(|(seen, _)| seen == name)
+            }
+        };
         let mut out: Vec<(String, String)> = Vec::new();
-        for name in DEFAULT_ENV
-            .iter()
-            .copied()
-            .chain(self.env_passthrough.iter().map(String::as_str))
-        {
-            if WITHHELD_ENV.contains(&name) || out.iter().any(|(seen, _)| seen == name) {
+        let base_env = DEFAULT_ENV.iter().copied();
+        #[cfg(windows)]
+        let base_env = base_env.chain(WINDOWS_DEFAULT_ENV.iter().copied());
+        for name in base_env.chain(self.env_passthrough.iter().map(String::as_str)) {
+            if is_withheld(name) || has_var(&out, name) {
                 continue;
             }
             if let Ok(value) = std::env::var(name) {
@@ -248,7 +277,7 @@ impl TerminalSettings {
             .iter()
             .copied()
             .chain(self.env_passthrough.iter().map(String::as_str))
-            .filter(|name| !WITHHELD_ENV.contains(name))
+            .filter(|name| !is_withheld(name))
             .map(str::to_owned)
             .collect();
         let mut out = crate::terminal_init::with_init_files(
@@ -259,23 +288,30 @@ impl TerminalSettings {
         );
         if let Some(scratch) = &self.scratch {
             for name in ["TMPDIR", "TMP", "TEMP"] {
-                out.retain(|(known, _)| known != name);
+                if cfg!(windows) {
+                    out.retain(|(known, _)| !known.eq_ignore_ascii_case(name));
+                } else {
+                    out.retain(|(known, _)| known != name);
+                }
                 out.push((name.to_owned(), scratch.display().to_string()));
             }
         }
-        if !out.iter().any(|(name, _)| name == "PATH") {
-            out.push(("PATH".into(), "/usr/bin:/bin".into()));
-        }
-        if !out.iter().any(|(name, _)| name == "LANG") {
-            out.push((
-                "LANG".into(),
-                if cfg!(target_os = "macos") {
-                    "en_US.UTF-8"
-                } else {
-                    "C.UTF-8"
-                }
-                .into(),
-            ));
+        #[cfg(not(windows))]
+        {
+            if !out.iter().any(|(name, _)| name == "PATH") {
+                out.push(("PATH".into(), "/usr/bin:/bin".into()));
+            }
+            if !out.iter().any(|(name, _)| name == "LANG") {
+                out.push((
+                    "LANG".into(),
+                    if cfg!(target_os = "macos") {
+                        "en_US.UTF-8"
+                    } else {
+                        "C.UTF-8"
+                    }
+                    .into(),
+                ));
+            }
         }
         out
     }
@@ -331,7 +367,11 @@ fn track_directory(session: &str, path: Option<PathBuf>) {
         };
     }
 }
-pub(crate) const SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos"));
+pub(crate) const SUPPORTED: bool = cfg!(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+));
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute<A, F>(
@@ -368,7 +408,23 @@ where
         .await
         .unwrap_or_else(|error| json!({"error": error, "exit_code": -1, "status": "error"}))
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
+    {
+        windows_shell::execute(
+            workspace,
+            arguments,
+            approval_timeout,
+            background,
+            settings,
+            session,
+            policy,
+            live_output,
+            approve,
+        )
+        .await
+        .unwrap_or_else(|error| json!({"error": error, "exit_code": -1, "status": "error"}))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         let _ = (
             workspace,
@@ -410,6 +466,176 @@ pub(crate) fn schema(background: bool) -> Value {
     }})
 }
 
+/// Output marker appended by the Unix shell wrapper to detect directory changes.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const CWD_MARKER: &str = "__HERMES_CWD__";
+const MARKER_SLACK: usize = 8192;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Arguments {
+    command: String,
+    workdir: Option<String>,
+    timeout: Option<u32>,
+    background: Option<bool>,
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
+    pty: Option<bool>,
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
+    notify_on_complete: Option<bool>,
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
+    watch_patterns: Option<Vec<String>>,
+}
+
+/// The first and the last characters of what a command printed, 40% and 60% of the limit,
+/// with a notice between them when the middle was left out.
+struct Kept {
+    max_chars: usize,
+    head_limit: usize,
+    tail_limit: usize,
+    head: Vec<u8>,
+    head_chars: usize,
+    head_full: bool,
+    tail: std::collections::VecDeque<u8>,
+    tail_chars: usize,
+    omitted: usize,
+    total: usize,
+}
+
+impl Default for Kept {
+    fn default() -> Self {
+        Self::with_limit(OutputLimits::default().max_bytes)
+    }
+}
+
+impl Kept {
+    fn with_limit(max_chars: usize) -> Self {
+        let head_limit = (max_chars as f64 * 0.4) as usize;
+        Self {
+            max_chars,
+            head_limit,
+            tail_limit: max_chars - head_limit,
+            head: Vec::new(),
+            head_chars: 0,
+            head_full: false,
+            tail: std::collections::VecDeque::new(),
+            tail_chars: 0,
+            omitted: 0,
+            total: 0,
+        }
+    }
+
+    /// Characters are counted by their first byte, so a character split across two reads
+    /// is still one.
+    fn push(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            let starts = byte & 0xC0 != 0x80;
+            self.total += usize::from(starts);
+            if !self.head_full {
+                if starts && self.head_chars == self.head_limit {
+                    self.head_full = true;
+                } else {
+                    self.head.push(byte);
+                    self.head_chars += usize::from(starts);
+                    continue;
+                }
+            }
+            self.tail.push_back(byte);
+            self.tail_chars += usize::from(starts);
+            // The tail keeps some slack so the wrapper's final-directory line, which is not
+            // output, can be cut off without having eaten real output.
+            if self.tail_chars > self.tail_limit + MARKER_SLACK {
+                self.tail.pop_front();
+                while self.tail.front().is_some_and(|next| next & 0xC0 == 0x80) {
+                    self.tail.pop_front();
+                }
+                self.tail_chars -= 1;
+                self.omitted += 1;
+            }
+        }
+    }
+
+    fn omitted(&self) -> usize {
+        self.omitted + self.tail_chars.saturating_sub(self.tail_limit)
+    }
+
+    /// Cut the wrapper's final-directory line off the end and return the directory.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn take_directory(&mut self) -> Option<String> {
+        let needle = format!("\n{CWD_MARKER}").into_bytes();
+        let at = |bytes: &[u8]| {
+            bytes
+                .windows(needle.len())
+                .rposition(|window| window == needle)
+        };
+        if self.omitted == 0 {
+            // Everything is still here: rebuild from the text without the line.
+            let mut all = self.head.clone();
+            all.extend(self.tail.iter());
+            let index = at(&all)?;
+            let after = &all[index + needle.len()..];
+            let line = after.split(|byte| *byte == b'\n').next().unwrap_or(&[]);
+            let path = String::from_utf8_lossy(line).into_owned();
+            let mut fresh = Self::with_limit(self.max_chars);
+            fresh.push(&all[..index]);
+            *self = fresh;
+            return (!path.is_empty()).then_some(path);
+        }
+        let tail: Vec<u8> = self.tail.iter().copied().collect();
+        let index = at(&tail)?;
+        let after = &tail[index + needle.len()..];
+        let line = after.split(|byte| *byte == b'\n').next().unwrap_or(&[]);
+        let path = String::from_utf8_lossy(line).into_owned();
+        let removed = tail[index..]
+            .iter()
+            .filter(|byte| **byte & 0xC0 != 0x80)
+            .count();
+        self.tail.truncate(index);
+        self.tail_chars -= removed;
+        self.total -= removed;
+        (!path.is_empty()).then_some(path)
+    }
+
+    fn render(&self) -> String {
+        // Characters beyond the limit (the slack) are omitted too.
+        let mut skip = 0;
+        let mut dropped = 0;
+        let bytes: Vec<u8> = self.tail.iter().copied().collect();
+        while self.tail_chars - dropped > self.tail_limit && skip < bytes.len() {
+            skip += 1;
+            while bytes.get(skip).is_some_and(|next| next & 0xC0 == 0x80) {
+                skip += 1;
+            }
+            dropped += 1;
+        }
+        let omitted = self.omitted + dropped;
+        let mut out = self.head.clone();
+        if omitted > 0 {
+            out.extend_from_slice(
+                format!(
+                    "\n\n... [OUTPUT TRUNCATED - {} chars omitted out of {} total] ...\n\n",
+                    thousands(omitted),
+                    thousands(self.total)
+                )
+                .as_bytes(),
+            );
+        }
+        out.extend_from_slice(&bytes[skip..]);
+        String::from_utf8_lossy(&out).into_owned()
+    }
+}
+
+fn thousands(count: usize) -> String {
+    let digits = count.to_string();
+    let mut grouped = String::new();
+    for (position, digit) in digits.chars().enumerate() {
+        if position > 0 && (digits.len() - position).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod shell {
     use std::fs::File;
@@ -420,7 +646,6 @@ mod shell {
     use std::time::Duration;
 
     use rustix::process::{fchdir, kill_process_group, Pid, Signal};
-    use serde::Deserialize;
     use tokio::io::{AsyncRead, AsyncReadExt};
     use tokio::process::{Child, Command};
     use tokio::time::timeout;
@@ -428,11 +653,9 @@ mod shell {
     use crate::file_tools::{directory::open_directory, request_approval, ApprovalAction};
     use crate::redact::redact_terminal_output;
 
+    pub(super) use super::Kept;
     use super::*;
 
-    /// Output kept for the model: the start (what the command announced) and the end (where
-    /// errors and results are), with the middle omitted.
-    const CWD_MARKER: &str = "__HERMES_CWD__";
     /// Private high file descriptors used to pass the persisted bash `export -p` snapshot into and
     /// out of the child process purely in memory (never touching disk). Closed before the user's
     /// command runs via `197<&- 198>&-`.
@@ -441,18 +664,6 @@ mod shell {
     /// Maximum size of a captured shell environment snapshot (16 MiB, matching the reference's
     /// `_MAX_HANDOFF_BYTES`).
     const MAX_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
-
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Arguments {
-        command: String,
-        workdir: Option<String>,
-        timeout: Option<u32>,
-        background: Option<bool>,
-        pty: Option<bool>,
-        notify_on_complete: Option<bool>,
-        watch_patterns: Option<Vec<String>>,
-    }
 
     /// `background` is the owner of processes started here, when `process_manage` is available.
     #[allow(clippy::too_many_arguments)]
@@ -906,157 +1117,6 @@ mod shell {
         }
     }
 
-    /// The first and the last characters of what a command printed, 40% and 60% of the limit,
-    /// with a notice between them when the middle was left out.
-    pub(super) struct Kept {
-        max_chars: usize,
-        head_limit: usize,
-        tail_limit: usize,
-        head: Vec<u8>,
-        head_chars: usize,
-        head_full: bool,
-        tail: std::collections::VecDeque<u8>,
-        tail_chars: usize,
-        omitted: usize,
-        total: usize,
-    }
-
-    const MARKER_SLACK: usize = 8192;
-
-    impl Default for Kept {
-        fn default() -> Self {
-            Self::with_limit(OutputLimits::default().max_bytes)
-        }
-    }
-
-    impl Kept {
-        pub(super) fn with_limit(max_chars: usize) -> Self {
-            let head_limit = (max_chars as f64 * 0.4) as usize;
-            Self {
-                max_chars,
-                head_limit,
-                tail_limit: max_chars - head_limit,
-                head: Vec::new(),
-                head_chars: 0,
-                head_full: false,
-                tail: std::collections::VecDeque::new(),
-                tail_chars: 0,
-                omitted: 0,
-                total: 0,
-            }
-        }
-
-        /// Characters are counted by their first byte, so a character split across two reads
-        /// is still one.
-        pub(super) fn push(&mut self, bytes: &[u8]) {
-            for &byte in bytes {
-                let starts = byte & 0xC0 != 0x80;
-                self.total += usize::from(starts);
-                if !self.head_full {
-                    if starts && self.head_chars == self.head_limit {
-                        self.head_full = true;
-                    } else {
-                        self.head.push(byte);
-                        self.head_chars += usize::from(starts);
-                        continue;
-                    }
-                }
-                self.tail.push_back(byte);
-                self.tail_chars += usize::from(starts);
-                // The tail keeps some slack so the wrapper's final-directory line, which is not
-                // output, can be cut off without having eaten real output.
-                if self.tail_chars > self.tail_limit + MARKER_SLACK {
-                    self.tail.pop_front();
-                    while self.tail.front().is_some_and(|next| next & 0xC0 == 0x80) {
-                        self.tail.pop_front();
-                    }
-                    self.tail_chars -= 1;
-                    self.omitted += 1;
-                }
-            }
-        }
-
-        pub(super) fn omitted(&self) -> usize {
-            self.omitted + self.tail_chars.saturating_sub(self.tail_limit)
-        }
-
-        /// Cut the wrapper's final-directory line off the end and return the directory.
-        pub(super) fn take_directory(&mut self) -> Option<String> {
-            let needle = format!("\n{CWD_MARKER}").into_bytes();
-            let at = |bytes: &[u8]| {
-                bytes
-                    .windows(needle.len())
-                    .rposition(|window| window == needle)
-            };
-            if self.omitted == 0 {
-                // Everything is still here: rebuild from the text without the line.
-                let mut all = self.head.clone();
-                all.extend(self.tail.iter());
-                let index = at(&all)?;
-                let after = &all[index + needle.len()..];
-                let line = after.split(|byte| *byte == b'\n').next().unwrap_or(&[]);
-                let path = String::from_utf8_lossy(line).into_owned();
-                let mut fresh = Self::with_limit(self.max_chars);
-                fresh.push(&all[..index]);
-                *self = fresh;
-                return (!path.is_empty()).then_some(path);
-            }
-            let tail: Vec<u8> = self.tail.iter().copied().collect();
-            let index = at(&tail)?;
-            let after = &tail[index + needle.len()..];
-            let line = after.split(|byte| *byte == b'\n').next().unwrap_or(&[]);
-            let path = String::from_utf8_lossy(line).into_owned();
-            let removed = tail[index..]
-                .iter()
-                .filter(|byte| **byte & 0xC0 != 0x80)
-                .count();
-            self.tail.truncate(index);
-            self.tail_chars -= removed;
-            self.total -= removed;
-            (!path.is_empty()).then_some(path)
-        }
-
-        pub(super) fn render(&self) -> String {
-            // Characters beyond the limit (the slack) are omitted too.
-            let mut skip = 0;
-            let mut dropped = 0;
-            let bytes: Vec<u8> = self.tail.iter().copied().collect();
-            while self.tail_chars - dropped > self.tail_limit && skip < bytes.len() {
-                skip += 1;
-                while bytes.get(skip).is_some_and(|next| next & 0xC0 == 0x80) {
-                    skip += 1;
-                }
-                dropped += 1;
-            }
-            let omitted = self.omitted + dropped;
-            let mut out = self.head.clone();
-            if omitted > 0 {
-                out.extend_from_slice(
-                    format!(
-                        "\n\n... [OUTPUT TRUNCATED - {} chars omitted out of {} total] ...\n\n",
-                        thousands(omitted),
-                        thousands(self.total)
-                    )
-                    .as_bytes(),
-                );
-            }
-            out.extend_from_slice(&bytes[skip..]);
-            String::from_utf8_lossy(&out).into_owned()
-        }
-    }
-
-    fn thousands(count: usize) -> String {
-        let digits = count.to_string();
-        let mut grouped = String::new();
-        for (position, digit) in digits.chars().enumerate() {
-            if position > 0 && (digits.len() - position).is_multiple_of(3) {
-                grouped.push(',');
-            }
-            grouped.push(digit);
-        }
-        grouped
-    }
-
     struct ProcessGroup {
         child: Child,
         pid: Option<Pid>,
@@ -1127,6 +1187,492 @@ mod shell {
                 }
             }
         }
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod windows_shell {
+    use std::ffi::c_void;
+    use std::fs;
+    use std::io;
+    use std::os::windows::fs::MetadataExt;
+    use std::path::{Component, Path};
+    use std::process::Stdio;
+    use std::sync::{Arc, Mutex as StdMutex};
+    use std::time::Duration;
+
+    use tokio::io::{AsyncRead, AsyncReadExt};
+    use tokio::process::Command;
+    use tokio::time::timeout;
+
+    use crate::file_tools::{request_approval, ApprovalAction};
+    use crate::redact::redact_terminal_output;
+
+    use super::*;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: u32 = 9;
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct JobObjectBasicLimitInformation {
+        per_process_user_time_limit: i64,
+        per_job_user_time_limit: i64,
+        limit_flags: u32,
+        minimum_working_set_size: usize,
+        maximum_working_set_size: usize,
+        active_process_limit: u32,
+        affinity: usize,
+        priority_class: u32,
+        scheduling_class: u32,
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct IoCounters {
+        read_operation_count: u64,
+        write_operation_count: u64,
+        other_operation_count: u64,
+        read_transfer_count: u64,
+        write_transfer_count: u64,
+        other_transfer_count: u64,
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct JobObjectExtendedLimitInformation {
+        basic_limit_information: JobObjectBasicLimitInformation,
+        io_info: IoCounters,
+        process_memory_limit: usize,
+        job_memory_limit: usize,
+        peak_process_memory_used: usize,
+        peak_job_memory_used: usize,
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    const _: () = assert!(std::mem::size_of::<JobObjectExtendedLimitInformation>() == 144);
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateJobObjectW(attributes: *mut c_void, name: *const u16) -> *mut c_void;
+        fn SetInformationJobObject(
+            job: *mut c_void,
+            info_class: u32,
+            info: *const c_void,
+            info_len: u32,
+        ) -> i32;
+        fn AssignProcessToJobObject(job: *mut c_void, process: *mut c_void) -> i32;
+        fn TerminateJobObject(job: *mut c_void, exit_code: u32) -> i32;
+        fn CloseHandle(object: *mut c_void) -> i32;
+    }
+
+    /// Win32 Job Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. Terminates the
+    /// entire child process tree (shell + all descendants) on completion, timeout, cancellation,
+    /// or parent crash.
+    struct JobObject {
+        handle: *mut c_void,
+    }
+
+    // SAFETY: Win32 Job Object handles are kernel handles that can be moved across threads.
+    unsafe impl Send for JobObject {}
+
+    impl JobObject {
+        fn create() -> io::Result<Self> {
+            // SAFETY: null security attributes and null name create an anonymous job object.
+            let handle = unsafe { CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()) };
+            if handle.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let job = Self { handle };
+            let mut info = JobObjectExtendedLimitInformation::default();
+            info.basic_limit_information.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            // SAFETY: `info` matches Win32 `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` for class 9.
+            let ok = unsafe {
+                SetInformationJobObject(
+                    job.handle,
+                    JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+                    std::ptr::from_ref(&info).cast(),
+                    std::mem::size_of::<JobObjectExtendedLimitInformation>() as u32,
+                )
+            };
+            if ok == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(job)
+        }
+
+        fn assign(&self, process_handle: *mut c_void) -> io::Result<()> {
+            // SAFETY: `self.handle` is a valid job object and `process_handle` is a live child handle.
+            let ok = unsafe { AssignProcessToJobObject(self.handle, process_handle) };
+            if ok == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
+
+        fn terminate(&self) {
+            if !self.handle.is_null() {
+                // SAFETY: `self.handle` is an open job object owned exclusively by `self`.
+                unsafe {
+                    let _ = TerminateJobObject(self.handle, 1);
+                }
+            }
+        }
+    }
+
+    impl Drop for JobObject {
+        fn drop(&mut self) {
+            if !self.handle.is_null() {
+                self.terminate();
+                // SAFETY: `self.handle` is closed exactly once on drop.
+                unsafe {
+                    let _ = CloseHandle(self.handle);
+                }
+                self.handle = std::ptr::null_mut();
+            }
+        }
+    }
+
+    fn verify_workspace_dir(root: &Path, path: &Path) -> Result<PathBuf, String> {
+        let root_canon = root.canonical().map_err(|e| e.to_string())?;
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| "The working directory is outside the workspace")?;
+        let mut current = root.to_path_buf();
+        for component in relative.components() {
+            let Component::Normal(name) = component else {
+                return Err("The working directory must not traverse parent components".into());
+            };
+            current.push(name);
+            let meta = fs::symlink_metadata(&current).map_err(|e| e.to_string())?;
+            if meta.file_type().is_symlink()
+                || (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0
+            {
+                return Err("Refusing to run in a symlink or junction directory".into());
+            }
+            if !meta.is_dir() {
+                return Err("The working directory is not a directory".into());
+            }
+        }
+        let canon = current.canonical().map_err(|e| e.to_string())?;
+        if !canon.starts_with(&root_canon) {
+            return Err("The working directory is outside the workspace".into());
+        }
+        Ok(canon)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn execute<A, F>(
+        workspace: &FileWorkspace<'_>,
+        arguments: &str,
+        approval_timeout: u32,
+        _background: Option<&str>,
+        settings: &TerminalSettings,
+        session: &str,
+        policy: Option<&crate::approval_policy::ApprovalPolicy>,
+        live_output: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+        approve: &mut A,
+    ) -> Result<Value, String>
+    where
+        A: FnMut(ApprovalRequest) -> F,
+        F: Future<Output = ApprovalDecision>,
+    {
+        let args: Arguments = serde_json::from_str(arguments)
+            .map_err(|_| "terminal expects a command and optional workdir and timeout")?;
+        if args.command.trim().is_empty()
+            || args.command.len() > 16 * 1024
+            || args.command.contains('\0')
+        {
+            return Err("The command must be nonempty and no larger than 16 KiB".into());
+        }
+        if args.background == Some(true) {
+            return Err(
+                "Background processes need process_manage, which this session does not offer"
+                    .into(),
+            );
+        }
+        let seconds = args
+            .timeout
+            .unwrap_or(settings.default_timeout.unwrap_or(180));
+        if !(1..=600).contains(&seconds) {
+            return Err("terminal timeout must be between 1 and 600 seconds".into());
+        }
+
+        let remembered = args
+            .workdir
+            .is_none()
+            .then(|| tracked_directory(session))
+            .flatten()
+            .and_then(|path| {
+                let root = workspace.resolve(".").ok()?.0;
+                path.strip_prefix(&root).ok().map(|relative| {
+                    if relative.as_os_str().is_empty() {
+                        ".".to_owned()
+                    } else {
+                        relative.display().to_string()
+                    }
+                })
+            });
+        let workdir = args
+            .workdir
+            .as_deref()
+            .or(remembered.as_deref())
+            .unwrap_or(".");
+        let (root, path) = match workspace.resolve(workdir) {
+            Ok(found) => found,
+            Err(_) if args.workdir.is_none() => {
+                track_directory(session, None);
+                workspace.resolve(".")?
+            }
+            Err(error) => return Err(error),
+        };
+        let verified_before = verify_workspace_dir(&root, &path)?;
+        let target = path
+            .to_str()
+            .ok_or("The working directory must be UTF-8 to display it for approval")?;
+
+        let decision = request_approval(
+            ApprovalRequest {
+                target: target.to_owned(),
+                content: args.command.clone(),
+                action: ApprovalAction::RunCommand,
+                timeout_secs: approval_timeout,
+            },
+            policy,
+            approve,
+        )
+        .await;
+        if !matches!(decision, ApprovalDecision::Approved) {
+            return Ok(approval_error(decision));
+        }
+
+        let (current_root, current_path) = workspace.resolve(
+            path.strip_prefix(&root)
+                .ok()
+                .and_then(|relative| relative.to_str())
+                .filter(|relative| !relative.is_empty())
+                .unwrap_or("."),
+        )?;
+        let verified_after = verify_workspace_dir(&current_root, &current_path)?;
+        if verified_after != verified_before {
+            return Err("The working directory changed while approval was pending".into());
+        }
+
+        run(
+            &args.command,
+            &verified_after,
+            Duration::from_secs(u64::from(seconds)),
+            settings,
+            live_output,
+        )
+        .await
+    }
+
+    async fn read_stream(
+        mut reader: impl AsyncRead + Unpin,
+        kept: Arc<StdMutex<Kept>>,
+        command: String,
+        live_output: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    ) -> io::Result<()> {
+        let mut buffer = [0u8; 8192];
+        let mut last_emit = std::time::Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(std::time::Instant::now);
+        loop {
+            let count = reader.read(&mut buffer).await?;
+            if count == 0 {
+                return Ok(());
+            }
+            if let Ok(mut guard) = kept.lock() {
+                guard.push(&buffer[..count]);
+            }
+            if let Some(tx) = &live_output {
+                let now = std::time::Instant::now();
+                if now.duration_since(last_emit) >= Duration::from_millis(60) {
+                    let raw = String::from_utf8_lossy(&buffer[..count]);
+                    let stripped = crate::session_search::strip_ansi(&raw);
+                    if !stripped.trim().is_empty() {
+                        let tail = if stripped.len() > 1024 {
+                            let mut start = stripped.len() - 1024;
+                            while !stripped.is_char_boundary(start) {
+                                start += 1;
+                            }
+                            &stripped[start..]
+                        } else {
+                            stripped.as_str()
+                        };
+                        let safe = redact_terminal_output(tail, Some(&command), &[]);
+                        if !safe.is_empty() {
+                            let _ = tx.send(safe);
+                            last_emit = now;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    async fn run(
+        command: &str,
+        directory: &Path,
+        duration: Duration,
+        settings: &TerminalSettings,
+        live_output: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    ) -> Result<Value, String> {
+        let comspec = std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into());
+        let job = JobObject::create().map_err(|e| format!("Failed creating job object: {e}"))?;
+
+        let mut cmd = Command::new(comspec);
+        cmd.args(["/D", "/C", command])
+            .current_dir(directory)
+            .env_clear()
+            .envs(settings.environment())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .creation_flags(CREATE_NO_WINDOW)
+            .kill_on_drop(true);
+        let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+        if let Some(raw_handle) = child.raw_handle() {
+            // Best-effort assignment: in nested restricted environments where job assignment is
+            // disallowed, fall back to `kill_on_drop` rather than failing the user's command.
+            let _ = job.assign(raw_handle);
+        }
+
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let kept = Arc::new(StdMutex::new(Kept::with_limit(settings.output.max_bytes)));
+
+        let out_kept = Arc::clone(&kept);
+        let err_kept = Arc::clone(&kept);
+        let cmd_out = command.to_owned();
+        let cmd_err = command.to_owned();
+        let live_out = live_output.clone();
+        let live_err = live_output;
+
+        let result = timeout(duration, async {
+            let wait_fut = async {
+                let status = child.wait().await?;
+                // Clean up any stray background descendants holding stdout/stderr handles.
+                job.terminate();
+                Ok::<_, io::Error>(status)
+            };
+            let out_fut = async {
+                match stdout {
+                    Some(reader) => read_stream(reader, out_kept, cmd_out, live_out).await,
+                    None => Ok(()),
+                }
+            };
+            let err_fut = async {
+                match stderr {
+                    Some(reader) => read_stream(reader, err_kept, cmd_err, live_err).await,
+                    None => Ok(()),
+                }
+            };
+            tokio::try_join!(wait_fut, out_fut, err_fut)
+        })
+        .await;
+
+        match result {
+            Ok(Ok((status, (), ()))) => {
+                let (text, omitted) = {
+                    let guard = kept.lock().unwrap_or_else(|e| e.into_inner());
+                    (guard.render(), guard.omitted())
+                };
+                let text = redact_terminal_output(&text, Some(command), &[]);
+                Ok(json!({
+                    "output": text,
+                    "exit_code": status.code().unwrap_or(-1),
+                    "status": "completed",
+                    "truncated": omitted > 0,
+                    "cwd": directory.display().to_string(),
+                }))
+            }
+            Ok(Err(error)) => {
+                job.terminate();
+                Err(error.to_string())
+            }
+            Err(_) => {
+                job.terminate();
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                let text = {
+                    let guard = kept.lock().unwrap_or_else(|e| e.into_inner());
+                    guard.render()
+                };
+                Ok(json!({
+                    "error": "The command timed out",
+                    "exit_code": -1,
+                    "status": "timeout",
+                    "output": redact_terminal_output(&text, Some(command), &[]),
+                }))
+            }
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests {
+    use super::*;
+
+    async fn run_win(root: &Path, arguments: Value, decision: ApprovalDecision) -> Value {
+        let workspace = FileWorkspace::new(root, None);
+        let mut approve = move |_request: ApprovalRequest| {
+            let decision = decision.clone();
+            async move { decision }
+        };
+        execute(
+            &workspace,
+            &arguments.to_string(),
+            Some(5),
+            None,
+            &TerminalSettings::default(),
+            &format!("win-terminal-test-{}", root.display()),
+            None,
+            None,
+            &mut approve,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn approved_command_runs_and_denied_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let denied = run_win(
+            dir.path(),
+            json!({"command": "echo should-not-run > marker.txt"}),
+            ApprovalDecision::Denied,
+        )
+        .await;
+        assert_eq!(denied["status"], "denied");
+        assert!(!dir.path().join("marker.txt").exists());
+
+        let ok = run_win(
+            dir.path(),
+            json!({"command": "echo windows-terminal-ok"}),
+            ApprovalDecision::Approved,
+        )
+        .await;
+        assert_eq!(ok["status"], "completed", "{ok}");
+        assert_eq!(ok["exit_code"], 0);
+        assert!(ok["output"]
+            .as_str()
+            .unwrap_or("")
+            .contains("windows-terminal-ok"));
+    }
+
+    #[tokio::test]
+    async fn timeout_terminates_process_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let res = run_win(
+            dir.path(),
+            json!({"command": "ping -n 20 127.0.0.1 >nul", "timeout": 1}),
+            ApprovalDecision::Approved,
+        )
+        .await;
+        assert_eq!(res["status"], "timeout", "{res}");
     }
 }
 

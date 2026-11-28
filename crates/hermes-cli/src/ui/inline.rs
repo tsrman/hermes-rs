@@ -763,10 +763,11 @@ pub async fn run(
         let sp_for_approve = spinner.clone();
 
         let turn_outcome = tokio::select! {
-            result = chat::execute_with_guard(
+            result = chat::execute_with_context(
                 home,
                 turn,
                 Some(&state.guard),
+                Some(&state.mcp_pool),
                 |event| {
                     match event {
                         Event::Stdout(chunk) => {

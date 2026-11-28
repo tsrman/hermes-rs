@@ -64,6 +64,7 @@ pub async fn run(home: Option<&Path>, request: ChatRequest) -> Result<u8, String
         }
     }
 
+    state.mcp_pool.shutdown().await;
     let styled = active == ActiveUi::Inline && state.color;
     ui::inline::announce(&state.session, styled);
     Ok(state.exit_code)

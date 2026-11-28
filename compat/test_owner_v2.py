@@ -9,6 +9,7 @@ import socket
 import socketserver
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -756,6 +757,115 @@ class OwnerV2ProtocolTest(unittest.TestCase):
         finally:
             self._stop_owner(owner)
             llm.stop()
+
+    def test_mcp_server_persists_across_owner_v2_turns(self) -> None:
+        """Consecutive v2 GUI turns reuse warm MCP connections instead of respawning per turn."""
+        mcp_log = self.profile / "mcp-owner.jsonl"
+        server_script = ROOT / "compat" / "mcp_fixture_server.py"
+        work_dir = Path(self.tmp.name) / "mcp-work"
+        work_dir.mkdir()
+
+        observed = []
+
+        def respond(wfile, _idx, body):
+            last = body["messages"][-1]
+            if last["role"] == "tool":
+                observed.append(json.loads(last["content"]))
+                _send_sse_chunk(wfile, {"content": "echoed"}, finish_reason="stop")
+                _send_sse_done(wfile)
+                return
+            query = last["content"]
+            _send_sse_chunk(
+                wfile,
+                {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": f"call_mcp_{len(observed)}",
+                            "type": "function",
+                            "function": {
+                                "name": "mcp__demo__echo",
+                                "arguments": json.dumps({"text": query}),
+                            },
+                        }
+                    ]
+                },
+            )
+            _send_sse_chunk(wfile, {}, finish_reason="tool_calls")
+            _send_sse_done(wfile)
+
+        llm = _ScriptedSseServer(respond)
+        llm.start()
+        owner = self._start_owner(self.profile, llm.base_url)
+        with (self.profile / "config.yaml").open("a", encoding="utf-8") as cfg:
+            cfg.write(
+                "mcp_servers:\n"
+                "  demo:\n"
+                f"    command: {json.dumps(sys.executable)}\n"
+                f"    args: [{json.dumps(str(server_script))}]\n"
+                "    env:\n"
+                f"      HERMES_MCP_LOG: {json.dumps(str(mcp_log))}\n"
+            )
+        try:
+            def run_turn(session_id, query):
+                tid = self._rpc(
+                    self.profile,
+                    {
+                        "type": "start_turn",
+                        "session_id": session_id,
+                        "query": query,
+                        "model": "fixture",
+                        "cwd": str(work_dir),
+                        "yolo": True,
+                    },
+                )["turn_id"]
+                assigned = None
+                with self._connect(self.profile) as sock:
+                    _write_frame(
+                        sock,
+                        {
+                            "version": 2,
+                            "command": {"type": "subscribe_turn", "turn_id": tid, "after_seq": 0},
+                        },
+                    )
+                    while True:
+                        ev = _read_frame(sock)["event"]
+                        if ev["kind"] == "session_assigned":
+                            assigned = ev["session_id"]
+                        elif ev["kind"] == "done":
+                            self.assertEqual(ev["exit_code"], 0)
+                            break
+                return assigned
+
+            sid = run_turn(None, "hello-1")
+            run_turn(sid, "hello-2")
+        finally:
+            self._stop_owner(owner)
+            llm.stop()
+
+        self.assertEqual(len(observed), 2)
+        self.assertEqual(observed[0].get("result"), "hello-1")
+        self.assertEqual(observed[1].get("result"), "hello-2")
+
+        entries = [
+            json.loads(line)
+            for line in mcp_log.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        pids = [entry["pid"] for entry in entries if "pid" in entry]
+        self.assertEqual(len(pids), 1, f"expected one persistent MCP server across turns, got {pids}")
+
+        pid = pids[0]
+        deadline = time.monotonic() + 5
+        alive = True
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                alive = False
+                break
+            time.sleep(0.05)
+        self.assertFalse(alive, f"MCP server PID {pid} lingered after owner shutdown")
 
 
 if __name__ == "__main__":

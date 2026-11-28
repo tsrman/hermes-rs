@@ -179,15 +179,16 @@ pub(super) fn cron_dir(home: &Path) -> PathBuf {
     home.join("cron")
 }
 
-/// The cron directory and its `output` directory, owner-only, as the reference keeps them.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// The cron directory and its `output` directory, owner-only on Unix, as the reference keeps them.
 fn ensure_dirs(dir: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-
     for directory in [dir.to_path_buf(), dir.join("output")] {
         std::fs::create_dir_all(&directory)
             .map_err(|error| format!("cannot create cron directory: {error}"))?;
-        let _ = std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700));
+        }
     }
     Ok(())
 }
@@ -195,31 +196,39 @@ fn ensure_dirs(dir: &Path) -> Result<(), String> {
 /// Run `change` on the job list under the cross-process lock and save it atomically when it
 /// reports a change. Only the canonical `{"jobs": [...]}` shape is written: anything else could
 /// lose data, so it is refused rather than repaired.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) fn with_jobs<T>(
     home: &Path,
     now: DateTime<Tz>,
     change: impl FnOnce(&mut Vec<Value>) -> Result<(T, bool), String>,
 ) -> Result<T, String> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-
-    use rustix::fs::{flock, FlockOperation};
 
     let dir = cron_dir(home);
     ensure_dirs(&dir)?;
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
+    let mut open = std::fs::OpenOptions::new();
+    open.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        open.mode(0o600);
+    }
+    let lock = open
         .open(dir.join(".jobs.lock"))
         .map_err(|error| format!("cannot open cron lock: {error}"))?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while flock(&lock, FlockOperation::NonBlockingLockExclusive).is_err() {
-        if std::time::Instant::now() >= deadline {
-            return Err("timed out waiting for the cron jobs lock".into());
+    loop {
+        match lock.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err("timed out waiting for the cron jobs lock".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(std::fs::TryLockError::Error(error)) => {
+                return Err(format!("cannot lock cron jobs: {error}"));
+            }
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
     let path = dir.join("jobs.json");
@@ -250,22 +259,16 @@ pub(super) fn with_jobs<T>(
             .persist(&path)
             .map_err(|error| format!("cannot replace cron jobs: {}", error.error))?;
         // Sync the directory so the rename survives a crash.
-        if let Ok(directory) = std::fs::File::open(&dir) {
-            let _ = directory.sync_all();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(directory) = std::fs::File::open(&dir) {
+                let _ = directory.sync_all();
+            }
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
         }
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
     Ok(result)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(super) fn with_jobs<T>(
-    _home: &Path,
-    _now: DateTime<Tz>,
-    _change: impl FnOnce(&mut Vec<Value>) -> Result<(T, bool), String>,
-) -> Result<T, String> {
-    Err("changing cron jobs is not supported on this platform yet".into())
 }
 
 pub(super) fn job_zone(job: &Value) -> Option<Tz> {

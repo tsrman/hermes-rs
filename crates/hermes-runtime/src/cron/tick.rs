@@ -141,7 +141,10 @@ fn hostname() -> Option<String> {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn hostname() -> Option<String> {
-    None
+    std::env::var("COMPUTERNAME")
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
 }
 
 /// `grace_minutes` as seconds, or `None` when absent or invalid.
@@ -223,33 +226,27 @@ pub(super) fn claim_is_live(claim: &Value, now: DateTime<Tz>, ttl: i64) -> bool 
 }
 
 /// Take the cross-process tick lock without waiting. `Ok(None)` when another ticker holds it.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn acquire_tick_lock(home: &Path) -> Result<Option<std::fs::File>, String> {
-    use std::os::unix::fs::OpenOptionsExt;
-
     let dir = cron_dir(home);
     std::fs::create_dir_all(&dir)
         .map_err(|error| format!("cannot create cron directory: {error}"))?;
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
+    let mut open = std::fs::OpenOptions::new();
+    open.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        open.mode(0o600);
+    }
+    let file = open
         .open(dir.join(".tick.lock"))
         .map_err(|error| format!("cannot open the tick lock: {error}"))?;
-    match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+    match file.try_lock() {
         Ok(()) => Ok(Some(file)),
-        Err(error)
-            if error == rustix::io::Errno::WOULDBLOCK || error == rustix::io::Errno::ACCESS =>
-        {
-            Ok(None)
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(error)) => {
+            Err(format!("cannot take the tick lock: {error}"))
         }
-        Err(error) => Err(format!("cannot take the tick lock: {error}")),
     }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn acquire_tick_lock(_home: &Path) -> Result<Option<std::fs::File>, String> {
-    Err("the cron tick is not supported on this platform yet".into())
 }
 
 pub(super) fn truthy(value: &Value) -> bool {
@@ -872,7 +869,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_completion_from_a_run_that_lost_its_claim_is_discarded() {
         let home = tempfile::tempdir().unwrap();

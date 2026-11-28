@@ -65,6 +65,7 @@ pub async fn serve(home: &Path) -> Result<(), String> {
     let mut connections = JoinSet::new();
     let home = Arc::<Path>::from(home);
     let hub = TurnHub::new();
+    let mcp_pool = Arc::new(hermes_runtime::mcp::McpPool::new());
 
     // When auto-spawned by `hsr-gui`, the GUI holds our stdin pipe open and drops it when the
     // window closes. Once stdin reaches EOF and no turns are still running, exit cleanly so no
@@ -112,7 +113,10 @@ pub async fn serve(home: &Path) -> Result<(), String> {
                 Ok(stream) => {
                     let home = home.clone();
                     let hub = hub.clone();
-                    connections.spawn(async move { let _ = handle_connection(stream, home, hub).await; });
+                    let mcp_pool = mcp_pool.clone();
+                    connections.spawn(async move {
+                        let _ = handle_connection(stream, home, hub, mcp_pool).await;
+                    });
                 }
                 Err(error) => break Err(error.to_string()),
             }
@@ -137,7 +141,10 @@ pub async fn serve(home: &Path) -> Result<(), String> {
                 Ok(stream) => {
                     let home = home.clone();
                     let hub = hub.clone();
-                    connections.spawn(async move { let _ = handle_connection(stream, home, hub).await; });
+                    let mcp_pool = mcp_pool.clone();
+                    connections.spawn(async move {
+                        let _ = handle_connection(stream, home, hub, mcp_pool).await;
+                    });
                 }
                 Err(error) => break Err(error.to_string()),
             }
@@ -146,6 +153,7 @@ pub async fn serve(home: &Path) -> Result<(), String> {
 
     drop(listener);
     connections.shutdown().await;
+    mcp_pool.shutdown().await;
     result
 }
 
@@ -270,6 +278,7 @@ async fn handle_connection(
     mut stream: OwnerStream,
     home: Arc<Path>,
     hub: TurnHub,
+    mcp_pool: Arc<hermes_runtime::mcp::McpPool>,
 ) -> io::Result<()> {
     let first_bytes = timeout(IO_TIMEOUT, read_frame_bytes(&mut stream)).await??;
     let probe: Value = serde_json::from_slice(&first_bytes)
@@ -286,7 +295,7 @@ async fn handle_connection(
             let env: V2Envelope = serde_json::from_slice(&first_bytes).map_err(|_| {
                 io::Error::new(io::ErrorKind::InvalidData, "invalid v2 local owner frame")
             })?;
-            handle_v2(stream, home, hub, env.command).await
+            handle_v2(stream, home, hub, mcp_pool, env.command).await
         }
         _ => {
             write_frame(
@@ -397,6 +406,7 @@ async fn handle_v2(
     mut stream: OwnerStream,
     home: Arc<Path>,
     hub: TurnHub,
+    mcp_pool: Arc<hermes_runtime::mcp::McpPool>,
     command: GuiCommand,
 ) -> io::Result<()> {
     match command {
@@ -489,8 +499,9 @@ async fn handle_v2(
             let handle = hub.create_turn_with_policy(session_id, query, policy);
             let turn_id = handle.turn_id();
             let home_bg = Arc::clone(&home);
+            let mcp_bg = Arc::clone(&mcp_pool);
             tokio::spawn(async move {
-                run_managed_turn(home_bg, request, handle).await;
+                run_managed_turn(home_bg, request, handle, mcp_bg).await;
             });
             write_frame(&mut stream, &GuiReply::TurnStarted { turn_id }).await
         }
@@ -551,7 +562,12 @@ async fn handle_v2(
     }
 }
 
-async fn run_managed_turn(home: Arc<Path>, request: ChatRequest, handle: TurnHandle) {
+async fn run_managed_turn(
+    home: Arc<Path>,
+    request: ChatRequest,
+    handle: TurnHandle,
+    mcp_pool: Arc<hermes_runtime::mcp::McpPool>,
+) {
     let (emitter, cancel_rx) = handle.split();
     let emit_event = |event: Event| {
         match event {
@@ -596,7 +612,7 @@ async fn run_managed_turn(home: Arc<Path>, request: ChatRequest, handle: TurnHan
             cancelled = true;
             Ok(130)
         }
-        res = chat::execute(Some(&home), request, &emit_event, approve) => res,
+        res = chat::execute_with_context(Some(&home), request, None, Some(&mcp_pool), &emit_event, approve) => res,
     };
 
     if cancelled {
@@ -637,6 +653,7 @@ mod tests {
             OwnerStream::Unix(server),
             Arc::from(Path::new(".")),
             hub,
+            Arc::new(hermes_runtime::mcp::McpPool::new()),
             GuiCommand::SubscribeTurn {
                 turn_id: turn.turn_id(),
                 after_seq: 0,

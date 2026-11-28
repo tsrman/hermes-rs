@@ -569,6 +569,8 @@ pub struct ReplState {
     pub unsaved: Option<String>,
     pub scope: String,
     pub guard: Arc<Mutex<CompactionGuard>>,
+    /// Persistent MCP client pool kept warm across turns and across Inline ↔ TUI switches.
+    pub mcp_pool: Arc<hermes_runtime::mcp::McpPool>,
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub last_turn_input_tokens: u64,
@@ -640,6 +642,7 @@ impl ReplState {
             unsaved: None,
             scope: format!("repl-{}", std::process::id()),
             guard: Arc::new(Mutex::new(CompactionGuard::new())),
+            mcp_pool: Arc::new(hermes_runtime::mcp::McpPool::new()),
             total_input_tokens: 0,
             total_output_tokens: 0,
             last_turn_input_tokens: 0,

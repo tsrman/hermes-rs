@@ -118,6 +118,23 @@ pub struct McpServerConfig {
     pub prompts: bool,
 }
 
+impl McpServerConfig {
+    /// Exact configuration equality (including `timeout_secs` bitwise equality) for pooling.
+    pub fn same_config(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.command == other.command
+            && self.args == other.args
+            && self.env == other.env
+            && self.url == other.url
+            && self.headers == other.headers
+            && self.transport == other.transport
+            && self.timeout_secs.to_bits() == other.timeout_secs.to_bits()
+            && self.connect_timeout_secs == other.connect_timeout_secs
+            && self.resources == other.resources
+            && self.prompts == other.prompts
+    }
+}
+
 /// Why a request failed. The variant decides the text the model sees, as the reference's
 /// `_mcp_call_failed_message` does with the type of the root exception.
 #[derive(Clone, Debug, PartialEq)]
@@ -398,6 +415,10 @@ impl Connection {
             }
         };
         finish(timeout(limit, wait).await, guard, method, started, limit).await
+    }
+
+    fn is_alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
     }
 
     fn kill_group(&mut self) {
@@ -1660,6 +1681,48 @@ impl McpClients {
         tool_text(&error)
     }
 
+    /// Check persistent stdio servers between turns and transparently reconnect any child process
+    /// that exited unexpectedly. Healthy stdio and HTTP/SSE servers are left untouched.
+    pub async fn ensure_healthy(&mut self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        for index in 0..self.servers.len() {
+            let dead = match &mut self.servers[index].transport {
+                Transport::Stdio(conn) => !conn.is_alive(),
+                Transport::Http(_) | Transport::Sse(_) => false,
+            };
+            if !dead {
+                continue;
+            }
+            let config = self.servers[index].config.clone();
+            match spawn_stdio(&config) {
+                Ok(conn) => {
+                    let mut transport = Transport::Stdio(Box::new(conn));
+                    match handshake(&mut transport, &config).await {
+                        Ok(discovered) => {
+                            self.servers[index].transport = transport;
+                            self.register(index, discovered);
+                        }
+                        Err(error) => {
+                            self.tools.retain(|tool| tool.server != index);
+                            warnings.push(format!(
+                                "MCP server {:?} exited and failed to reconnect: {error}",
+                                config.name
+                            ));
+                        }
+                    }
+                }
+                Err(error) => {
+                    self.tools.retain(|tool| tool.server != index);
+                    warnings.push(format!(
+                        "MCP server {:?} exited and failed to restart: {error}",
+                        config.name
+                    ));
+                }
+            }
+        }
+        warnings
+    }
+
     /// Close stdin, give servers a moment to exit, then stop whatever remains.
     pub async fn shutdown(&mut self) {
         for server in &mut self.servers {
@@ -1667,6 +1730,101 @@ impl McpClients {
         }
         self.servers.clear();
         self.tools.clear();
+    }
+}
+
+struct CachedMcp {
+    configs: Vec<McpServerConfig>,
+    profile: Option<PathBuf>,
+    mcp_result_size_chars: usize,
+    clients: Arc<Mutex<McpClients>>,
+}
+
+impl CachedMcp {
+    fn matches(
+        &self,
+        configs: &[McpServerConfig],
+        profile: Option<&Path>,
+        mcp_result_size_chars: usize,
+    ) -> bool {
+        self.profile.as_deref() == profile
+            && self.mcp_result_size_chars == mcp_result_size_chars
+            && self.configs.len() == configs.len()
+            && self
+                .configs
+                .iter()
+                .zip(configs.iter())
+                .all(|(a, b)| a.same_config(b))
+    }
+}
+
+/// Persistent pool of [`McpClients`] shared across turns in an interactive CLI session or
+/// local session owner daemon. Reuses live server connections while config is unchanged and
+/// transparently reconnects stdio servers that exited unexpectedly.
+#[derive(Default)]
+pub struct McpPool {
+    cached: Mutex<Option<CachedMcp>>,
+}
+
+impl McpPool {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Return warm MCP clients matching `(configs, profile, mcp_result_size_chars)`, starting or
+    /// replacing connections only when needed.
+    pub async fn acquire(
+        &self,
+        configs: &[McpServerConfig],
+        profile: Option<PathBuf>,
+        mcp_result_size_chars: usize,
+    ) -> (Arc<Mutex<McpClients>>, Vec<String>) {
+        if configs.is_empty() {
+            let old = self.cached.lock().await.take();
+            if let Some(old) = old {
+                old.clients.lock().await.shutdown().await;
+            }
+            return (Arc::new(Mutex::new(McpClients::default())), Vec::new());
+        }
+
+        let existing = {
+            let guard = self.cached.lock().await;
+            match guard.as_ref() {
+                Some(entry)
+                    if entry.matches(configs, profile.as_deref(), mcp_result_size_chars) =>
+                {
+                    Some(Arc::clone(&entry.clients))
+                }
+                _ => None,
+            }
+        };
+        if let Some(clients) = existing {
+            let warnings = clients.lock().await.ensure_healthy().await;
+            return (clients, warnings);
+        }
+
+        let old = self.cached.lock().await.take();
+        if let Some(old) = old {
+            old.clients.lock().await.shutdown().await;
+        }
+        let (started, warnings) =
+            McpClients::start_with_options(configs, profile.clone(), mcp_result_size_chars).await;
+        let clients = Arc::new(Mutex::new(started));
+        *self.cached.lock().await = Some(CachedMcp {
+            configs: configs.to_vec(),
+            profile,
+            mcp_result_size_chars,
+            clients: Arc::clone(&clients),
+        });
+        (clients, warnings)
+    }
+
+    /// Shut down any cached MCP servers cleanly (closing stdio pipes and ending HTTP sessions).
+    pub async fn shutdown(&self) {
+        let old = self.cached.lock().await.take();
+        if let Some(old) = old {
+            old.clients.lock().await.shutdown().await;
+        }
     }
 }
 
@@ -2490,5 +2648,32 @@ mod tests {
             timeout.call_failed(),
             "MCP call failed: TimeoutError: MCP call timed out after 1.0s (configured timeout: 1.0s)"
         );
+    }
+
+    #[tokio::test]
+    async fn mcp_pool_handles_empty_and_config_equality() {
+        let pool = McpPool::new();
+        let (clients, warnings) = pool.acquire(&[], None, DEFAULT_MCP_RESULT_SIZE_CHARS).await;
+        assert!(warnings.is_empty());
+        assert!(clients.lock().await.schemas().is_empty());
+        pool.shutdown().await;
+
+        let a = McpServerConfig {
+            name: "demo".into(),
+            command: "python3".into(),
+            args: vec!["server.py".into()],
+            env: BTreeMap::new(),
+            url: None,
+            headers: BTreeMap::new(),
+            transport: None,
+            timeout_secs: 300.0,
+            connect_timeout_secs: 15,
+            resources: true,
+            prompts: true,
+        };
+        let mut b = a.clone();
+        assert!(a.same_config(&b));
+        b.timeout_secs = 60.0;
+        assert!(!a.same_config(&b));
     }
 }

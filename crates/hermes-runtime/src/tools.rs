@@ -187,7 +187,8 @@ fn terminal_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFutur
             });
         }
         let timeout = cx.options.terminal_approval_timeout_secs;
-        let background = (cx.options.tools.allows(PROCESS_MANAGE)
+        let background = (cfg!(any(target_os = "linux", target_os = "macos"))
+            && cx.options.tools.allows(PROCESS_MANAGE)
             && !cx.options.tools.is_deferred(PROCESS_MANAGE))
         .then(|| cx.options.state_key());
         let defaults = terminal::TerminalSettings::default();
@@ -209,9 +210,9 @@ fn terminal_call<'a>(cx: &'a mut ToolContext<'_, '_>, args: &'a str) -> BoxFutur
 }
 
 /// `process_manage` manages what `terminal(background=true)` starts, so it is offered with the
-/// terminal unless the tool-search bridge hides it.
+/// Unix terminal unless the tool-search bridge hides it.
 fn process_manage_offered(env: &ToolEnv) -> bool {
-    terminal::SUPPORTED
+    cfg!(any(target_os = "linux", target_os = "macos"))
         && env.terminal
         && env.policy.allows(PROCESS_MANAGE)
         && !env.policy.is_deferred(PROCESS_MANAGE)
@@ -845,8 +846,8 @@ mod tests {
                 "patch",
             ]
             .into_iter()
-            // process_manage only exists where the terminal is supported (see `process_stub`).
-            .chain(terminal::SUPPORTED.then_some("process_manage"))
+            // process_manage is Unix-only (see `process_stub`).
+            .chain(cfg!(any(target_os = "linux", target_os = "macos")).then_some("process_manage"))
             .chain([
                 "read_file",
                 "search_files",

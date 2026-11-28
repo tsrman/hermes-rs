@@ -2,7 +2,6 @@
 //! (`compat/create_cron_jobs_fixture.py`). Each case is a sequence of steps on one profile; after
 //! every step the store must hold exactly what the reference wrote: the same fields, the same
 //! key order and the same bytes, and a refused step must give the reference's message.
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use std::path::Path;
 
