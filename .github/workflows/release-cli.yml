@@ -21,7 +21,48 @@ env:
   RUST_VERSION: '1.100.0'
 
 jobs:
+  verify-ci:
+    name: Verify green CI on release commit
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Require a green CI workflow run for this commit
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          for attempt in $(seq 1 60); do
+            runs=$(gh run list --repo "$GH_REPO" --workflow "CI" --commit "$COMMIT_SHA" --json status,conclusion,url)
+            if jq -e 'any(.[]; .status == "completed" and .conclusion == "success")' <<< "$runs" >/dev/null; then
+              echo "Green CI verified for $COMMIT_SHA"
+              exit 0
+            fi
+            if jq -e 'any(.[]; .status != "completed")' <<< "$runs" >/dev/null; then
+              echo "CI for $COMMIT_SHA is still running (attempt $attempt/60); waiting 15s..."
+              sleep 15
+              continue
+            fi
+            if jq -e 'length > 0' <<< "$runs" >/dev/null; then
+              echo "::error::CI workflow for $COMMIT_SHA did not succeed: $runs"
+              exit 1
+            fi
+            if [[ "$attempt" -le 6 ]]; then
+              echo "Waiting for CI run to register for $COMMIT_SHA (attempt $attempt/6)..."
+              sleep 15
+              continue
+            fi
+            echo "::error::No CI workflow run found for release commit $COMMIT_SHA. Push main and wait for green CI before tagging."
+            exit 1
+          done
+          echo "::error::Timed out waiting for CI workflow on $COMMIT_SHA."
+          exit 1
+
   checks:
+    needs: [verify-ci]
     runs-on: ubuntu-24.04
     outputs:
       commit: ${{ steps.source.outputs.commit }}
@@ -45,6 +86,7 @@ jobs:
           python3 -m unittest discover -s compat -p 'test_*.py'
 
   build:
+    needs: [verify-ci]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false

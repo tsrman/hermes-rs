@@ -2,7 +2,7 @@
 
 A fast, standalone Rust implementation of [Hermes Agent](https://github.com/NousResearch/hermes-agent) — a single native CLI binary (`hsr`) with no Python runtime dependency, designed to live cleanly side-by-side with Python `hermes` using `~/.hsr` by default (override with `HSR_HOME` or `HERMES_HOME`) while staying drop-in compatible with existing `~/.hermes` profiles, `config.yaml`, `.env`, `auth.json`, skills, cron jobs, and SQLite `state.db` history.
 
-> Current releases: CLI **`v0.7.15`** (Linux x86_64/arm64 GNU & musl, macOS Apple Silicon & Intel, Windows x64) · Desktop GUI **`gui-v0.7.15`** (standalone `hsr-gui` for Linux GNU/musl & Windows x64)
+> Current releases: CLI **`v0.7.15`** (Linux x86_64/arm64 GNU & musl, macOS Apple Silicon & Intel, Windows x64) · Desktop GUI **`gui-v0.7.15`** (standalone `hsr-gui` for Linux GNU/musl & Windows x64; GUI versioning was synchronized with CLI starting at `0.7.14`, up from `gui-v0.4.11`)
 
 ## Highlights
 
