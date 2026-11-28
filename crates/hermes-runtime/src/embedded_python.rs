@@ -1329,6 +1329,21 @@ mod _sandbox_winreg {
     }
 }
 
+fn set_host_workspace_root(path: &str) {
+    if path.is_empty() {
+        return;
+    }
+    let target = PathBuf::from(path);
+    BRIDGE.with(|slot| {
+        if let Some(state) = slot.borrow_mut().as_mut() {
+            state.workspace_root = target.clone();
+            if target.is_dir() {
+                state.cwd = target;
+            }
+        }
+    });
+}
+
 #[rustpython_vm::pymodule]
 mod _hermes_bridge {
     use super::*;
@@ -1392,22 +1407,6 @@ mod _hermes_bridge {
                 }
                 BridgeTransport::Stdio => {
                     let _ = write_stdio_line(&json!({"type": "output", "text": text}));
-                }
-            }
-        });
-    }
-
-    #[pyfunction]
-    fn set_workspace_root(path: String) {
-        if path.is_empty() {
-            return;
-        }
-        let target = PathBuf::from(&path);
-        BRIDGE.with(|slot| {
-            if let Some(state) = slot.borrow_mut().as_mut() {
-                state.workspace_root = target.clone();
-                if target.is_dir() {
-                    state.cwd = target;
                 }
             }
         });
@@ -2028,8 +2027,11 @@ class _Capture(io.StringIO):
             except Exception:
                 pass
 
-def _call(tool, args):
-    raw = _hermes_bridge.call_tool(tool, json.dumps(args, ensure_ascii=False))
+_BRIDGE_CALL_TOOL = _hermes_bridge.call_tool
+_BRIDGE_EMIT_OUTPUT = _hermes_bridge.emit_output
+
+def _call(tool, args, _fn=_BRIDGE_CALL_TOOL):
+    raw = _fn(tool, json.dumps(args, ensure_ascii=False))
     return json.loads(raw)["value"]
 
 def json_parse(text):
@@ -2062,17 +2064,16 @@ sys.modules["hermes_tools"] = _module
 GLOBALS = {{"__name__": "__main__", "__builtins__": __builtins__}}
 _paths = set()
 
-def _hermes_run_cell(code, cwd):
+def _hermes_run_cell(code, cwd, _emit=_BRIDGE_EMIT_OUTPUT):
     try:
         if cwd:
-            _hermes_bridge.set_workspace_root(cwd)
             os.chdir(cwd)
             if cwd not in _paths:
                 _paths.add(cwd)
                 sys.path.insert(0, cwd)
     except Exception:
         pass
-    _out, _err = _Capture(_hermes_bridge.emit_output), _Capture(_hermes_bridge.emit_output)
+    _out, _err = _Capture(_emit), _Capture(_emit)
     _status, _trace = "ok", ""
     try:
         with contextlib.redirect_stdout(_out), contextlib.redirect_stderr(_err):
@@ -2090,6 +2091,11 @@ def _hermes_run_cell(code, cwd):
         "stderr": _err.getvalue(),
         "traceback": _trace,
     }}, ensure_ascii=False)
+
+# Hide internal bridge module from user code once closures have captured their handles.
+sys.modules["_hermes_bridge"] = None
+for _priv_name in ("_hermes_bridge", "_BRIDGE_CALL_TOOL", "_BRIDGE_EMIT_OUTPUT"):
+    globals().pop(_priv_name, None)
 "#
     )
 }
@@ -2128,7 +2134,12 @@ except Exception:
     pass
 
 # --- Workspace-scoped sqlite3 backed by host rusqlite ---
-def _install_sqlite3():
+def _install_sqlite3(_bridge=_hermes_bridge):
+    _sq_open = _bridge.sqlite_open
+    _sq_exec = _bridge.sqlite_exec
+    _sq_batch = _bridge.sqlite_exec_batch
+    _sq_in_tx = _bridge.sqlite_in_transaction
+    _sq_close = _bridge.sqlite_close
     mod = types.ModuleType("sqlite3")
     mod.sqlite_version = "3.46.0"
     mod.sqlite_version_info = (3, 46, 0)
@@ -2221,7 +2232,7 @@ def _install_sqlite3():
         def execute(self, sql, parameters=()):
             self.connection._check_open()
             try:
-                raw = _hermes_bridge.sqlite_exec(self.connection._id, str(sql), _encode_params(parameters))
+                raw = _sq_exec(self.connection._id, str(sql), _encode_params(parameters))
             except PermissionError:
                 raise
             except Exception as e:
@@ -2247,7 +2258,7 @@ def _install_sqlite3():
         def executescript(self, sql_script):
             self.connection._check_open()
             try:
-                _hermes_bridge.sqlite_exec_batch(self.connection._id, str(sql_script))
+                _sq_batch(self.connection._id, str(sql_script))
             except Exception as e:
                 raise _map_sql_err(e) from None
             self.description = None
@@ -2301,7 +2312,7 @@ def _install_sqlite3():
                 else:
                     raw_db = stripped
             try:
-                self._id = _hermes_bridge.sqlite_open(raw_db, read_only)
+                self._id = _sq_open(raw_db, read_only)
             except PermissionError:
                 raise
             except Exception as e:
@@ -2318,7 +2329,7 @@ def _install_sqlite3():
         def in_transaction(self):
             if self._closed:
                 return False
-            return bool(_hermes_bridge.sqlite_in_transaction(self._id))
+            return bool(_sq_in_tx(self._id))
 
         def cursor(self, factory=Cursor):
             self._check_open()
@@ -2336,17 +2347,17 @@ def _install_sqlite3():
         def commit(self):
             self._check_open()
             if self.in_transaction:
-                _hermes_bridge.sqlite_exec_batch(self._id, "COMMIT;")
+                _sq_batch(self._id, "COMMIT;")
 
         def rollback(self):
             self._check_open()
             if self.in_transaction:
-                _hermes_bridge.sqlite_exec_batch(self._id, "ROLLBACK;")
+                _sq_batch(self._id, "ROLLBACK;")
 
         def close(self):
             if not self._closed:
                 self._closed = True
-                _hermes_bridge.sqlite_close(self._id)
+                _sq_close(self._id)
 
         def __enter__(self):
             self._check_open()
@@ -2377,7 +2388,9 @@ def _install_sqlite3():
 _install_sqlite3()
 
 # --- Safe PyYAML-compatible yaml module backed by serde_yaml ---
-def _install_yaml():
+def _install_yaml(_bridge=_hermes_bridge):
+    _yl_load_all = _bridge.yaml_load_all
+    _yl_dump = _bridge.yaml_dump
     mod = types.ModuleType("yaml")
     class YAMLError(Exception): pass
     class SafeLoader: pass
@@ -2402,7 +2415,7 @@ def _install_yaml():
         if not text.strip():
             return iter(())
         try:
-            docs = json.loads(_hermes_bridge.yaml_load_all(text))
+            docs = json.loads(_yl_load_all(text))
         except Exception as e:
             raise YAMLError(str(e)) from None
         return iter(docs)
@@ -2424,7 +2437,7 @@ def _install_yaml():
     def safe_dump(data, stream=None, **kwargs):
         try:
             j = json.dumps(data, ensure_ascii=False)
-            out = _hermes_bridge.yaml_dump(j)
+            out = _yl_dump(j)
         except Exception as e:
             raise YAMLError(str(e)) from None
         if stream is not None:
@@ -3001,6 +3014,7 @@ impl EmbeddedKernel {
                         match msg {
                             HostCell::Shutdown => break,
                             HostCell::Run { code, cwd } => {
+                                set_host_workspace_root(&cwd);
                                 let py_code: PyObjectRef = vm.ctx.new_str(code).into();
                                 let py_cwd: PyObjectRef = vm.ctx.new_str(cwd).into();
                                 abort_worker.in_cell.store(true, Ordering::Release);
@@ -3261,6 +3275,7 @@ fn run_stdio_worker_inner() -> Result<u8, String> {
                 Some("cell") => {
                     let code = msg["code"].as_str().unwrap_or("");
                     let cwd = msg["cwd"].as_str().unwrap_or("");
+                    set_host_workspace_root(cwd);
                     let py_code: PyObjectRef = vm.ctx.new_str(code).into();
                     let py_cwd: PyObjectRef = vm.ctx.new_str(cwd).into();
                     let payload = match runner.call((py_code, py_cwd), vm) {
@@ -3689,6 +3704,8 @@ print("STDLIB_FS_OK")
         let dir = tempfile::tempdir().unwrap();
         let outside_dir = tempfile::tempdir().unwrap();
         let outside_db = outside_dir.path().join("outside.db");
+        let outside_attach = outside_dir.path().join("attached.db");
+        let outside_vacuum = outside_dir.path().join("vacuumed.db");
 
         // Create a minimal valid PDF inside workspace for pdf_read testing.
         let minimal_pdf = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 4 0 R>>endobj\n4 0 obj<</Length 44>>stream\nBT /F1 12 Tf 10 100 Td (Hello Hermes PDF) Tj ET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f \n0000000009 00000 n \n0000000056 00000 n \n0000000111 00000 n \n0000000190 00000 n \ntrailer<</Size 5/Root 1 0 R>>\nstartxref\n283\n%%EOF\n";
@@ -3748,6 +3765,34 @@ except PermissionError:
     db_blocked = True
 assert db_blocked, "sqlite3 outside workspace must raise PermissionError"
 
+# B2 regression: _hermes_bridge is inaccessible to user code, and sqlite3 ATTACH / VACUUM INTO
+# cannot create files outside workspace.
+bridge_blocked = False
+try:
+    import _hermes_bridge
+except ModuleNotFoundError:
+    bridge_blocked = True
+assert bridge_blocked, "user code must not be able to import _hermes_bridge"
+
+mem = sqlite3.connect(":memory:")
+mem.execute("CREATE TABLE t (x INT)")
+mem.execute("INSERT INTO t VALUES (1)")
+attach_blocked = False
+try:
+    mem.execute("ATTACH DATABASE ? AS ext", ({outside_attach:?},))
+except sqlite3.Error:
+    attach_blocked = True
+assert attach_blocked, "sqlite3 ATTACH DATABASE must be blocked"
+
+vacuum_blocked = False
+try:
+    mem.execute("VACUUM /* bypass */ INTO " + repr({outside_vacuum:?}))
+except sqlite3.Error:
+    vacuum_blocked = True
+assert vacuum_blocked, "sqlite3 VACUUM INTO must be blocked"
+assert mem.execute("SELECT x FROM t").fetchone() == (1,)
+mem.close()
+
 # 3. yaml (safe_load, safe_load_all, safe_dump, YAMLError)
 parsed = yaml.safe_load("name: demo\ncount: 3\ntags:\n  - a\n  - b\n")
 assert parsed == {{"name": "demo", "count": 3, "tags": ["a", "b"]}}, parsed
@@ -3798,7 +3843,9 @@ assert sub_blocked, "subprocess without terminal must raise PermissionError"
 
 print("ALL_6_PART_A_OK")
 "#,
-                outside_db = outside_db.display().to_string()
+                outside_db = outside_db.display().to_string(),
+                outside_attach = outside_attach.display().to_string(),
+                outside_vacuum = outside_vacuum.display().to_string()
             );
             let payload = run_test_cell(&mut kernel, &code, dir.path(), deadline).await;
             assert_eq!(payload["status"], "ok", "{payload}");
@@ -3810,6 +3857,8 @@ print("ALL_6_PART_A_OK")
                 "{payload}"
             );
             assert!(!outside_db.exists());
+            assert!(!outside_attach.exists());
+            assert!(!outside_vacuum.exists());
             kernel.shutdown();
         }
 

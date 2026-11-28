@@ -6,6 +6,7 @@
 //! file-backed database.
 
 use std::collections::HashMap;
+use std::ffi::{c_char, c_int, c_void, CStr};
 use std::path::Path;
 
 use rusqlite::types::{Value as SqlValue, ValueRef};
@@ -14,6 +15,127 @@ use serde_json::{json, Value};
 
 const MAX_SQLITE_CONNS: usize = 32;
 const FIRST_CONN_ID: i32 = 1;
+
+/// SQLite authorizer callback that blocks `ATTACH`/`DETACH` (preventing creating or opening
+/// database files outside the workspace/temp scope) and dangerous schema-tampering pragmas.
+unsafe extern "C" fn sandbox_sqlite_authorizer(
+    _user_data: *mut c_void,
+    action_code: c_int,
+    arg1: *const c_char,
+    _arg2: *const c_char,
+    _db_name: *const c_char,
+    _trigger_name: *const c_char,
+) -> c_int {
+    if action_code == rusqlite::ffi::SQLITE_ATTACH || action_code == rusqlite::ffi::SQLITE_DETACH {
+        return rusqlite::ffi::SQLITE_DENY;
+    }
+    if action_code == rusqlite::ffi::SQLITE_PRAGMA && !arg1.is_null() {
+        if let Ok(name) = CStr::from_ptr(arg1).to_str() {
+            if matches!(
+                name.to_ascii_lowercase().as_str(),
+                "writable_schema" | "trusted_schema" | "load_extension"
+            ) {
+                return rusqlite::ffi::SQLITE_DENY;
+            }
+        }
+    }
+    rusqlite::ffi::SQLITE_OK
+}
+
+fn harden_connection(conn: &Connection) -> Result<(), String> {
+    // Disallow attaching any auxiliary database file at the engine level, and install the
+    // authorizer to deny ATTACH/DETACH and dangerous pragmas.
+    unsafe {
+        let handle = conn.handle();
+        rusqlite::ffi::sqlite3_limit(handle, rusqlite::ffi::SQLITE_LIMIT_ATTACHED, 0);
+        let rc = rusqlite::ffi::sqlite3_set_authorizer(
+            handle,
+            Some(sandbox_sqlite_authorizer),
+            std::ptr::null_mut(),
+        );
+        if rc != rusqlite::ffi::SQLITE_OK {
+            return Err(format!(
+                "failed installing sqlite3 sandbox authorizer (rc={rc})"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Reject `VACUUM ... INTO ...` statements (which write an arbitrary filesystem file) while still
+/// permitting plain `VACUUM` on the already-scoped connection. Strips SQL comments and quoted
+/// literals before inspecting tokens.
+fn reject_vacuum_into(sql: &str) -> Result<(), String> {
+    let bytes = sql.as_bytes();
+    let mut i = 0;
+    let mut tokens: Vec<String> = Vec::new();
+    while i < bytes.len() {
+        let b = bytes[i];
+        // Line comment: -- ... \n
+        if b == b'-' && bytes.get(i + 1) == Some(&b'-') {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        // Block comment: /* ... */
+        if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+            continue;
+        }
+        // Single-quoted or double-quoted literal/identifier
+        if b == b'\'' || b == b'"' {
+            let quote = b;
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == quote {
+                    if bytes.get(i + 1) == Some(&quote) {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            tokens.push("<lit>".into());
+            continue;
+        }
+        if b == b';' {
+            tokens.push(";".into());
+            i += 1;
+            continue;
+        }
+        if b.is_ascii_alphabetic() || b == b'_' {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            tokens.push(sql[start..i].to_ascii_lowercase());
+            continue;
+        }
+        i += 1;
+    }
+
+    let mut saw_vacuum = false;
+    for tok in &tokens {
+        match tok.as_str() {
+            ";" => saw_vacuum = false,
+            "vacuum" => saw_vacuum = true,
+            "into" if saw_vacuum => {
+                return Err("VACUUM INTO is disabled in the SQLite sandbox".into());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
 
 pub(crate) struct SqliteStore {
     conns: HashMap<i32, Connection>,
@@ -31,6 +153,7 @@ impl SqliteStore {
     pub(crate) fn open_memory(&mut self) -> Result<i32, String> {
         self.check_limit()?;
         let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
+        harden_connection(&conn)?;
         Ok(self.insert(conn))
     }
 
@@ -44,6 +167,7 @@ impl SqliteStore {
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX
         };
         let conn = Connection::open_with_flags(path, flags).map_err(|e| e.to_string())?;
+        harden_connection(&conn)?;
         Ok(self.insert(conn))
     }
 
@@ -74,6 +198,7 @@ impl SqliteStore {
     }
 
     pub(crate) fn execute_batch(&mut self, id: i32, sql: &str) -> Result<(), String> {
+        reject_vacuum_into(sql)?;
         let conn = self
             .conns
             .get_mut(&id)
@@ -87,6 +212,7 @@ impl SqliteStore {
         sql: &str,
         params_json: &str,
     ) -> Result<Value, String> {
+        reject_vacuum_into(sql)?;
         let conn = self
             .conns
             .get_mut(&id)
